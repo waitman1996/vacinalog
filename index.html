@@ -1,0 +1,2716 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>VacinaLog</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone@7.24.0/babel.min.js"></script>
+<script src="https://unpkg.com/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg-deep: #0a0f1a;
+  --bg-card: #111827;
+  --bg-card-hover: #1a2332;
+  --bg-input: #0d1520;
+  --border: #1e2a3a;
+  --border-focus: #2563eb;
+  --text-primary: #e8edf5;
+  --text-secondary: #8893a7;
+  --text-muted: #4a5568;
+  --accent: #2563eb;
+  --accent-hover: #3b82f6;
+  --accent-subtle: rgba(37, 99, 235, 0.12);
+  --success: #10b981;
+  --success-bg: rgba(16, 185, 129, 0.12);
+  --warning: #f59e0b;
+  --warning-bg: rgba(245, 158, 11, 0.12);
+  --danger: #ef4444;
+  --danger-bg: rgba(239, 68, 68, 0.12);
+  --info: #06b6d4;
+  --info-bg: rgba(6, 182, 212, 0.12);
+  --radius: 10px;
+  --radius-sm: 6px;
+  --shadow: 0 1px 3px rgba(0,0,0,0.3), 0 4px 12px rgba(0,0,0,0.2);
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: 'DM Sans', sans-serif;
+  background: var(--bg-deep);
+  color: var(--text-primary);
+  min-height: 100vh;
+}
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: var(--bg-deep); }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+
+/* Layout */
+.app-layout { display: flex; min-height: 100vh; }
+.sidebar {
+  width: 260px; background: var(--bg-card); border-right: 1px solid var(--border);
+  display: flex; flex-direction: column; position: fixed; top: 0; left: 0; bottom: 0;
+  z-index: 50; transition: transform 0.25s ease;
+}
+.sidebar-header {
+  padding: 20px 20px 16px; border-bottom: 1px solid var(--border);
+}
+.sidebar-logo {
+  font-size: 22px; font-weight: 700; letter-spacing: -0.5px;
+  background: linear-gradient(135deg, var(--accent) 0%, #06b6d4 100%);
+  -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+}
+.sidebar-role {
+  font-size: 11px; color: var(--text-muted); text-transform: uppercase;
+  letter-spacing: 1.5px; margin-top: 4px;
+}
+.sidebar-nav { flex: 1; padding: 12px 10px; overflow-y: auto; }
+.nav-section {
+  font-size: 10px; color: var(--text-muted); text-transform: uppercase;
+  letter-spacing: 1.5px; padding: 12px 12px 6px; margin-top: 4px;
+}
+.nav-item {
+  display: flex; align-items: center; gap: 10px; padding: 10px 12px;
+  border-radius: var(--radius-sm); color: var(--text-secondary); cursor: pointer;
+  font-size: 14px; font-weight: 400; transition: all 0.15s;
+  border: 1px solid transparent;
+}
+.nav-item:hover { background: var(--bg-card-hover); color: var(--text-primary); }
+.nav-item.active {
+  background: var(--accent-subtle); color: var(--accent);
+  border-color: rgba(37, 99, 235, 0.2); font-weight: 500;
+}
+.nav-icon { width: 18px; text-align: center; font-size: 15px; flex-shrink: 0; }
+.sidebar-footer {
+  padding: 16px; border-top: 1px solid var(--border);
+}
+.user-info { display: flex; align-items: center; gap: 10px; }
+.user-avatar {
+  width: 34px; height: 34px; border-radius: 50%;
+  background: var(--accent-subtle); display: flex; align-items: center;
+  justify-content: center; font-size: 13px; font-weight: 600; color: var(--accent);
+}
+.user-name { font-size: 13px; font-weight: 500; }
+.user-email { font-size: 11px; color: var(--text-muted); }
+.btn-logout {
+  margin-top: 10px; width: 100%; padding: 7px; border-radius: var(--radius-sm);
+  background: var(--danger-bg); color: var(--danger); border: 1px solid rgba(239,68,68,0.2);
+  cursor: pointer; font-size: 12px; font-family: inherit; font-weight: 500;
+  transition: all 0.15s;
+}
+.btn-logout:hover { background: rgba(239,68,68,0.2); }
+
+.main-content { flex: 1; margin-left: 260px; padding: 24px 28px; min-height: 100vh; }
+.page-header {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 24px; gap: 16px; flex-wrap: wrap;
+}
+.page-title { font-size: 24px; font-weight: 700; letter-spacing: -0.5px; }
+.page-subtitle { font-size: 13px; color: var(--text-muted); margin-top: 2px; }
+
+/* Cards */
+.card {
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 20px;
+}
+.card-header {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 16px;
+}
+.card-title { font-size: 15px; font-weight: 600; }
+
+/* Stats */
+.stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 14px; margin-bottom: 24px; }
+.stat-card {
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 18px 20px;
+  display: flex; flex-direction: column; gap: 6px;
+}
+.stat-icon {
+  width: 36px; height: 36px; border-radius: 8px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 17px; margin-bottom: 4px;
+}
+.stat-value { font-size: 28px; font-weight: 700; font-family: 'JetBrains Mono', monospace; letter-spacing: -1px; }
+.stat-label { font-size: 12px; color: var(--text-muted); font-weight: 500; text-transform: uppercase; letter-spacing: 0.5px; }
+
+/* Forms */
+.form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; }
+.form-group { display: flex; flex-direction: column; gap: 5px; }
+.form-label { font-size: 12px; color: var(--text-secondary); font-weight: 500; }
+.form-input, .form-select {
+  padding: 9px 12px; background: var(--bg-input); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); color: var(--text-primary); font-family: inherit;
+  font-size: 14px; transition: border-color 0.15s; outline: none;
+}
+.form-input:focus, .form-select:focus { border-color: var(--border-focus); }
+.form-input::placeholder { color: var(--text-muted); }
+.form-select option { background: var(--bg-card); }
+.form-input.sm { padding: 7px 10px; font-size: 13px; }
+
+/* Buttons */
+.btn {
+  display: inline-flex; align-items: center; gap: 6px; padding: 9px 16px;
+  border-radius: var(--radius-sm); font-family: inherit; font-size: 13px;
+  font-weight: 500; cursor: pointer; transition: all 0.15s; border: 1px solid transparent;
+  white-space: nowrap;
+}
+.btn-primary { background: var(--accent); color: #fff; }
+.btn-primary:hover { background: var(--accent-hover); }
+.btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn-secondary { background: var(--bg-card-hover); color: var(--text-primary); border-color: var(--border); }
+.btn-secondary:hover { background: var(--border); }
+.btn-danger { background: var(--danger-bg); color: var(--danger); border-color: rgba(239,68,68,0.2); }
+.btn-danger:hover { background: rgba(239,68,68,0.2); }
+.btn-success { background: var(--success-bg); color: var(--success); border-color: rgba(16,185,129,0.2); }
+.btn-success:hover { background: rgba(16,185,129,0.2); }
+.btn-sm { padding: 6px 10px; font-size: 12px; }
+.btn-icon { padding: 6px 8px; }
+
+/* Table */
+.table-wrap { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; }
+th {
+  text-align: left; padding: 10px 12px; font-size: 11px; font-weight: 600;
+  color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px;
+  border-bottom: 1px solid var(--border); white-space: nowrap;
+}
+td {
+  padding: 10px 12px; font-size: 13px; border-bottom: 1px solid var(--border);
+  color: var(--text-secondary); vertical-align: middle;
+}
+tr:hover td { background: var(--bg-card-hover); }
+td.mono { font-family: 'JetBrains Mono', monospace; font-size: 12px; }
+
+/* Badges */
+.badge {
+  display: inline-flex; padding: 3px 8px; border-radius: 4px;
+  font-size: 11px; font-weight: 600; letter-spacing: 0.3px;
+}
+.badge-blue { background: var(--accent-subtle); color: var(--accent); }
+.badge-green { background: var(--success-bg); color: var(--success); }
+.badge-yellow { background: var(--warning-bg); color: var(--warning); }
+.badge-red { background: var(--danger-bg); color: var(--danger); }
+.badge-cyan { background: var(--info-bg); color: var(--info); }
+.badge-gray { background: rgba(100,116,139,0.12); color: #94a3b8; }
+
+/* Modal */
+.modal-overlay {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.6);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 100; backdrop-filter: blur(4px);
+}
+.modal {
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 24px; width: 95%;
+  max-width: 560px; max-height: 85vh; overflow-y: auto;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.4);
+}
+.modal-lg { max-width: 800px; }
+.modal-title { font-size: 18px; font-weight: 700; margin-bottom: 16px; }
+.modal-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 20px; }
+
+/* Login */
+.login-container {
+  display: flex; align-items: center; justify-content: center;
+  min-height: 100vh; padding: 20px;
+  background: radial-gradient(ellipse at 30% 20%, rgba(37,99,235,0.08) 0%, transparent 50%),
+              radial-gradient(ellipse at 70% 80%, rgba(6,182,212,0.06) 0%, transparent 50%),
+              var(--bg-deep);
+}
+.login-card {
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: 14px; padding: 40px; width: 100%; max-width: 400px;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+}
+.login-logo {
+  font-size: 32px; font-weight: 700; text-align: center; margin-bottom: 6px;
+  background: linear-gradient(135deg, var(--accent) 0%, #06b6d4 100%);
+  -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+}
+.login-subtitle {
+  text-align: center; color: var(--text-muted); font-size: 13px; margin-bottom: 28px;
+}
+.login-form { display: flex; flex-direction: column; gap: 14px; }
+.login-form .form-input { padding: 12px 14px; }
+.login-btn {
+  width: 100%; padding: 12px; background: var(--accent); color: #fff;
+  border: none; border-radius: var(--radius-sm); font-family: inherit;
+  font-size: 14px; font-weight: 600; cursor: pointer; transition: all 0.15s;
+  margin-top: 4px;
+}
+.login-btn:hover { background: var(--accent-hover); }
+.login-btn:disabled { opacity: 0.5; cursor: wait; }
+.login-error {
+  background: var(--danger-bg); color: var(--danger); padding: 10px 14px;
+  border-radius: var(--radius-sm); font-size: 13px; border: 1px solid rgba(239,68,68,0.2);
+}
+
+/* Toast */
+.toast-container { position: fixed; top: 20px; right: 20px; z-index: 200; display: flex; flex-direction: column; gap: 8px; }
+.toast {
+  padding: 12px 18px; border-radius: var(--radius-sm); font-size: 13px;
+  font-weight: 500; box-shadow: var(--shadow); animation: slideIn 0.25s ease;
+  max-width: 380px;
+}
+.toast-success { background: #065f46; color: #6ee7b7; border: 1px solid rgba(16,185,129,0.3); }
+.toast-error { background: #7f1d1d; color: #fca5a5; border: 1px solid rgba(239,68,68,0.3); }
+.toast-info { background: #1e3a5f; color: #7dd3fc; border: 1px solid rgba(56,189,248,0.3); }
+
+@keyframes slideIn {
+  from { transform: translateX(100%); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+
+/* Upload area */
+.upload-area {
+  border: 2px dashed var(--border); border-radius: var(--radius);
+  padding: 32px; text-align: center; cursor: pointer; transition: all 0.2s;
+}
+.upload-area:hover, .upload-area.drag-over {
+  border-color: var(--accent); background: var(--accent-subtle);
+}
+.upload-icon { font-size: 36px; margin-bottom: 8px; }
+.upload-text { font-size: 14px; color: var(--text-secondary); }
+.upload-hint { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
+
+/* Progress */
+.progress-bar { height: 6px; background: var(--border); border-radius: 3px; overflow: hidden; }
+.progress-fill { height: 100%; background: var(--accent); border-radius: 3px; transition: width 0.3s; }
+
+/* Tabs */
+.tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--border); margin-bottom: 20px; }
+.tab {
+  padding: 10px 18px; font-size: 13px; font-weight: 500; color: var(--text-muted);
+  cursor: pointer; border-bottom: 2px solid transparent; transition: all 0.15s;
+  font-family: inherit; background: none; border-top: none; border-left: none; border-right: none;
+}
+.tab:hover { color: var(--text-secondary); }
+.tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+/* Empty state */
+.empty-state {
+  text-align: center; padding: 40px 20px; color: var(--text-muted);
+}
+.empty-icon { font-size: 40px; margin-bottom: 10px; opacity: 0.5; }
+.empty-text { font-size: 14px; }
+
+/* Responsive */
+@media (max-width: 768px) {
+  .sidebar { transform: translateX(-100%); }
+  .sidebar.open { transform: translateX(0); }
+  .main-content { margin-left: 0; padding: 16px; }
+  .form-grid { grid-template-columns: 1fr; }
+  .stats-grid { grid-template-columns: 1fr 1fr; }
+  .mobile-toggle {
+    display: flex !important; position: fixed; top: 12px; left: 12px; z-index: 60;
+    width: 40px; height: 40px; align-items: center; justify-content: center;
+    background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px;
+    cursor: pointer; font-size: 18px;
+  }
+}
+.mobile-toggle { display: none; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<div id="error-display" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:#0a0f1a;color:#ef4444;padding:30px;font-family:monospace;font-size:13px;z-index:9999;overflow:auto">
+  <div style="font-size:18px;font-weight:bold;margin-bottom:16px">⚠ Erro ao carregar VacinaLog</div>
+  <div id="error-msg"></div>
+</div>
+<script>
+window.onerror = function(msg, src, line, col, err) {
+  document.getElementById('error-display').style.display = 'block';
+  document.getElementById('error-msg').innerText = 'Erro: ' + msg + '\nArquivo: ' + src + '\nLinha: ' + line + (err ? '\n\n' + err.stack : '');
+};
+</script>
+<script type="text/babel">
+const { useState, useEffect, useCallback, useRef, createContext, useContext } = React;
+
+// ═══════════════════════════════════════════════
+// SUPABASE CONFIG
+// ═══════════════════════════════════════════════
+const SUPABASE_URL = 'https://ojmuykptmsoiligirqru.supabase.co';
+const SUPABASE_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9qbXV5a3B0bXNvaWxpZ2lycXJ1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzgyODM0MTAsImV4cCI6MjA5Mzg1OTQxMH0.5h_3nqLEA-zHVwFCmLTzN5z3GoAzfu2zjBp7McQPUzY';
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON);
+
+// ═══════════════════════════════════════════════
+// CONTEXTS
+// ═══════════════════════════════════════════════
+const AuthContext = createContext(null);
+const ToastContext = createContext(null);
+
+// ═══════════════════════════════════════════════
+// TOAST SYSTEM
+// ═══════════════════════════════════════════════
+function ToastProvider({ children }) {
+  const [toasts, setToasts] = useState([]);
+  const addToast = useCallback((msg, type = 'info') => {
+    const id = Date.now();
+    setToasts(t => [...t, { id, msg, type }]);
+    setTimeout(() => setToasts(t => t.filter(x => x.id !== id)), 4000);
+  }, []);
+  return (
+    <ToastContext.Provider value={addToast}>
+      {children}
+      <div className="toast-container">
+        {toasts.map(t => <div key={t.id} className={`toast toast-${t.type}`}>{t.msg}</div>)}
+      </div>
+    </ToastContext.Provider>
+  );
+}
+
+// ═══════════════════════════════════════════════
+// STATUS HELPERS
+// ═══════════════════════════════════════════════
+const STATUS_MAP = {
+  'Aprovada': 'aprovada', 'Em validação': 'em_validacao', 'Em execução': 'em_execucao',
+  'Pronta p/ Faturamento': 'pronta_faturamento', 'Sugerida': 'sugerida',
+  'Revisão': 'revisao', 'No Roteiro': 'no_roteiro', 'Cancelada': 'cancelada'
+};
+const STATUS_LABELS = {
+  'aprovada': 'Aprovada', 'em_validacao': 'Em Validação', 'em_execucao': 'Em Execução',
+  'pronta_faturamento': 'Pronta p/ Fat.', 'sugerida': 'Sugerida',
+  'revisao': 'Revisão', 'no_roteiro': 'No Roteiro', 'cancelada': 'Cancelada'
+};
+const STATUS_BADGES = {
+  'aprovada': 'badge-green', 'em_validacao': 'badge-yellow', 'em_execucao': 'badge-blue',
+  'pronta_faturamento': 'badge-cyan', 'sugerida': 'badge-gray',
+  'revisao': 'badge-red', 'no_roteiro': 'badge-gray', 'cancelada': 'badge-red'
+};
+const LOGISTICA_STATUS = ['aprovada','em_validacao','em_execucao','pronta_faturamento'];
+const ROLE_LABELS = { admin: 'Administrador', planejador: 'Planejador', montador: 'Montador', motorista: 'Motorista', aplicador: 'Aplicador' };
+
+// ═══════════════════════════════════════════════
+// LOGIN SCREEN
+// ═══════════════════════════════════════════════
+function LoginScreen({ onLogin }) {
+  const [email, setEmail] = useState('');
+  const [pass, setPass] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const toast = useContext(ToastContext);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setLoading(true); setError('');
+    try {
+      const { data, error: err } = await sb.auth.signInWithPassword({ email, password: pass });
+      if (err) throw err;
+      toast('Login realizado com sucesso!', 'success');
+      onLogin(data);
+    } catch (err) {
+      setError(err.message || 'Erro ao fazer login');
+    } finally { setLoading(false); }
+  };
+
+  return (
+    <div className="login-container">
+      <div className="login-card">
+        <div className="login-logo">VacinaLog</div>
+        <div className="login-subtitle">Controle de estoque e rastreio logístico</div>
+        <form className="login-form" onSubmit={handleSubmit}>
+          {error && <div className="login-error">{error}</div>}
+          <div className="form-group">
+            <label className="form-label">Email</label>
+            <input className="form-input" type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="seu@email.com" required />
+          </div>
+          <div className="form-group">
+            <label className="form-label">Senha</label>
+            <input className="form-input" type="password" value={pass} onChange={e=>setPass(e.target.value)} placeholder="••••••••" required />
+          </div>
+          <button className="login-btn" type="submit" disabled={loading}>
+            {loading ? 'Entrando...' : 'Entrar'}
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════
+// SIDEBAR
+// ═══════════════════════════════════════════════
+function Sidebar({ profile, currentPage, onNavigate, open, onClose }) {
+  const role = profile?.role || 'aplicador';
+  const menuItems = [];
+
+  if (role === 'admin') {
+    menuItems.push(
+      { section: 'Geral' },
+      { id: 'dashboard', icon: '📊', label: 'Dashboard' },
+      { section: 'Cadastros' },
+      { id: 'bases', icon: '🏢', label: 'Bases' },
+      { id: 'vacinas', icon: '💉', label: 'Vacinas' },
+      { id: 'aplicadores', icon: '👤', label: 'Aplicadores' },
+      { id: 'usuarios', icon: '👥', label: 'Usuários' },
+      { section: 'Operação' },
+      { id: 'estoque', icon: '📦', label: 'Estoque' },
+      { id: 'importacao', icon: '📥', label: 'Importação' },
+      { id: 'tarefas', icon: '📋', label: 'Tarefas' },
+      { id: 'escalas', icon: '👩‍⚕️', label: 'Escalas' },
+      { id: 'demanda', icon: '⚖️', label: 'Demanda vs Oferta' },
+      { section: 'Logística' },
+      { id: 'rotas', icon: '🚚', label: 'Rotas' },
+      { id: 'veiculos', icon: '🚗', label: 'Veículos' },
+      { id: 'transferencia', icon: '↔️', label: 'Transferência' },
+      { id: 'movimentacoes', icon: '📜', label: 'Movimentações' },
+    );
+  } else if (role === 'planejador') {
+    menuItems.push(
+      { section: 'Planejamento' },
+      { id: 'dashboard', icon: '📊', label: 'Dashboard' },
+      { id: 'estoque', icon: '📦', label: 'Estoque' },
+      { id: 'demanda', icon: '⚖️', label: 'Demanda vs Oferta' },
+      { id: 'tarefas', icon: '📋', label: 'Tarefas' },
+      { id: 'escalas', icon: '👩‍⚕️', label: 'Escalas' },
+      { id: 'rotas', icon: '🚚', label: 'Rotas' },
+      { id: 'transferencia', icon: '↔️', label: 'Transferência' },
+      { id: 'importacao', icon: '📥', label: 'Importação' },
+    );
+  } else if (role === 'montador') {
+    menuItems.push(
+      { section: 'Montagem' },
+      { id: 'montagem', icon: '📦', label: 'Fila de Montagem' },
+      { id: 'etiquetas', icon: '🏷️', label: 'Etiquetas' },
+    );
+  } else if (role === 'motorista') {
+    menuItems.push(
+      { section: 'Entregas' },
+      { id: 'minhas-rotas', icon: '🚚', label: 'Minhas Rotas' },
+    );
+  } else if (role === 'aplicador') {
+    menuItems.push(
+      { section: 'Minha Área' },
+      { id: 'minhas-doses', icon: '💉', label: 'Minhas Doses' },
+      { id: 'abatimento', icon: '✏️', label: 'Registrar Abatimento' },
+    );
+  }
+
+  return (
+    <div className={`sidebar ${open ? 'open' : ''}`}>
+      <div className="sidebar-header">
+        <div className="sidebar-logo">VacinaLog</div>
+        <div className="sidebar-role">{ROLE_LABELS[role]}</div>
+      </div>
+      <div className="sidebar-nav">
+        {menuItems.map((item, i) =>
+          item.section ? (
+            <div key={i} className="nav-section">{item.section}</div>
+          ) : (
+            <div key={item.id} className={`nav-item ${currentPage === item.id ? 'active' : ''}`}
+              onClick={() => { onNavigate(item.id); onClose(); }}>
+              <span className="nav-icon">{item.icon}</span>
+              {item.label}
+            </div>
+          )
+        )}
+      </div>
+      <div className="sidebar-footer">
+        <div className="user-info">
+          <div className="user-avatar">{(profile?.nome || '?')[0].toUpperCase()}</div>
+          <div>
+            <div className="user-name">{profile?.nome || 'Usuário'}</div>
+            <div className="user-email">{profile?.email || ''}</div>
+          </div>
+        </div>
+        <button className="btn-logout" onClick={async () => { await sb.auth.signOut(); window.location.reload(); }}>
+          Sair
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════
+// MODAL
+// ═══════════════════════════════════════════════
+function Modal({ title, onClose, children, large }) {
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className={`modal ${large ? 'modal-lg' : ''}`} onClick={e => e.stopPropagation()}>
+        <div className="modal-title">{title}</div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════
+// DASHBOARD
+// ═══════════════════════════════════════════════
+function DashboardPage() {
+  const [stats, setStats] = useState({ bases: 0, vacinas: 0, aplicadores: 0, tarefas: 0, escalas: 0 });
+  const toast = useContext(ToastContext);
+
+  useEffect(() => {
+    async function load() {
+      try {
+        const [b, v, a, t, e] = await Promise.all([
+          sb.from('bases').select('id', { count: 'exact', head: true }),
+          sb.from('vacinas').select('id', { count: 'exact', head: true }),
+          sb.from('aplicadores').select('id', { count: 'exact', head: true }),
+          sb.from('tarefas').select('id', { count: 'exact', head: true }),
+          sb.from('escalas').select('id', { count: 'exact', head: true }),
+        ]);
+        setStats({
+          bases: b.count || 0, vacinas: v.count || 0, aplicadores: a.count || 0,
+          tarefas: t.count || 0, escalas: e.count || 0
+        });
+      } catch (err) { toast('Erro ao carregar dashboard', 'error'); }
+    }
+    load();
+  }, []);
+
+  return (
+    <div>
+      <div className="page-header">
+        <div>
+          <div className="page-title">Dashboard</div>
+          <div className="page-subtitle">Visão geral do sistema</div>
+        </div>
+      </div>
+      <div className="stats-grid">
+        <div className="stat-card">
+          <div className="stat-icon" style={{background: 'var(--accent-subtle)', color: 'var(--accent)'}}>🏢</div>
+          <div className="stat-value">{stats.bases}</div>
+          <div className="stat-label">Bases</div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-icon" style={{background: 'var(--success-bg)', color: 'var(--success)'}}>💉</div>
+          <div className="stat-value">{stats.vacinas}</div>
+          <div className="stat-label">Vacinas</div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-icon" style={{background: 'var(--warning-bg)', color: 'var(--warning)'}}>👤</div>
+          <div className="stat-value">{stats.aplicadores}</div>
+          <div className="stat-label">Aplicadores</div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-icon" style={{background: 'var(--info-bg)', color: 'var(--info)'}}>📋</div>
+          <div className="stat-value">{stats.tarefas}</div>
+          <div className="stat-label">Tarefas</div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-icon" style={{background: 'rgba(168,85,247,0.12)', color: '#a855f7'}}>👩‍⚕️</div>
+          <div className="stat-value">{stats.escalas}</div>
+          <div className="stat-label">Escalas</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════
+// CRUD GENÉRICO — BASES
+// ═══════════════════════════════════════════════
+function BasesPage() {
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [modal, setModal] = useState(null);
+  const toast = useContext(ToastContext);
+
+  const load = async () => {
+    setLoading(true);
+    const { data, error } = await sb.from('bases').select('*').order('nome');
+    if (error) toast(error.message, 'error');
+    else setItems(data || []);
+    setLoading(false);
+  };
+  useEffect(() => { load(); }, []);
+
+  const save = async (form) => {
+    const payload = { ...form, ativa: true };
+    let res;
+    if (form.id) {
+      res = await sb.from('bases').update(payload).eq('id', form.id);
+    } else {
+      delete payload.id;
+      res = await sb.from('bases').insert(payload);
+    }
+    if (res.error) { toast(res.error.message, 'error'); return; }
+    toast(form.id ? 'Base atualizada!' : 'Base criada!', 'success');
+    setModal(null); load();
+  };
+
+  const remove = async (id) => {
+    if (!confirm('Deseja excluir esta base?')) return;
+    const { error } = await sb.from('bases').delete().eq('id', id);
+    if (error) toast(error.message, 'error');
+    else { toast('Base excluída!', 'success'); load(); }
+  };
+
+  const emptyForm = { nome: '', tipo: 'base_regional', cidade: '', uf: '', endereco: '', ponto_partida: '', latitude: '', longitude: '' };
+
+  return (
+    <div>
+      <div className="page-header">
+        <div>
+          <div className="page-title">Bases</div>
+          <div className="page-subtitle">CDs e bases regionais</div>
+        </div>
+        <button className="btn btn-primary" onClick={() => setModal(emptyForm)}>+ Nova Base</button>
+      </div>
+      <div className="card">
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Nome</th><th>Tipo</th><th>Cidade</th><th>UF</th><th>Ponto de Partida</th><th>Ações</th></tr>
+            </thead>
+            <tbody>
+              {items.length === 0 && !loading && (
+                <tr><td colSpan={6}><div className="empty-state"><div className="empty-icon">🏢</div><div className="empty-text">Nenhuma base cadastrada</div></div></td></tr>
+              )}
+              {items.map(b => (
+                <tr key={b.id}>
+                  <td style={{color:'var(--text-primary)',fontWeight:500}}>{b.nome}</td>
+                  <td><span className={`badge ${b.tipo==='cd'?'badge-blue':'badge-green'}`}>{b.tipo==='cd'?'CD':'Base Regional'}</span></td>
+                  <td>{b.cidade}</td>
+                  <td className="mono">{b.uf}</td>
+                  <td>{b.ponto_partida || '—'}</td>
+                  <td>
+                    <div style={{display:'flex',gap:4}}>
+                      <button className="btn btn-secondary btn-sm" onClick={() => setModal(b)}>Editar</button>
+                      <button className="btn btn-danger btn-sm" onClick={() => remove(b.id)}>Excluir</button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      {modal && (
+        <BaseFormModal initial={modal} onClose={() => setModal(null)} onSave={save} />
+      )}
+    </div>
+  );
+}
+
+function BaseFormModal({ initial, onClose, onSave }) {
+  const [form, setForm] = useState(initial);
+  const [geoLoading, setGeoLoading] = useState(false);
+  const set = (k, v) => setForm(f => ({...f, [k]: v}));
+  const toast = useContext(ToastContext);
+
+  const buscarCoordenadas = async () => {
+    const partes = [form.endereco, form.cidade, form.uf, 'Brasil'].filter(Boolean);
+    if (!form.cidade) { toast('Preencha pelo menos a cidade', 'error'); return; }
+    setGeoLoading(true);
+    try {
+      const q = encodeURIComponent(partes.join(', '));
+      const res = await fetch(`https://nominatim.openstreetmap.org/search?q=${q}&format=json&limit=1&countrycodes=br`);
+      const data = await res.json();
+      if (data && data.length > 0) {
+        setForm(f => ({ ...f, latitude: parseFloat(data[0].lat).toFixed(7), longitude: parseFloat(data[0].lon).toFixed(7) }));
+        toast(`Coordenadas encontradas: ${data[0].display_name}`, 'success');
+      } else {
+        toast('Endereço não encontrado. Tente ajustar cidade ou endereço.', 'error');
+      }
+    } catch (err) {
+      toast('Erro ao buscar coordenadas: ' + err.message, 'error');
+    } finally { setGeoLoading(false); }
+  };
+
+  return (
+    <Modal title={form.id ? 'Editar Base' : 'Nova Base'} onClose={onClose}>
+      <div className="form-grid">
+        <div className="form-group">
+          <label className="form-label">Nome</label>
+          <input className="form-input" value={form.nome} onChange={e=>set('nome',e.target.value)} placeholder="Ex: Base Belo Horizonte" />
+        </div>
+        <div className="form-group">
+          <label className="form-label">Tipo</label>
+          <select className="form-select" value={form.tipo} onChange={e=>set('tipo',e.target.value)}>
+            <option value="cd">CD (Centro de Distribuição)</option>
+            <option value="base_regional">Base Regional</option>
+          </select>
+        </div>
+        <div className="form-group">
+          <label className="form-label">Cidade</label>
+          <input className="form-input" value={form.cidade} onChange={e=>set('cidade',e.target.value)} />
+        </div>
+        <div className="form-group">
+          <label className="form-label">UF</label>
+          <input className="form-input" value={form.uf} onChange={e=>set('uf',e.target.value)} maxLength={2} style={{textTransform:'uppercase'}} />
+        </div>
+        <div className="form-group" style={{gridColumn:'1/-1'}}>
+          <label className="form-label">Endereço</label>
+          <input className="form-input" value={form.endereco||''} onChange={e=>set('endereco',e.target.value)} />
+        </div>
+        <div className="form-group">
+          <label className="form-label">Ponto de Partida</label>
+          <input className="form-input" value={form.ponto_partida||''} onChange={e=>set('ponto_partida',e.target.value)} placeholder="Ex: Belo Horizonte-mg" />
+        </div>
+        <div className="form-group">
+          <label className="form-label">Latitude</label>
+          <input className="form-input" type="number" step="any" value={form.latitude||''} onChange={e=>set('latitude',e.target.value||null)} />
+        </div>
+        <div className="form-group">
+          <label className="form-label">Longitude</label>
+          <input className="form-input" type="number" step="any" value={form.longitude||''} onChange={e=>set('longitude',e.target.value||null)} />
+        </div>
+        <div className="form-group" style={{gridColumn:'1/-1'}}>
+          <button className="btn btn-success" onClick={buscarCoordenadas} disabled={geoLoading} style={{width:'100%'}}>
+            {geoLoading ? '🔍 Buscando...' : '📍 Buscar Lat/Lon automaticamente'}
+          </button>
+        </div>
+      </div>
+      <div className="modal-actions">
+        <button className="btn btn-secondary" onClick={onClose}>Cancelar</button>
+        <button className="btn btn-primary" onClick={() => onSave(form)}>Salvar</button>
+      </div>
+    </Modal>
+  );
+}
+
+// ═══════════════════════════════════════════════
+// CRUD — VACINAS
+// ═══════════════════════════════════════════════
+function VacinasPage() {
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [modal, setModal] = useState(null);
+  const toast = useContext(ToastContext);
+
+  const load = async () => {
+    setLoading(true);
+    const { data, error } = await sb.from('vacinas').select('*').order('nome');
+    if (error) toast(error.message, 'error');
+    else setItems(data || []);
+    setLoading(false);
+  };
+  useEffect(() => { load(); }, []);
+
+  const save = async (form) => {
+    const payload = { ...form, ativa: true };
+    let res;
+    if (form.id) {
+      res = await sb.from('vacinas').update(payload).eq('id', form.id);
+    } else {
+      delete payload.id;
+      res = await sb.from('vacinas').insert(payload);
+    }
+    if (res.error) { toast(res.error.message, 'error'); return; }
+    toast(form.id ? 'Vacina atualizada!' : 'Vacina criada!', 'success');
+    setModal(null); load();
+  };
+
+  const emptyForm = { nome: '', fabricante: '', lote: '', validade: '', doses_por_frasco: 1, temperatura_min: '', temperatura_max: '' };
+
+  return (
+    <div>
+      <div className="page-header">
+        <div>
+          <div className="page-title">Vacinas</div>
+          <div className="page-subtitle">Catálogo de vacinas</div>
+        </div>
+        <button className="btn btn-primary" onClick={() => setModal(emptyForm)}>+ Nova Vacina</button>
+      </div>
+      <div className="card">
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Nome</th><th>Fabricante</th><th>Lote</th><th>Validade</th><th>Doses/Frasco</th><th>Ações</th></tr>
+            </thead>
+            <tbody>
+              {items.length === 0 && !loading && (
+                <tr><td colSpan={6}><div className="empty-state"><div className="empty-icon">💉</div><div className="empty-text">Nenhuma vacina cadastrada</div></div></td></tr>
+              )}
+              {items.map(v => (
+                <tr key={v.id}>
+                  <td style={{color:'var(--text-primary)',fontWeight:500}}>{v.nome}</td>
+                  <td>{v.fabricante || '—'}</td>
+                  <td className="mono">{v.lote || '—'}</td>
+                  <td>{v.validade ? new Date(v.validade+'T12:00:00').toLocaleDateString('pt-BR') : '—'}</td>
+                  <td className="mono">{v.doses_por_frasco}</td>
+                  <td>
+                    <button className="btn btn-secondary btn-sm" onClick={() => setModal(v)}>Editar</button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      {modal && (
+        <Modal title={modal.id ? 'Editar Vacina' : 'Nova Vacina'} onClose={() => setModal(null)}>
+          <VacinaForm initial={modal} onSave={save} onClose={() => setModal(null)} />
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+function VacinaForm({ initial, onSave, onClose }) {
+  const [form, setForm] = useState(initial);
+  const set = (k, v) => setForm(f => ({...f, [k]: v}));
+  return (
+    <>
+      <div className="form-grid">
+        <div className="form-group">
+          <label className="form-label">Nome</label>
+          <input className="form-input" value={form.nome} onChange={e=>set('nome',e.target.value)} placeholder="Ex: Influenza Quadrivalente" />
+        </div>
+        <div className="form-group">
+          <label className="form-label">Fabricante</label>
+          <input className="form-input" value={form.fabricante||''} onChange={e=>set('fabricante',e.target.value)} />
+        </div>
+        <div className="form-group">
+          <label className="form-label">Lote</label>
+          <input className="form-input" value={form.lote||''} onChange={e=>set('lote',e.target.value)} />
+        </div>
+        <div className="form-group">
+          <label className="form-label">Validade</label>
+          <input className="form-input" type="date" value={form.validade||''} onChange={e=>set('validade',e.target.value||null)} />
+        </div>
+        <div className="form-group">
+          <label className="form-label">Doses por Frasco</label>
+          <input className="form-input" type="number" value={form.doses_por_frasco} onChange={e=>set('doses_por_frasco',parseInt(e.target.value)||1)} />
+        </div>
+        <div className="form-group">
+          <label className="form-label">Temp. Mín (°C)</label>
+          <input className="form-input" type="number" step="any" value={form.temperatura_min||''} onChange={e=>set('temperatura_min',e.target.value||null)} />
+        </div>
+        <div className="form-group">
+          <label className="form-label">Temp. Máx (°C)</label>
+          <input className="form-input" type="number" step="any" value={form.temperatura_max||''} onChange={e=>set('temperatura_max',e.target.value||null)} />
+        </div>
+      </div>
+      <div className="modal-actions">
+        <button className="btn btn-secondary" onClick={onClose}>Cancelar</button>
+        <button className="btn btn-primary" onClick={() => onSave(form)}>Salvar</button>
+      </div>
+    </>
+  );
+}
+
+// ═══════════════════════════════════════════════
+// IMPORTAÇÃO DE DADOS (Consulta + Tutores)
+// ═══════════════════════════════════════════════
+function ImportacaoPage() {
+  const [tab, setTab] = useState('consulta');
+  return (
+    <div>
+      <div className="page-header">
+        <div>
+          <div className="page-title">Importação de Dados</div>
+          <div className="page-subtitle">Importe planilhas de Consulta (Tarefas) e Tutores (Escalas)</div>
+        </div>
+      </div>
+      <div className="tabs">
+        <button className={`tab ${tab==='consulta'?'active':''}`} onClick={()=>setTab('consulta')}>📋 Consulta (Tarefas)</button>
+        <button className={`tab ${tab==='tutores'?'active':''}`} onClick={()=>setTab('tutores')}>👩‍⚕️ Tutores (Escalas)</button>
+        <button className={`tab ${tab==='historico'?'active':''}`} onClick={()=>setTab('historico')}>📜 Histórico</button>
+      </div>
+      {tab === 'consulta' && <ImportConsulta />}
+      {tab === 'tutores' && <ImportTutores />}
+      {tab === 'historico' && <ImportHistorico />}
+    </div>
+  );
+}
+
+function ImportConsulta() {
+  const [file, setFile] = useState(null);
+  const [preview, setPreview] = useState(null);
+  const [importing, setImporting] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [result, setResult] = useState(null);
+  const toast = useContext(ToastContext);
+  const fileRef = useRef();
+
+  const handleFile = (f) => {
+    setFile(f); setResult(null);
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const wb = XLSX.read(e.target.result, { type: 'array', cellDates: true });
+      const sheet = wb.Sheets[wb.SheetNames[0]];
+      const data = XLSX.utils.sheet_to_json(sheet);
+
+      // Detectar automaticamente coluna de doses (pode variar)
+      const firstRow = data[0] || {};
+      const dosesCol = Object.keys(firstRow).find(k =>
+        k.toLowerCase().includes('doses prev') || k.toLowerCase().includes('previstas')
+      ) || 'Doses Previstas';
+
+      const filtered = data.filter(r => {
+        const st = r['Status'] || '';
+        return ['Aprovada','Em validação','Em execução','Pronta p/ Faturamento'].includes(st);
+      });
+
+      // Checar quantos têm doses zeradas
+      const comDoses = filtered.filter(r => Math.round(parseFloat(r[dosesCol])) > 0);
+      const semDoses = filtered.length - comDoses.length;
+
+      setPreview({ total: data.length, filtered: filtered.length, comDoses: comDoses.length, semDoses, data: filtered, dosesCol });
+    };
+    reader.readAsArrayBuffer(f);
+  };
+
+  const doImport = async () => {
+    if (!preview) return;
+
+    // Bloquear se todas as doses estiverem zeradas
+    if (preview.comDoses === 0) {
+      toast('❌ Todas as doses estão zeradas. Verifique se o arquivo está correto.', 'error');
+      return;
+    }
+
+    setImporting(true); setProgress(0);
+
+    try {
+      const { data: bases, error: bErr } = await sb.from('bases').select('id, nome');
+      if (bErr) throw new Error('Erro ao carregar bases: ' + bErr.message);
+      const baseMap = {};
+      (bases || []).forEach(b => { baseMap[b.nome.toLowerCase()] = b.id; });
+
+      const { data: vacinas, error: vErr } = await sb.from('vacinas').select('id, nome');
+      if (vErr) throw new Error('Erro ao carregar vacinas: ' + vErr.message);
+      const vacinaMap = {};
+      (vacinas || []).forEach(v => { vacinaMap[v.nome.toLowerCase()] = v.id; });
+
+      const { data: imp, error: impErr } = await sb.from('importacoes').insert({
+        tipo: 'tarefa', nome_arquivo: file.name,
+        registros_total: preview.filtered,
+        usuario_id: (await sb.auth.getUser()).data.user.id
+      }).select().single();
+      if (impErr) throw new Error('Erro ao registrar importação: ' + impErr.message);
+
+      const rows = preview.data;
+      const batchSize = 50;
+      let imported = 0, ignored = 0;
+
+      for (let i = 0; i < rows.length; i += batchSize) {
+        const batch = rows.slice(i, i + batchSize).map(r => {
+          const statusRaw = r['Status'] || '';
+          const status = STATUS_MAP[statusRaw] || 'aprovada';
+          const baseNome = (r['Bases'] || '').trim();
+          const vacinaNome = (r['vacina'] || 'Gripe').trim();
+          
+          // Parse dates
+          let dataInicio = null, dataTermino = null;
+          if (r['Início']) {
+            const d = r['Início'];
+            dataInicio = d instanceof Date ? d.toISOString().split('T')[0] : String(d).split('T')[0];
+          }
+          if (r['Término']) {
+            const d = r['Término'];
+            dataTermino = d instanceof Date ? d.toISOString().split('T')[0] : String(d).split('T')[0];
+          }
+
+          // Parse hours
+          let horaInicio = null, horaTermino = null;
+          const parseHora = (h) => {
+            if (!h) return null;
+            if (h instanceof Date) return h.toTimeString().slice(0,8);
+            const s = String(h);
+            if (s.includes(':')) return s.length === 5 ? s + ':00' : s;
+            return null;
+          };
+          horaInicio = parseHora(r['Horas']);
+          horaTermino = parseHora(r['Horas.1']);
+
+          return {
+            codigo: r['Código'] || '',
+            nome_agenda: r['nome_agenda'] || '',
+            grupo: r['Grupo'] || '',
+            cliente: r['Cliente'] || '',
+            unidade_campanha: r['Unidade de campanha'] || '',
+            unidade: r['Unidade'] || '',
+            cidade_campanha: r['Cidade da campanha'] || '',
+            uf_campanha: r['UF da campanha'] || '',
+            tipo_agendamento: r['Tipo de agendamento'] || '',
+            data_inicio: dataInicio,
+            hora_inicio: horaInicio,
+            data_termino: dataTermino,
+            hora_termino: horaTermino,
+            ponto_focal: r['Ponto focal'] || '',
+            vendedor: r['Vendedor'] || '',
+            doses_previstas: Math.round(parseFloat(r[preview.dosesCol] || r['Doses Previstas'])) || 0,
+            doses_consumidas: Math.round(parseFloat(r['Doses Consumidas'])) || 0,
+            doses_aplicadas: Math.round(parseFloat(r['Doses Aplicadas'])) || 0,
+            status: status,
+            status_original: statusRaw,
+            ponto_partida: (r['Ponto de partida'] || '').trim(),
+            base_nome: baseNome,
+            base_id: baseMap[baseNome.toLowerCase()] || null,
+            pp_uf: r['P.P. UF'] || '',
+            profissionais: parseInt(r['Profissionais']) || 0,
+            administrativo: parseInt(r['Administrativo']) || 0,
+            semanas: parseFloat(r['Semanas']) || null,
+            endereco: r['Endereço'] || '',
+            terceirizada: parseFloat(r['Terceirizada']) > 0,
+            campanha: r['Campanha'] || '',
+            vacina: vacinaNome,
+            vacina_id: vacinaMap[vacinaNome.toLowerCase()] || vacinaMap['gripe'] || null,
+            importacao_id: imp.id,
+          };
+        });
+
+        const { data: inserted, error } = await sb.from('tarefas').insert(batch).select('id');
+        if (error) {
+          console.error('Batch error:', error.message, error.details);
+          ignored += batch.length;
+          if (ignored <= batch.length) toast(`Aviso: erro no lote ${Math.ceil(i/batchSize)+1}: ${error.message}`, 'error');
+        } else {
+          imported += (inserted?.length || batch.length);
+        }
+        setProgress(Math.round(((i + batch.length) / rows.length) * 100));
+      }
+
+      // Atualizar contadores da importação
+      await sb.from('importacoes').update({
+        registros_importados: imported, registros_ignorados: ignored
+      }).eq('id', imp.id);
+
+      setResult({ imported, ignored, total: rows.length });
+      toast(`Importação concluída! ${imported} tarefas importadas.`, 'success');
+    } catch (err) {
+      toast('Erro na importação: ' + err.message, 'error');
+    } finally {
+      setImporting(false);
+    }
+  };
+
+  return (
+    <div className="card">
+      <div className="card-title" style={{marginBottom:16}}>Importar Consulta (Tarefas)</div>
+      <p style={{fontSize:13,color:'var(--text-secondary)',marginBottom:16}}>
+        Importe a planilha de Consulta. Somente tarefas com status <strong>Aprovada</strong>, <strong>Em validação</strong>, <strong>Em execução</strong> e <strong>Pronta p/ Faturamento</strong> serão importadas.
+      </p>
+
+      <div className="upload-area" onClick={() => fileRef.current?.click()}
+        onDragOver={e=>{e.preventDefault();e.currentTarget.classList.add('drag-over')}}
+        onDragLeave={e=>e.currentTarget.classList.remove('drag-over')}
+        onDrop={e=>{e.preventDefault();e.currentTarget.classList.remove('drag-over');handleFile(e.dataTransfer.files[0])}}>
+        <div className="upload-icon">📄</div>
+        <div className="upload-text">{file ? file.name : 'Clique ou arraste o arquivo Excel (.xlsx)'}</div>
+        <div className="upload-hint">Planilha Consulta com colunas: Código, Status, Doses Previstas, Bases, etc.</div>
+        <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv" style={{display:'none'}} onChange={e=>handleFile(e.target.files[0])} />
+      </div>
+
+      {preview && (
+        <div style={{marginTop:16}}>
+          <div style={{display:'flex',gap:12,marginBottom:12,flexWrap:'wrap'}}>
+            <div className="stat-card" style={{flex:1,minWidth:120}}>
+              <div className="stat-label">Total na planilha</div>
+              <div className="stat-value" style={{fontSize:22}}>{preview.total}</div>
+            </div>
+            <div className="stat-card" style={{flex:1,minWidth:120}}>
+              <div className="stat-label">Status logística</div>
+              <div className="stat-value" style={{fontSize:22,color:'var(--success)'}}>{preview.filtered}</div>
+            </div>
+            <div className="stat-card" style={{flex:1,minWidth:120}}>
+              <div className="stat-label">Com doses</div>
+              <div className="stat-value" style={{fontSize:22,color:'var(--accent)'}}>{preview.comDoses}</div>
+            </div>
+            <div className="stat-card" style={{flex:1,minWidth:120}}>
+              <div className="stat-label">Doses zeradas</div>
+              <div className="stat-value" style={{fontSize:22,color:preview.semDoses>0?'var(--warning)':'var(--text-muted)'}}>{preview.semDoses}</div>
+            </div>
+          </div>
+          {preview.comDoses === 0 && (
+            <div style={{padding:12,background:'var(--danger-bg)',border:'1px solid rgba(239,68,68,0.3)',borderRadius:'var(--radius-sm)',marginBottom:12,fontSize:13,color:'var(--danger)'}}>
+              ❌ <strong>Todas as doses estão zeradas.</strong> Verifique se a coluna correta é <code>"{preview.dosesCol}"</code>. Possível problema no arquivo ou formatação Excel.
+            </div>
+          )}
+          {preview.semDoses > 0 && preview.comDoses > 0 && (
+            <div style={{padding:10,background:'var(--warning-bg)',border:'1px solid rgba(245,158,11,0.3)',borderRadius:'var(--radius-sm)',marginBottom:12,fontSize:12,color:'var(--warning)'}}>
+              ⚠ {preview.semDoses} tarefas com doses zeradas serão importadas com valor 0. Coluna detectada: <code>"{preview.dosesCol}"</code>
+            </div>
+          )}
+          {preview.comDoses > 0 && preview.semDoses === 0 && (
+            <div style={{padding:10,background:'var(--success-bg)',border:'1px solid rgba(16,185,129,0.2)',borderRadius:'var(--radius-sm)',marginBottom:12,fontSize:12,color:'var(--success)'}}>
+              ✓ Coluna de doses detectada: <code>"{preview.dosesCol}"</code>
+            </div>
+          )}
+
+          {importing && (
+            <div style={{marginBottom:12}}>
+              <div style={{fontSize:13,color:'var(--text-secondary)',marginBottom:6}}>Importando... {progress}%</div>
+              <div className="progress-bar"><div className="progress-fill" style={{width:progress+'%'}} /></div>
+            </div>
+          )}
+
+          {result && (
+            <div style={{padding:14,background:'var(--success-bg)',borderRadius:'var(--radius-sm)',border:'1px solid rgba(16,185,129,0.2)',marginBottom:12}}>
+              <div style={{fontSize:14,fontWeight:600,color:'var(--success)'}}>✓ Importação concluída</div>
+              <div style={{fontSize:13,color:'var(--text-secondary)',marginTop:4}}>
+                {result.imported} importadas · {result.ignored} com erro · {result.total} total
+              </div>
+            </div>
+          )}
+
+          <button className="btn btn-primary" onClick={doImport} disabled={importing || preview.filtered === 0}>
+            {importing ? 'Importando...' : `Importar ${preview.filtered} tarefas`}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ImportTutores() {
+  const [file, setFile] = useState(null);
+  const [preview, setPreview] = useState(null);
+  const [importing, setImporting] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [result, setResult] = useState(null);
+  const toast = useContext(ToastContext);
+  const fileRef = useRef();
+
+  const handleFile = (f) => {
+    setFile(f); setResult(null);
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const wb = XLSX.read(e.target.result, { type: 'array', cellDates: true });
+      const sheet = wb.Sheets[wb.SheetNames[0]];
+      const data = XLSX.utils.sheet_to_json(sheet);
+      // Filtrar por status relevante e que tenha CPF
+      const filtered = data.filter(r => {
+        const st = r['status'] || '';
+        return ['Aprovada','Em validação','Em execução','Pronta p/ Faturamento'].includes(st);
+      });
+      const withCPF = filtered.filter(r => r['CPF'] && String(r['CPF']).trim());
+      setPreview({ total: data.length, filtered: filtered.length, withCPF: withCPF.length, data: withCPF });
+    };
+    reader.readAsArrayBuffer(f);
+  };
+
+  const doImport = async () => {
+    if (!preview) return;
+    setImporting(true); setProgress(0);
+
+    try {
+      const { data: bases } = await sb.from('bases').select('id, nome');
+      const baseMap = {};
+      (bases || []).forEach(b => { baseMap[b.nome.toLowerCase()] = b.id; });
+
+      const { data: vacinas } = await sb.from('vacinas').select('id, nome');
+      const vacinaMap = {};
+      (vacinas || []).forEach(v => { vacinaMap[v.nome.toLowerCase()] = v.id; });
+
+      // Buscar tarefas para resolver tarefa_id via código
+      const { data: tarefas } = await sb.from('tarefas').select('id, codigo');
+      const tarefaMap = {};
+      (tarefas || []).forEach(t => { tarefaMap[t.codigo] = t.id; });
+
+      // Buscar aplicadores existentes
+      const { data: apExist } = await sb.from('aplicadores').select('id, cpf');
+      const apMap = {};
+      (apExist || []).forEach(a => { apMap[a.cpf] = a.id; });
+
+      const { data: imp } = await sb.from('importacoes').insert({
+        tipo: 'escala', nome_arquivo: file.name,
+        registros_total: preview.withCPF,
+        usuario_id: (await sb.auth.getUser()).data.user.id
+      }).select().single();
+
+      const rows = preview.data;
+      const batchSize = 50;
+      let imported = 0, ignored = 0, aplicadoresCriados = 0;
+
+      // Primeiro pass: criar aplicadores que não existem
+      const cpfsSeen = new Set();
+      const newAplicadores = [];
+      for (const r of rows) {
+        const cpf = String(r['CPF'] || '').trim();
+        if (!cpf || cpfsSeen.has(cpf) || apMap[cpf]) continue;
+        cpfsSeen.add(cpf);
+        const baseNome = (r['Base'] || '').trim();
+        newAplicadores.push({
+          nome: r['Tutor'] || 'Sem nome',
+          cpf: cpf,
+          telefone: r['Celular'] ? String(r['Celular']) : null,
+          endereco: r['Endereço'] || null,
+          numero: r['Número'] ? String(r['Número']) : null,
+          cidade: r['Cidade'] || null,
+          uf: r['UF'] || null,
+          cep: r['CEP'] ? String(r['CEP']) : null,
+          base_vinculada_id: baseMap[baseNome.toLowerCase()] || null,
+        });
+      }
+
+      // Inserir novos aplicadores em batch
+      if (newAplicadores.length > 0) {
+        for (let i = 0; i < newAplicadores.length; i += batchSize) {
+          const batch = newAplicadores.slice(i, i + batchSize);
+          const { data: inserted, error } = await sb.from('aplicadores').insert(batch).select('id, cpf');
+          if (!error && inserted) {
+            inserted.forEach(a => { apMap[a.cpf] = a.id; });
+            aplicadoresCriados += inserted.length;
+          }
+        }
+      }
+
+      // Segundo pass: inserir escalas
+      for (let i = 0; i < rows.length; i += batchSize) {
+        const batch = rows.slice(i, i + batchSize).map(r => {
+          const cpf = String(r['CPF'] || '').trim();
+          const statusRaw = r['status'] || '';
+          const baseNome = (r['Base'] || '').trim();
+          const vacinaNome = (r['Tipo de vacina'] || 'Gripe').trim();
+          const codigoTarefa = r['Código da tarefa'] || '';
+
+          let dataInicio = null, dataTermino = null;
+          if (r['Início da tarefa']) {
+            const d = r['Início da tarefa'];
+            dataInicio = d instanceof Date ? d.toISOString().split('T')[0] : String(d).split('T')[0];
+          }
+          if (r['Término da tarefa']) {
+            const d = r['Término da tarefa'];
+            dataTermino = d instanceof Date ? d.toISOString().split('T')[0] : String(d).split('T')[0];
+          }
+
+          let horaInicio = null, horaTermino = null;
+          const parseHora = (h) => {
+            if (!h) return null;
+            if (h instanceof Date) return h.toTimeString().slice(0,8);
+            const s = String(h);
+            if (s.includes(':')) return s.length === 5 ? s+':00' : s;
+            return null;
+          };
+          horaInicio = parseHora(r['Horas - Início']);
+          horaTermino = parseHora(r['Horas  - Término']);
+
+          return {
+            codigo_tarefa: codigoTarefa,
+            tarefa_id: tarefaMap[codigoTarefa] || null,
+            aplicador_id: apMap[cpf] || null,
+            tutor_nome: r['Tutor'] || '',
+            tutor_cpf: cpf,
+            base_nome: baseNome,
+            base_id: baseMap[baseNome.toLowerCase()] || null,
+            ponto_partida: (r['Ponto de partida'] || '').trim(),
+            doses_necessarias: Math.round(parseFloat(r['Qntd. de doses'])) || 0,
+            tipo_vacina: vacinaNome,
+            vacina_id: vacinaMap[vacinaNome.toLowerCase()] || vacinaMap['gripe'] || null,
+            data_inicio: dataInicio,
+            hora_inicio: horaInicio,
+            data_termino: dataTermino,
+            hora_termino: horaTermino,
+            endereco_tarefa: r['Endereço da tarefa'] || '',
+            terceirizada: parseFloat(r['terceirizada']) > 0,
+            profissionais: parseInt(r['Qntd de enfermeiros']) || 0,
+            administrativo: parseInt(r["Qntd de ADM's"]) || 0,
+            semanas: parseFloat(r['Semanas']) || null,
+            particularidade: r['particularidade'] || '',
+            status: STATUS_MAP[statusRaw] || 'aprovada',
+            status_original: statusRaw,
+            importacao_id: imp.id,
+          };
+        });
+
+        const { data: inserted, error } = await sb.from('escalas').insert(batch).select('id');
+        if (error) {
+          console.error('Batch error escalas:', error.message, error.details);
+          ignored += batch.length;
+          if (ignored <= batch.length) toast(`Aviso lote ${Math.ceil(i/batchSize)+1}: ${error.message}`, 'error');
+        } else {
+          imported += (inserted?.length || batch.length);
+        }
+        setProgress(Math.round(((i + batch.length) / rows.length) * 100));
+      }
+
+      await sb.from('importacoes').update({
+        registros_importados: imported, registros_ignorados: ignored,
+        detalhes: { aplicadores_criados: aplicadoresCriados }
+      }).eq('id', imp.id);
+
+      setResult({ imported, ignored, total: rows.length, aplicadoresCriados });
+      toast(`Importação concluída! ${imported} escalas, ${aplicadoresCriados} aplicadores criados.`, 'success');
+    } catch (err) {
+      toast('Erro na importação: ' + err.message, 'error');
+    } finally {
+      setImporting(false);
+    }
+  };
+
+  return (
+    <div className="card">
+      <div className="card-title" style={{marginBottom:16}}>Importar Tutores (Escalas)</div>
+      <p style={{fontSize:13,color:'var(--text-secondary)',marginBottom:16}}>
+        Importe a planilha de Tutores. Aplicadores com CPF novo serão criados automaticamente. A importação resolve os vínculos com Tarefas, Bases e Vacinas já cadastradas.
+      </p>
+
+      <div className="upload-area" onClick={() => fileRef.current?.click()}
+        onDragOver={e=>{e.preventDefault();e.currentTarget.classList.add('drag-over')}}
+        onDragLeave={e=>e.currentTarget.classList.remove('drag-over')}
+        onDrop={e=>{e.preventDefault();e.currentTarget.classList.remove('drag-over');handleFile(e.dataTransfer.files[0])}}>
+        <div className="upload-icon">📄</div>
+        <div className="upload-text">{file ? file.name : 'Clique ou arraste o arquivo Excel (.xlsx)'}</div>
+        <div className="upload-hint">Planilha Tutores com colunas: Código da tarefa, Tutor, CPF, Qntd. de doses, etc.</div>
+        <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv" style={{display:'none'}} onChange={e=>handleFile(e.target.files[0])} />
+      </div>
+
+      {preview && (
+        <div style={{marginTop:16}}>
+          <div style={{display:'flex',gap:16,marginBottom:12,flexWrap:'wrap'}}>
+            <div className="stat-card" style={{flex:1,minWidth:120}}>
+              <div className="stat-label">Total na planilha</div>
+              <div className="stat-value" style={{fontSize:22}}>{preview.total}</div>
+            </div>
+            <div className="stat-card" style={{flex:1,minWidth:120}}>
+              <div className="stat-label">Status logística</div>
+              <div className="stat-value" style={{fontSize:22,color:'var(--success)'}}>{preview.filtered}</div>
+            </div>
+            <div className="stat-card" style={{flex:1,minWidth:120}}>
+              <div className="stat-label">Com CPF válido</div>
+              <div className="stat-value" style={{fontSize:22,color:'var(--accent)'}}>{preview.withCPF}</div>
+            </div>
+          </div>
+
+          {importing && (
+            <div style={{marginBottom:12}}>
+              <div style={{fontSize:13,color:'var(--text-secondary)',marginBottom:6}}>Importando... {progress}%</div>
+              <div className="progress-bar"><div className="progress-fill" style={{width:progress+'%'}} /></div>
+            </div>
+          )}
+
+          {result && (
+            <div style={{padding:14,background:'var(--success-bg)',borderRadius:'var(--radius-sm)',border:'1px solid rgba(16,185,129,0.2)',marginBottom:12}}>
+              <div style={{fontSize:14,fontWeight:600,color:'var(--success)'}}>✓ Importação concluída</div>
+              <div style={{fontSize:13,color:'var(--text-secondary)',marginTop:4}}>
+                {result.imported} escalas importadas · {result.aplicadoresCriados} aplicadores criados · {result.ignored} com erro
+              </div>
+            </div>
+          )}
+
+          <button className="btn btn-primary" onClick={doImport} disabled={importing || preview.withCPF === 0}>
+            {importing ? 'Importando...' : `Importar ${preview.withCPF} escalas`}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ImportHistorico() {
+  const [items, setItems] = useState([]);
+  const toast = useContext(ToastContext);
+
+  useEffect(() => {
+    sb.from('importacoes').select('*').order('created_at', { ascending: false }).limit(20)
+      .then(({ data, error }) => {
+        if (error) toast(error.message, 'error');
+        else setItems(data || []);
+      });
+  }, []);
+
+  return (
+    <div className="card">
+      <div className="card-title" style={{marginBottom:16}}>Histórico de Importações</div>
+      <div className="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Data</th><th>Tipo</th><th>Arquivo</th><th>Total</th><th>Importados</th><th>Ignorados</th></tr>
+          </thead>
+          <tbody>
+            {items.length === 0 && (
+              <tr><td colSpan={6}><div className="empty-state"><div className="empty-text">Nenhuma importação realizada</div></div></td></tr>
+            )}
+            {items.map(i => (
+              <tr key={i.id}>
+                <td>{new Date(i.created_at).toLocaleString('pt-BR')}</td>
+                <td><span className={`badge ${i.tipo==='tarefa'?'badge-blue':'badge-green'}`}>{i.tipo==='tarefa'?'Consulta':'Tutores'}</span></td>
+                <td style={{maxWidth:200,overflow:'hidden',textOverflow:'ellipsis'}}>{i.nome_arquivo}</td>
+                <td className="mono">{i.registros_total}</td>
+                <td className="mono" style={{color:'var(--success)'}}>{i.registros_importados}</td>
+                <td className="mono" style={{color:i.registros_ignorados>0?'var(--warning)':'inherit'}}>{i.registros_ignorados}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════
+// TAREFAS (visualização)
+// ═══════════════════════════════════════════════
+function TarefasPage() {
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState('');
+  const [statusFilter, setStatusFilter] = useState('');
+  const [page, setPage] = useState(0);
+  const PAGE_SIZE = 50;
+  const toast = useContext(ToastContext);
+
+  const load = async () => {
+    setLoading(true);
+    let q = sb.from('tarefas').select('*', { count: 'exact' })
+      .order('data_inicio', { ascending: true })
+      .range(page * PAGE_SIZE, (page + 1) * PAGE_SIZE - 1);
+    if (search) q = q.or(`codigo.ilike.%${search}%,cliente.ilike.%${search}%,cidade_campanha.ilike.%${search}%`);
+    if (statusFilter) q = q.eq('status', statusFilter);
+    const { data, error, count } = await q;
+    if (error) toast(error.message, 'error');
+    else setItems({ data: data || [], count: count || 0 });
+    setLoading(false);
+  };
+  useEffect(() => { load(); }, [page, statusFilter]);
+
+  const handleSearch = (e) => { e.preventDefault(); setPage(0); load(); };
+
+  return (
+    <div>
+      <div className="page-header">
+        <div>
+          <div className="page-title">Tarefas</div>
+          <div className="page-subtitle">{items.count || 0} tarefas importadas</div>
+        </div>
+      </div>
+
+      <div className="card" style={{marginBottom:16}}>
+        <form onSubmit={handleSearch} style={{display:'flex',gap:10,flexWrap:'wrap',alignItems:'flex-end'}}>
+          <div className="form-group" style={{flex:1,minWidth:200}}>
+            <label className="form-label">Buscar</label>
+            <input className="form-input sm" value={search} onChange={e=>setSearch(e.target.value)} placeholder="Código, cliente ou cidade..." />
+          </div>
+          <div className="form-group">
+            <label className="form-label">Status</label>
+            <select className="form-select" style={{padding:'7px 10px',fontSize:13}} value={statusFilter} onChange={e=>{setStatusFilter(e.target.value);setPage(0);}}>
+              <option value="">Todos</option>
+              {Object.entries(STATUS_LABELS).map(([k,v]) => <option key={k} value={k}>{v}</option>)}
+            </select>
+          </div>
+          <button className="btn btn-primary btn-sm" type="submit">Buscar</button>
+        </form>
+      </div>
+
+      <div className="card">
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Código</th><th>Cliente</th><th>Cidade</th><th>UF</th><th>Data</th><th>Doses Prev.</th><th>Doses Aplic.</th><th>Status</th><th>Base</th></tr>
+            </thead>
+            <tbody>
+              {(items.data || []).map(t => (
+                <tr key={t.id}>
+                  <td className="mono" style={{fontSize:11,maxWidth:220,overflow:'hidden',textOverflow:'ellipsis'}}>{t.codigo}</td>
+                  <td style={{maxWidth:180,overflow:'hidden',textOverflow:'ellipsis'}}>{t.cliente}</td>
+                  <td>{t.cidade_campanha}</td>
+                  <td className="mono">{t.uf_campanha}</td>
+                  <td>{t.data_inicio ? new Date(t.data_inicio+'T12:00:00').toLocaleDateString('pt-BR') : '—'}</td>
+                  <td className="mono">{t.doses_previstas}</td>
+                  <td className="mono">{t.doses_aplicadas}</td>
+                  <td><span className={`badge ${STATUS_BADGES[t.status]||'badge-gray'}`}>{STATUS_LABELS[t.status]||t.status}</span></td>
+                  <td>{t.base_nome || '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        {items.count > PAGE_SIZE && (
+          <div style={{display:'flex',justifyContent:'center',gap:8,marginTop:16}}>
+            <button className="btn btn-secondary btn-sm" disabled={page===0} onClick={()=>setPage(p=>p-1)}>← Anterior</button>
+            <span style={{padding:'6px 12px',fontSize:13,color:'var(--text-muted)'}}>
+              {page*PAGE_SIZE+1}–{Math.min((page+1)*PAGE_SIZE,items.count)} de {items.count}
+            </span>
+            <button className="btn btn-secondary btn-sm" disabled={(page+1)*PAGE_SIZE>=items.count} onClick={()=>setPage(p=>p+1)}>Próxima →</button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════
+// ESCALAS (visualização)
+// ═══════════════════════════════════════════════
+function EscalasPage() {
+  const [items, setItems] = useState({ data: [], count: 0 });
+  const [search, setSearch] = useState('');
+  const [page, setPage] = useState(0);
+  const PAGE_SIZE = 50;
+  const toast = useContext(ToastContext);
+
+  const load = async () => {
+    let q = sb.from('escalas').select('*', { count: 'exact' })
+      .order('data_inicio', { ascending: true })
+      .range(page * PAGE_SIZE, (page + 1) * PAGE_SIZE - 1);
+    if (search) q = q.or(`tutor_nome.ilike.%${search}%,tutor_cpf.ilike.%${search}%,codigo_tarefa.ilike.%${search}%`);
+    const { data, error, count } = await q;
+    if (error) toast(error.message, 'error');
+    else setItems({ data: data || [], count: count || 0 });
+  };
+  useEffect(() => { load(); }, [page]);
+
+  return (
+    <div>
+      <div className="page-header">
+        <div>
+          <div className="page-title">Escalas</div>
+          <div className="page-subtitle">{items.count} escalas importadas</div>
+        </div>
+      </div>
+
+      <div className="card" style={{marginBottom:16}}>
+        <form onSubmit={e=>{e.preventDefault();setPage(0);load();}} style={{display:'flex',gap:10,alignItems:'flex-end'}}>
+          <div className="form-group" style={{flex:1}}>
+            <label className="form-label">Buscar por tutor, CPF ou código</label>
+            <input className="form-input sm" value={search} onChange={e=>setSearch(e.target.value)} placeholder="Nome, CPF ou código..." />
+          </div>
+          <button className="btn btn-primary btn-sm" type="submit">Buscar</button>
+        </form>
+      </div>
+
+      <div className="card">
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Tutor</th><th>CPF</th><th>Código Tarefa</th><th>Data</th><th>Doses Nec.</th><th>Aplicadas</th><th>Perdidas</th><th>Danos</th><th>Status</th><th>Base</th></tr>
+            </thead>
+            <tbody>
+              {items.data.map(e => (
+                <tr key={e.id}>
+                  <td style={{color:'var(--text-primary)',fontWeight:500,maxWidth:160,overflow:'hidden',textOverflow:'ellipsis'}}>{e.tutor_nome}</td>
+                  <td className="mono" style={{fontSize:11}}>{e.tutor_cpf}</td>
+                  <td className="mono" style={{fontSize:11,maxWidth:200,overflow:'hidden',textOverflow:'ellipsis'}}>{e.codigo_tarefa}</td>
+                  <td>{e.data_inicio ? new Date(e.data_inicio+'T12:00:00').toLocaleDateString('pt-BR') : '—'}</td>
+                  <td className="mono">{e.doses_necessarias}</td>
+                  <td className="mono" style={{color:e.doses_aplicadas>0?'var(--success)':'inherit'}}>{e.doses_aplicadas}</td>
+                  <td className="mono" style={{color:e.doses_perdidas>0?'var(--warning)':'inherit'}}>{e.doses_perdidas}</td>
+                  <td className="mono" style={{color:e.doses_danificadas>0?'var(--danger)':'inherit'}}>{e.doses_danificadas}</td>
+                  <td><span className={`badge ${STATUS_BADGES[e.status]||'badge-gray'}`}>{STATUS_LABELS[e.status]||e.status}</span></td>
+                  <td>{e.base_nome || '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        {items.count > PAGE_SIZE && (
+          <div style={{display:'flex',justifyContent:'center',gap:8,marginTop:16}}>
+            <button className="btn btn-secondary btn-sm" disabled={page===0} onClick={()=>setPage(p=>p-1)}>← Anterior</button>
+            <span style={{padding:'6px 12px',fontSize:13,color:'var(--text-muted)'}}>
+              {page*PAGE_SIZE+1}–{Math.min((page+1)*PAGE_SIZE,items.count)} de {items.count}
+            </span>
+            <button className="btn btn-secondary btn-sm" disabled={(page+1)*PAGE_SIZE>=items.count} onClick={()=>setPage(p=>p+1)}>Próxima →</button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════
+// ESTOQUE
+// ═══════════════════════════════════════════════
+function EstoquePage() {
+  const [items, setItems] = useState([]);
+  const [showEntrada, setShowEntrada] = useState(false);
+  const toast = useContext(ToastContext);
+
+  const load = async () => {
+    const { data, error } = await sb.from('estoque')
+      .select('*, vacinas(nome, lote), bases(nome, cidade, uf), aplicadores(nome, cpf, cidade, uf)')
+      .neq('quantidade', 0)
+      .order('localizacao_tipo');
+    if (error) toast(error.message, 'error');
+    else setItems(data || []);
+  };
+  useEffect(() => { load(); }, []);
+
+  const totalBases = items.filter(i => i.localizacao_tipo === 'base').reduce((s, i) => s + i.quantidade, 0);
+  const totalAp = items.filter(i => i.localizacao_tipo === 'aplicador').reduce((s, i) => s + i.quantidade, 0);
+
+  return (
+    <div>
+      <div className="page-header">
+        <div>
+          <div className="page-title">Estoque</div>
+          <div className="page-subtitle">Posição atual de doses</div>
+        </div>
+        <button className="btn btn-primary" onClick={() => setShowEntrada(true)}>+ Entrada de Estoque</button>
+      </div>
+
+      <div className="stats-grid">
+        <div className="stat-card">
+          <div className="stat-icon" style={{background:'var(--accent-subtle)',color:'var(--accent)'}}>🏢</div>
+          <div className="stat-value">{totalBases.toLocaleString('pt-BR')}</div>
+          <div className="stat-label">Doses em Bases</div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-icon" style={{background:'var(--warning-bg)',color:'var(--warning)'}}>👤</div>
+          <div className="stat-value">{totalAp.toLocaleString('pt-BR')}</div>
+          <div className="stat-label">Doses com Aplicadores</div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-icon" style={{background:'var(--success-bg)',color:'var(--success)'}}>📦</div>
+          <div className="stat-value">{(totalBases + totalAp).toLocaleString('pt-BR')}</div>
+          <div className="stat-label">Total Geral</div>
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Tipo</th><th>Localização</th><th>Cidade/UF</th><th>Vacina</th><th>Lote</th><th>Quantidade</th></tr>
+            </thead>
+            <tbody>
+              {items.length === 0 && (
+                <tr><td colSpan={6}><div className="empty-state"><div className="empty-icon">📦</div><div className="empty-text">Nenhum estoque registrado. Use "Entrada de Estoque" para começar.</div></div></td></tr>
+              )}
+              {items.map(i => (
+                <tr key={i.id}>
+                  <td><span className={`badge ${i.localizacao_tipo==='base'?'badge-blue':'badge-yellow'}`}>{i.localizacao_tipo==='base'?'Base':'Aplicador'}</span></td>
+                  <td style={{color:'var(--text-primary)',fontWeight:500}}>
+                    {i.localizacao_tipo === 'base' ? i.bases?.nome : i.aplicadores?.nome}
+                  </td>
+                  <td>
+                    {i.localizacao_tipo === 'base' ? `${i.bases?.cidade || ''} / ${i.bases?.uf || ''}` : `${i.aplicadores?.cidade || ''} / ${i.aplicadores?.uf || ''}`}
+                  </td>
+                  <td>{i.vacinas?.nome || '—'}</td>
+                  <td className="mono">{i.vacinas?.lote || '—'}</td>
+                  <td className="mono" style={{fontWeight:600,fontSize:15,color:i.quantidade<0?'var(--danger)':'var(--success)'}}>
+                    {i.quantidade.toLocaleString('pt-BR')}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {showEntrada && <EntradaEstoqueModal onClose={() => { setShowEntrada(false); load(); }} />}
+    </div>
+  );
+}
+
+function EntradaEstoqueModal({ onClose }) {
+  const [bases, setBases] = useState([]);
+  const [vacinas, setVacinas] = useState([]);
+  const [form, setForm] = useState({ vacina_id: '', base_id: '', quantidade: '', observacao: '' });
+  const [saving, setSaving] = useState(false);
+  const toast = useContext(ToastContext);
+
+  useEffect(() => {
+    sb.from('bases').select('id, nome').eq('ativa', true).order('nome').then(r => setBases(r.data || []));
+    sb.from('vacinas').select('id, nome, lote').eq('ativa', true).order('nome').then(r => setVacinas(r.data || []));
+  }, []);
+
+  const save = async () => {
+    if (!form.vacina_id || !form.base_id || !form.quantidade) {
+      toast('Preencha todos os campos obrigatórios', 'error'); return;
+    }
+    setSaving(true);
+    const { error } = await sb.rpc('entrada_estoque', {
+      p_vacina_id: form.vacina_id,
+      p_base_id: form.base_id,
+      p_quantidade: parseInt(form.quantidade),
+      p_observacao: form.observacao || null
+    });
+    if (error) toast(error.message, 'error');
+    else { toast('Entrada registrada com sucesso!', 'success'); onClose(); }
+    setSaving(false);
+  };
+
+  return (
+    <Modal title="Entrada de Estoque" onClose={onClose}>
+      <p style={{fontSize:13,color:'var(--text-secondary)',marginBottom:16}}>Registre o recebimento de doses do fabricante/distribuidor.</p>
+      <div className="form-grid">
+        <div className="form-group">
+          <label className="form-label">Vacina *</label>
+          <select className="form-select" value={form.vacina_id} onChange={e=>setForm(f=>({...f,vacina_id:e.target.value}))}>
+            <option value="">Selecione...</option>
+            {vacinas.map(v => <option key={v.id} value={v.id}>{v.nome} {v.lote ? `(${v.lote})` : ''}</option>)}
+          </select>
+        </div>
+        <div className="form-group">
+          <label className="form-label">Base de destino *</label>
+          <select className="form-select" value={form.base_id} onChange={e=>setForm(f=>({...f,base_id:e.target.value}))}>
+            <option value="">Selecione...</option>
+            {bases.map(b => <option key={b.id} value={b.id}>{b.nome}</option>)}
+          </select>
+        </div>
+        <div className="form-group">
+          <label className="form-label">Quantidade (doses) *</label>
+          <input className="form-input" type="number" value={form.quantidade} onChange={e=>setForm(f=>({...f,quantidade:e.target.value}))} />
+        </div>
+        <div className="form-group">
+          <label className="form-label">Observação</label>
+          <input className="form-input" value={form.observacao} onChange={e=>setForm(f=>({...f,observacao:e.target.value}))} placeholder="NF, fornecedor, etc." />
+        </div>
+      </div>
+      <div className="modal-actions">
+        <button className="btn btn-secondary" onClick={onClose}>Cancelar</button>
+        <button className="btn btn-primary" onClick={save} disabled={saving}>{saving ? 'Salvando...' : 'Registrar Entrada'}</button>
+      </div>
+    </Modal>
+  );
+}
+
+// ═══════════════════════════════════════════════
+// DEMANDA vs OFERTA
+// ═══════════════════════════════════════════════
+function DemandaOfertaPage() {
+  const [items, setItems] = useState([]);
+  const [search, setSearch] = useState('');
+  const [filter, setFilter] = useState('gap_positivo');
+  const toast = useContext(ToastContext);
+
+  const load = async () => {
+    const { data, error } = await sb.from('vw_demanda_oferta').select('*');
+    if (error) { toast(error.message, 'error'); return; }
+    setItems(data || []);
+  };
+  useEffect(() => { load(); }, []);
+
+  let filtered = items;
+  if (search) {
+    const s = search.toLowerCase();
+    filtered = filtered.filter(i =>
+      (i.aplicador_nome||'').toLowerCase().includes(s) ||
+      (i.cpf||'').includes(s) ||
+      (i.cidade||'').toLowerCase().includes(s)
+    );
+  }
+  if (filter === 'gap_positivo') filtered = filtered.filter(i => i.gap_envio > 0);
+  else if (filter === 'gap_negativo') filtered = filtered.filter(i => i.gap_envio <= 0);
+  else if (filter === 'sem_estoque') filtered = filtered.filter(i => i.estoque_atual <= 0 && i.total_demanda > 0);
+
+  filtered.sort((a, b) => (b.gap_envio || 0) - (a.gap_envio || 0));
+
+  const totalGap = filtered.reduce((s, i) => s + Math.max(0, i.gap_envio || 0), 0);
+
+  return (
+    <div>
+      <div className="page-header">
+        <div>
+          <div className="page-title">Demanda vs Oferta</div>
+          <div className="page-subtitle">Gap de envio por aplicador</div>
+        </div>
+      </div>
+
+      <div className="stats-grid">
+        <div className="stat-card">
+          <div className="stat-icon" style={{background:'var(--danger-bg)',color:'var(--danger)'}}>⚠️</div>
+          <div className="stat-value">{totalGap.toLocaleString('pt-BR')}</div>
+          <div className="stat-label">Total doses a enviar</div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-icon" style={{background:'var(--warning-bg)',color:'var(--warning)'}}>👤</div>
+          <div className="stat-value">{filtered.length}</div>
+          <div className="stat-label">Aplicadores</div>
+        </div>
+      </div>
+
+      <div className="card" style={{marginBottom:16}}>
+        <div style={{display:'flex',gap:10,flexWrap:'wrap',alignItems:'flex-end'}}>
+          <div className="form-group" style={{flex:1,minWidth:200}}>
+            <label className="form-label">Buscar</label>
+            <input className="form-input sm" value={search} onChange={e=>setSearch(e.target.value)} placeholder="Nome, CPF ou cidade..." />
+          </div>
+          <div className="form-group">
+            <label className="form-label">Filtro</label>
+            <select className="form-select" style={{padding:'7px 10px',fontSize:13}} value={filter} onChange={e=>setFilter(e.target.value)}>
+              <option value="gap_positivo">Precisa enviar (gap &gt; 0)</option>
+              <option value="sem_estoque">Sem estoque</option>
+              <option value="gap_negativo">OK (gap ≤ 0)</option>
+              <option value="todos">Todos</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Aplicador</th><th>CPF</th><th>Cidade/UF</th><th>Vacina</th><th>Estoque</th><th>Demanda</th><th>Aplicadas</th><th>Restante</th><th>GAP</th></tr>
+            </thead>
+            <tbody>
+              {filtered.length === 0 && (
+                <tr><td colSpan={9}><div className="empty-state"><div className="empty-text">Nenhum registro encontrado. Importe tarefas e escalas primeiro.</div></div></td></tr>
+              )}
+              {filtered.slice(0, 100).map((i, idx) => (
+                <tr key={idx}>
+                  <td style={{color:'var(--text-primary)',fontWeight:500,maxWidth:160,overflow:'hidden',textOverflow:'ellipsis'}}>{i.aplicador_nome}</td>
+                  <td className="mono" style={{fontSize:11}}>{i.cpf}</td>
+                  <td>{i.cidade} / {i.uf}</td>
+                  <td>{i.vacina_nome}</td>
+                  <td className="mono">{i.estoque_atual}</td>
+                  <td className="mono">{i.total_demanda}</td>
+                  <td className="mono" style={{color:'var(--success)'}}>{i.total_aplicado}</td>
+                  <td className="mono">{i.demanda_restante}</td>
+                  <td className="mono" style={{fontWeight:700,fontSize:15,color:i.gap_envio>0?'var(--danger)':i.gap_envio<0?'var(--success)':'var(--text-muted)'}}>
+                    {i.gap_envio > 0 ? `+${i.gap_envio}` : i.gap_envio}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════
+// MÓDULO PLANEJADOR — ROTEIRIZAÇÃO COMPLETA
+// ═══════════════════════════════════════════════
+
+// ── Cadastro de Veículos ──
+function VeiculosPage() {
+  const [items, setItems] = useState([]);
+  const [modal, setModal] = useState(null);
+  const [bases, setBases] = useState([]);
+  const [motoristas, setMotoristas] = useState([]);
+  const toast = useContext(ToastContext);
+
+  const load = async () => {
+    const { data } = await sb.from('veiculos').select('*, bases(nome), profiles(nome)').eq('ativo', true).order('placa');
+    setItems(data || []);
+  };
+  useEffect(() => {
+    load();
+    sb.from('bases').select('id, nome').eq('ativa', true).order('nome').then(r => setBases(r.data || []));
+    sb.from('profiles').select('id, nome').eq('role', 'motorista').eq('ativo', true).order('nome').then(r => setMotoristas(r.data || []));
+  }, []);
+
+  const save = async (form) => {
+    const payload = { placa: form.placa?.toUpperCase(), modelo: form.modelo, tipo: form.tipo, capacidade_doses: parseInt(form.capacidade_doses)||10000, base_id: form.base_id||null, motorista_padrao_id: form.motorista_padrao_id||null, observacao: form.observacao||null, ativo: true };
+    let res;
+    if (form.id) res = await sb.from('veiculos').update(payload).eq('id', form.id);
+    else res = await sb.from('veiculos').insert(payload);
+    if (res.error) { toast(res.error.message, 'error'); return; }
+    toast(form.id ? 'Veículo atualizado!' : 'Veículo cadastrado!', 'success');
+    setModal(null); load();
+  };
+
+  const remove = async (id) => {
+    if (!confirm('Excluir veículo?')) return;
+    await sb.from('veiculos').update({ ativo: false }).eq('id', id);
+    toast('Veículo removido', 'success'); load();
+  };
+
+  const empty = { placa:'', modelo:'', tipo:'van', capacidade_doses:10000, base_id:'', motorista_padrao_id:'', observacao:'' };
+
+  return (
+    <div>
+      <div className="page-header">
+        <div><div className="page-title">Veículos</div><div className="page-subtitle">Cadastro de veículos da frota</div></div>
+        <button className="btn btn-primary" onClick={() => setModal(empty)}>+ Novo Veículo</button>
+      </div>
+      <div className="card">
+        <div className="table-wrap">
+          <table><thead><tr><th>Placa</th><th>Modelo</th><th>Tipo</th><th>Capacidade</th><th>Base</th><th>Motorista Padrão</th><th>Ações</th></tr></thead>
+            <tbody>
+              {items.length === 0 && <tr><td colSpan={7}><div className="empty-state"><div className="empty-icon">🚗</div><div className="empty-text">Nenhum veículo cadastrado</div></div></td></tr>}
+              {items.map(v => (
+                <tr key={v.id}>
+                  <td className="mono" style={{fontWeight:600}}>{v.placa}</td>
+                  <td>{v.modelo}</td>
+                  <td><span className="badge badge-blue">{v.tipo}</span></td>
+                  <td className="mono">{v.capacidade_doses?.toLocaleString('pt-BR')}</td>
+                  <td>{v.bases?.nome || '—'}</td>
+                  <td>{v.profiles?.nome || '—'}</td>
+                  <td><div style={{display:'flex',gap:4}}><button className="btn btn-secondary btn-sm" onClick={() => setModal(v)}>Editar</button><button className="btn btn-danger btn-sm" onClick={() => remove(v.id)}>Excluir</button></div></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      {modal && (
+        <Modal title={modal.id ? 'Editar Veículo' : 'Novo Veículo'} onClose={() => setModal(null)}>
+          <VeiculoForm initial={modal} bases={bases} motoristas={motoristas} onSave={save} onClose={() => setModal(null)} />
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+function VeiculoForm({ initial, bases, motoristas, onSave, onClose }) {
+  const [form, setForm] = useState(initial);
+  const set = (k,v) => setForm(f=>({...f,[k]:v}));
+  return (<>
+    <div className="form-grid">
+      <div className="form-group"><label className="form-label">Placa *</label><input className="form-input" value={form.placa} onChange={e=>set('placa',e.target.value)} placeholder="ABC-1D23" style={{textTransform:'uppercase'}} /></div>
+      <div className="form-group"><label className="form-label">Modelo *</label><input className="form-input" value={form.modelo} onChange={e=>set('modelo',e.target.value)} placeholder="Fiat Strada" /></div>
+      <div className="form-group"><label className="form-label">Tipo</label>
+        <select className="form-select" value={form.tipo} onChange={e=>set('tipo',e.target.value)}>
+          <option value="van">Van</option><option value="fiorino">Fiorino</option><option value="carro">Carro</option><option value="moto">Moto</option><option value="caminhao">Caminhão</option>
+        </select></div>
+      <div className="form-group"><label className="form-label">Capacidade (doses)</label><input className="form-input" type="number" value={form.capacidade_doses} onChange={e=>set('capacidade_doses',e.target.value)} /></div>
+      <div className="form-group"><label className="form-label">Base</label>
+        <select className="form-select" value={form.base_id||''} onChange={e=>set('base_id',e.target.value||null)}><option value="">Nenhuma</option>{bases.map(b => <option key={b.id} value={b.id}>{b.nome}</option>)}</select></div>
+      <div className="form-group"><label className="form-label">Motorista Padrão</label>
+        <select className="form-select" value={form.motorista_padrao_id||''} onChange={e=>set('motorista_padrao_id',e.target.value||null)}><option value="">Nenhum</option>{motoristas.map(m => <option key={m.id} value={m.id}>{m.nome}</option>)}</select></div>
+      <div className="form-group" style={{gridColumn:'1/-1'}}><label className="form-label">Observação</label><input className="form-input" value={form.observacao||''} onChange={e=>set('observacao',e.target.value)} /></div>
+    </div>
+    <div className="modal-actions"><button className="btn btn-secondary" onClick={onClose}>Cancelar</button><button className="btn btn-primary" onClick={() => onSave(form)}>Salvar</button></div>
+  </>);
+}
+
+// ── Lista de Rotas ──
+function RotasListPage({ onOpenRoteirizacao }) {
+  const [rotas, setRotas] = useState([]);
+  const [statusFilter, setStatusFilter] = useState('');
+  const toast = useContext(ToastContext);
+
+  const ROTA_ST = { planejada:'Planejada', montagem:'Em Montagem', pronta:'Pronta', em_transito:'Em Trânsito', concluida:'Concluída', cancelada:'Cancelada' };
+  const ROTA_BADGE = { planejada:'badge-blue', montagem:'badge-yellow', pronta:'badge-cyan', em_transito:'badge-green', concluida:'badge-gray', cancelada:'badge-red' };
+
+  const load = async () => {
+    let q = sb.from('rotas').select('*, bases!rotas_base_origem_id_fkey(nome), profiles!rotas_motorista_id_fkey(nome), veiculos(placa, modelo)').order('created_at', { ascending: false });
+    if (statusFilter) q = q.eq('status', statusFilter);
+    const { data, error } = await q;
+    if (error) toast(error.message, 'error');
+    else setRotas(data || []);
+  };
+  useEffect(() => { load(); }, [statusFilter]);
+
+  const enviarMontagem = async (id) => {
+    const { error } = await sb.from('rotas').update({ status: 'montagem' }).eq('id', id);
+    if (error) toast(error.message, 'error'); else { toast('Rota enviada para montagem!', 'success'); load(); }
+  };
+
+  const cancelar = async (id) => {
+    if (!confirm('Cancelar esta rota?')) return;
+    const { error } = await sb.from('rotas').update({ status: 'cancelada' }).eq('id', id);
+    if (error) toast(error.message, 'error'); else { toast('Rota cancelada', 'success'); load(); }
+  };
+
+  return (
+    <div>
+      <div className="page-header">
+        <div><div className="page-title">Rotas</div><div className="page-subtitle">Gerencie rotas de entrega e coleta</div></div>
+        <button className="btn btn-primary" onClick={onOpenRoteirizacao}>+ Nova Roteirização</button>
+      </div>
+      <div className="card" style={{marginBottom:16}}>
+        <div className="form-group" style={{maxWidth:200}}>
+          <label className="form-label">Status</label>
+          <select className="form-select" style={{padding:'7px 10px',fontSize:13}} value={statusFilter} onChange={e=>setStatusFilter(e.target.value)}>
+            <option value="">Todos</option>{Object.entries(ROTA_ST).map(([k,v]) => <option key={k} value={k}>{v}</option>)}
+          </select>
+        </div>
+      </div>
+      <div className="card"><div className="table-wrap"><table><thead>
+        <tr><th>Código</th><th>Data</th><th>Tipo</th><th>Base Origem</th><th>Motorista</th><th>Veículo</th><th>Status</th><th>Ações</th></tr>
+      </thead><tbody>
+        {rotas.length === 0 && <tr><td colSpan={8}><div className="empty-state"><div className="empty-icon">🚚</div><div className="empty-text">Nenhuma rota encontrada</div></div></td></tr>}
+        {rotas.map(r => (
+          <tr key={r.id}>
+            <td className="mono" style={{fontWeight:600,color:'var(--accent)'}}>{r.codigo}</td>
+            <td>{r.data_prevista ? new Date(r.data_prevista+'T12:00:00').toLocaleDateString('pt-BR') : '—'}</td>
+            <td><span className={`badge ${r.tipo==='entrega'?'badge-green':r.tipo==='coleta'?'badge-yellow':'badge-blue'}`}>{r.tipo}</span></td>
+            <td>{r.bases?.nome||'—'}</td>
+            <td>{r.profiles?.nome||'—'}</td>
+            <td>{r.veiculos ? `${r.veiculos.modelo} - ${r.veiculos.placa}` : (r.veiculo||'—')}</td>
+            <td><span className={`badge ${ROTA_BADGE[r.status]}`}>{ROTA_ST[r.status]}</span></td>
+            <td><div style={{display:'flex',gap:4,flexWrap:'wrap'}}>
+              {r.status==='planejada' && <><button className="btn btn-success btn-sm" onClick={()=>enviarMontagem(r.id)}>→ Montagem</button><button className="btn btn-danger btn-sm" onClick={()=>cancelar(r.id)}>Cancelar</button></>}
+            </div></td>
+          </tr>
+        ))}
+      </tbody></table></div></div>
+    </div>
+  );
+}
+
+// ── Roteirização principal (3 painéis) ──
+function RotasPage() {
+  const [mode, setMode] = useState('list'); // 'list' ou 'roteirizacao'
+  if (mode === 'roteirizacao') return <RoteirizacaoPage onBack={() => setMode('list')} />;
+  return <RotasListPage onOpenRoteirizacao={() => setMode('roteirizacao')} />;
+}
+
+function RoteirizacaoPage({ onBack }) {
+  const [bases, setBases] = useState([]);
+  const [veiculos, setVeiculos] = useState([]);
+  const [motoristas, setMotoristas] = useState([]);
+  const [escalas, setEscalas] = useState([]);
+  const [tutores, setTutores] = useState([]);
+  const [filteredTutores, setFilteredTutores] = useState([]);
+  const [paradas, setParadas] = useState([]);
+  const [dragIdx, setDragIdx] = useState(null);
+  const [leftOpen, setLeftOpen] = useState(true);
+  const [rightOpen, setRightOpen] = useState(true);
+  const [expandedTutor, setExpandedTutor] = useState(null);
+
+  const [baseOrigem, setBaseOrigem] = useState('');
+  const [filterPP, setFilterPP] = useState('');
+  const [filterDateStart, setFilterDateStart] = useState('');
+  const [filterDateEnd, setFilterDateEnd] = useState('');
+  const [searchTarefa, setSearchTarefa] = useState('');
+  const [pontosPartida, setPontosPartida] = useState([]);
+
+  const [rotaTipo, setRotaTipo] = useState('entrega');
+  const [rotaData, setRotaData] = useState(new Date().toISOString().split('T')[0]);
+  const [motoristaId, setMotoristaId] = useState('');
+  const [veiculoId, setVeiculoId] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [mapKey, setMapKey] = useState(0);
+  const [geocodeCache, setGeocodeCache] = useState({});
+  const toast = useContext(ToastContext);
+
+  useEffect(() => {
+    sb.from('bases').select('id, nome, latitude, longitude').eq('ativa', true).order('nome').then(r => setBases(r.data||[]));
+    sb.from('veiculos').select('id, placa, modelo, capacidade_doses, motorista_padrao_id').eq('ativo', true).order('modelo').then(r => setVeiculos(r.data||[]));
+    sb.from('profiles').select('id, nome').eq('role', 'motorista').eq('ativo', true).order('nome').then(r => setMotoristas(r.data||[]));
+    loadEscalas();
+  }, []);
+
+  const loadEscalas = async () => {
+    const { data } = await sb.from('escalas')
+      .select('id, codigo_tarefa, tutor_nome, tutor_cpf, ponto_partida, doses_necessarias, data_inicio, data_termino, base_nome, base_id, status, endereco_tarefa, aplicador_id, aplicadores(nome, cpf, cidade, uf, endereco)')
+      .in('status', ['aprovada','em_validacao','em_execucao','pronta_faturamento'])
+      .order('tutor_nome');
+    const rows = data || [];
+    setEscalas(rows);
+
+    // Agrupar por CPF do tutor
+    const groups = {};
+    rows.forEach(e => {
+      const key = e.tutor_cpf || e.id;
+      if (!groups[key]) {
+        groups[key] = {
+          cpf: e.tutor_cpf,
+          nome: e.tutor_nome,
+          ponto_partida: e.ponto_partida,
+          cidade: e.aplicadores?.cidade || '',
+          uf: e.aplicadores?.uf || '',
+          endereco: e.aplicadores?.endereco || '',
+          base_nome: e.base_nome,
+          tarefas: [],
+          total_doses: 0,
+        };
+      }
+      groups[key].tarefas.push(e);
+      groups[key].total_doses += (e.doses_necessarias || 0);
+    });
+    const tutorList = Object.values(groups).sort((a,b) => b.total_doses - a.total_doses);
+    setTutores(tutorList);
+
+    const pps = {};
+    tutorList.forEach(t => { if (t.ponto_partida) pps[t.ponto_partida] = (pps[t.ponto_partida]||0)+1; });
+    setPontosPartida(Object.entries(pps).sort((a,b)=>b[1]-a[1]));
+  };
+
+  useEffect(() => {
+    let f = [...tutores];
+    const addedCPFs = new Set(paradas.map(p => p.cpf));
+    f = f.filter(t => !addedCPFs.has(t.cpf));
+    if (filterPP) f = f.filter(t => t.ponto_partida === filterPP);
+    if (filterDateStart) f = f.filter(t => t.tarefas.some(e => e.data_inicio >= filterDateStart));
+    if (filterDateEnd) f = f.filter(t => t.tarefas.some(e => e.data_inicio <= filterDateEnd));
+    if (searchTarefa) {
+      const s = searchTarefa.toLowerCase();
+      f = f.filter(t => t.nome.toLowerCase().includes(s) || t.cpf.includes(s) || t.tarefas.some(e => (e.codigo_tarefa||'').toLowerCase().includes(s)));
+    }
+    setFilteredTutores(f);
+  }, [tutores, paradas, filterPP, filterDateStart, filterDateEnd, searchTarefa]);
+
+  useEffect(() => {
+    if (veiculoId) {
+      const v = veiculos.find(x => x.id === veiculoId);
+      if (v?.motorista_padrao_id && !motoristaId) setMotoristaId(v.motorista_padrao_id);
+    }
+  }, [veiculoId]);
+
+  const geocode = async (query) => {
+    if (geocodeCache[query]) return geocodeCache[query];
+    try {
+      const res = await fetch('https://nominatim.openstreetmap.org/search?q='+encodeURIComponent(query+', Brasil')+'&format=json&limit=1&countrycodes=br');
+      const data = await res.json();
+      if (data?.[0]) {
+        const coords = { lat: parseFloat(data[0].lat), lng: parseFloat(data[0].lon) };
+        setGeocodeCache(c => ({...c, [query]: coords}));
+        return coords;
+      }
+    } catch(e) {}
+    return null;
+  };
+
+  const addTutor = async (tutor) => {
+    toast('Buscando coordenadas...', 'info');
+    const query = tutor.ponto_partida || (tutor.cidade + ', ' + tutor.uf);
+    const coords = await geocode(query);
+    const parada = {
+      cpf: tutor.cpf,
+      nome: tutor.nome,
+      ponto_partida: tutor.ponto_partida,
+      cidade: tutor.cidade,
+      uf: tutor.uf,
+      doses: tutor.total_doses,
+      tarefas_count: tutor.tarefas.length,
+      tarefas: tutor.tarefas,
+      lat: coords?.lat || null,
+      lng: coords?.lng || null,
+      ordem: paradas.length + 1
+    };
+    setParadas(p => [...p, parada]);
+    setMapKey(k => k+1);
+    toast(tutor.nome + ' adicionado(a) à rota', 'success');
+  };
+
+  const removeParada = (idx) => {
+    setParadas(p => p.filter((_,i) => i !== idx).map((x,i) => ({...x, ordem: i+1})));
+    setMapKey(k => k+1);
+  };
+
+  const onDragStart = (idx) => setDragIdx(idx);
+  const onDragOver = (e) => e.preventDefault();
+  const onDrop = (e, dropIdx) => {
+    e.preventDefault();
+    if (dragIdx === null || dragIdx === dropIdx) return;
+    const n = [...paradas]; const [m] = n.splice(dragIdx, 1); n.splice(dropIdx, 0, m);
+    setParadas(n.map((p,i) => ({...p, ordem: i+1})));
+    setDragIdx(null); setMapKey(k => k+1);
+  };
+
+  const otimizarRota = () => {
+    const withCoord = paradas.filter(p => p.lat && p.lng);
+    const noCoord = paradas.filter(p => !p.lat || !p.lng);
+    if (withCoord.length < 2) { toast('Precisa de pelo menos 2 paradas com coordenadas', 'error'); return; }
+    const base = bases.find(b => b.id === baseOrigem);
+    let cur = { lat: parseFloat(base?.latitude)||withCoord[0].lat, lng: parseFloat(base?.longitude)||withCoord[0].lng };
+    const rem = [...withCoord]; const ordered = [];
+    while (rem.length > 0) {
+      let ni = 0, nd = Infinity;
+      rem.forEach((p,i) => { const d = Math.sqrt((cur.lat-p.lat)**2+(cur.lng-p.lng)**2); if (d < nd) { nd = d; ni = i; } });
+      const next = rem.splice(ni, 1)[0]; ordered.push(next); cur = next;
+    }
+    setParadas([...ordered, ...noCoord].map((p,i) => ({...p, ordem: i+1})));
+    setMapKey(k => k+1); toast('Rota otimizada!', 'success');
+  };
+
+  const distTotal = () => {
+    const c = paradas.filter(p => p.lat && p.lng);
+    if (c.length < 2) return 0;
+    let t = 0;
+    const base = bases.find(b => b.id === baseOrigem);
+    const pts = base?.latitude ? [{lat:parseFloat(base.latitude),lng:parseFloat(base.longitude)}, ...c] : c;
+    for (let i = 1; i < pts.length; i++) {
+      const R=6371, dLat=(pts[i].lat-pts[i-1].lat)*Math.PI/180, dLon=(pts[i].lng-pts[i-1].lng)*Math.PI/180;
+      const a = Math.sin(dLat/2)**2+Math.cos(pts[i-1].lat*Math.PI/180)*Math.cos(pts[i].lat*Math.PI/180)*Math.sin(dLon/2)**2;
+      t += R*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));
+    }
+    return t;
+  };
+
+  const salvarRota = async () => {
+    if (!baseOrigem) { toast('Selecione base de origem', 'error'); return; }
+    if (paradas.length === 0) { toast('Adicione paradas', 'error'); return; }
+    if (!motoristaId) { toast('Selecione motorista', 'error'); return; }
+    setSaving(true);
+    const userId = (await sb.auth.getUser()).data.user.id;
+    const veiculo = veiculos.find(v => v.id === veiculoId);
+    const { data: rota, error: re } = await sb.from('rotas').insert({
+      base_origem_id: baseOrigem, data_prevista: rotaData, tipo: rotaTipo,
+      motorista_id: motoristaId, veiculo: veiculo ? veiculo.modelo+' - '+veiculo.placa : null,
+      veiculo_id: veiculoId||null, criado_por: userId, codigo: ''
+    }).select().single();
+    if (re) { toast(re.message, 'error'); setSaving(false); return; }
+    let errs = 0;
+    for (const p of paradas) {
+      const obs = p.tarefas.map(t => t.codigo_tarefa).join(', ');
+      const { error } = await sb.from('remessas').insert({
+        rota_id: rota.id, tipo: rotaTipo==='coleta'?'coleta':'entrega',
+        destino_tipo: 'base', destino_base_id: baseOrigem,
+        ordem_entrega: p.ordem, observacao: p.nome+' ('+p.cpf+') | '+p.doses+' doses | '+obs,
+        codigo_rastreio: ''
+      });
+      if (error) errs++;
+    }
+    setSaving(false);
+    toast('Rota '+rota.codigo+' criada com '+paradas.length+' paradas!', 'success');
+    onBack();
+  };
+
+  const totalDoses = paradas.reduce((s,p) => s + (p.doses||0), 0);
+  const veiculoSel = veiculos.find(v => v.id === veiculoId);
+  const motoristaSel = motoristas.find(m => m.id === motoristaId);
+  const km = distTotal();
+
+  return (
+    <div style={{display:'flex',flexDirection:'column',height:'calc(100vh - 48px)'}}>
+      <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'8px 0',borderBottom:'1px solid var(--border)',marginBottom:8,gap:8,flexWrap:'wrap'}}>
+        <div style={{display:'flex',alignItems:'center',gap:8}}>
+          <button className="btn btn-secondary btn-sm" onClick={onBack}>← Voltar</button>
+          <span style={{fontSize:18,fontWeight:700}}>Roteirização</span>
+          {paradas.length > 0 && <span className="badge badge-blue">{paradas.length} paradas · {totalDoses.toLocaleString('pt-BR')} doses</span>}
+        </div>
+        <div style={{display:'flex',gap:6}}>
+          <button className="btn btn-secondary btn-sm" onClick={() => setLeftOpen(!leftOpen)}>{leftOpen ? '◀ Ocultar filtros' : '▶ Filtros'}</button>
+          <button className="btn btn-secondary btn-sm" onClick={() => setRightOpen(!rightOpen)}>{rightOpen ? 'Ocultar rota ▶' : '◀ Rota'}</button>
+          <button className="btn btn-success btn-sm" onClick={otimizarRota} disabled={paradas.length < 2}>⚡ Otimizar</button>
+          <button className="btn btn-primary" onClick={salvarRota} disabled={saving||paradas.length===0}>{saving ? 'Salvando...' : '💾 Salvar'}</button>
+        </div>
+      </div>
+
+      <div style={{display:'flex',gap:8,flex:1,minHeight:0,overflow:'hidden'}}>
+        {/* LEFT */}
+        {leftOpen && (
+          <div style={{width:300,flexShrink:0,display:'flex',flexDirection:'column',overflow:'hidden'}}>
+            <div className="card" style={{padding:10,marginBottom:6,flexShrink:0}}>
+              <div style={{fontSize:12,fontWeight:600,marginBottom:6}}>Config. da Rota</div>
+              <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:6}}>
+                <div className="form-group"><label className="form-label" style={{fontSize:10}}>Base Origem</label>
+                  <select className="form-select" style={{padding:'5px 6px',fontSize:11}} value={baseOrigem} onChange={e=>setBaseOrigem(e.target.value)}>
+                    <option value="">Selecione</option>{bases.map(b=><option key={b.id} value={b.id}>{b.nome}</option>)}
+                  </select></div>
+                <div className="form-group"><label className="form-label" style={{fontSize:10}}>Data</label>
+                  <input className="form-input" style={{padding:'5px 6px',fontSize:11}} type="date" value={rotaData} onChange={e=>setRotaData(e.target.value)} /></div>
+                <div className="form-group"><label className="form-label" style={{fontSize:10}}>Motorista</label>
+                  <select className="form-select" style={{padding:'5px 6px',fontSize:11}} value={motoristaId} onChange={e=>setMotoristaId(e.target.value)}>
+                    <option value="">Selecione</option>{motoristas.map(m=><option key={m.id} value={m.id}>{m.nome}</option>)}
+                  </select></div>
+                <div className="form-group"><label className="form-label" style={{fontSize:10}}>Veículo</label>
+                  <select className="form-select" style={{padding:'5px 6px',fontSize:11}} value={veiculoId} onChange={e=>setVeiculoId(e.target.value)}>
+                    <option value="">Selecione</option>{veiculos.map(v=><option key={v.id} value={v.id}>{v.modelo} {v.placa}</option>)}
+                  </select></div>
+              </div>
+            </div>
+
+            <div className="card" style={{padding:10,marginBottom:6,flexShrink:0}}>
+              <div style={{fontSize:12,fontWeight:600,marginBottom:6}}>Filtros</div>
+              <input className="form-input" style={{padding:'5px 8px',fontSize:11,marginBottom:4}} value={searchTarefa} onChange={e=>setSearchTarefa(e.target.value)} placeholder="🔍 Nome, CPF, código..." />
+              <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:4,marginBottom:4}}>
+                <input className="form-input" style={{padding:'5px 6px',fontSize:11}} type="date" value={filterDateStart} onChange={e=>setFilterDateStart(e.target.value)} />
+                <input className="form-input" style={{padding:'5px 6px',fontSize:11}} type="date" value={filterDateEnd} onChange={e=>setFilterDateEnd(e.target.value)} />
+              </div>
+              <select className="form-select" style={{padding:'5px 6px',fontSize:11,width:'100%'}} value={filterPP} onChange={e=>setFilterPP(e.target.value)}>
+                <option value="">Todos pontos de partida</option>
+                {pontosPartida.map(([pp,c]) => <option key={pp} value={pp}>{pp} ({c})</option>)}
+              </select>
+              <div style={{fontSize:10,color:'var(--text-muted)',marginTop:4}}>
+                <span className="badge badge-blue" style={{fontSize:10}}>Disponíveis {filteredTutores.length}</span>{' '}
+                <span className="badge badge-green" style={{fontSize:10}}>Na rota {paradas.length}</span>
+              </div>
+            </div>
+
+            <div style={{flex:1,overflow:'auto',border:'1px solid var(--border)',borderRadius:'var(--radius)',background:'var(--bg-card)'}}>
+              {filteredTutores.length === 0 && <div style={{padding:20,textAlign:'center',color:'var(--text-muted)',fontSize:12}}>{tutores.length===0?'Importe escalas primeiro':'Nenhum resultado'}</div>}
+              {filteredTutores.slice(0,80).map(t => (
+                <div key={t.cpf} style={{borderBottom:'1px solid var(--border)'}}>
+                  <div style={{padding:'8px 10px',fontSize:11,cursor:'pointer',display:'flex',justifyContent:'space-between',alignItems:'center',transition:'background 0.1s'}}
+                    onMouseEnter={e=>e.currentTarget.style.background='var(--bg-card-hover)'}
+                    onMouseLeave={e=>e.currentTarget.style.background='transparent'}
+                    onClick={() => setExpandedTutor(expandedTutor===t.cpf?null:t.cpf)}>
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{fontWeight:600,color:'var(--text-primary)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{t.nome}</div>
+                      <div style={{color:'var(--text-muted)',fontSize:10}}>{t.ponto_partida||t.cidade} · {t.tarefas.length} tarefas</div>
+                    </div>
+                    <div style={{display:'flex',alignItems:'center',gap:6}}>
+                      <span className="badge badge-cyan" style={{fontSize:10}}>{t.total_doses} doses</span>
+                      <button className="btn btn-primary btn-sm" style={{padding:'3px 8px',fontSize:10}} onClick={(e) => {e.stopPropagation(); addTutor(t);}}>+</button>
+                    </div>
+                  </div>
+                  {expandedTutor === t.cpf && (
+                    <div style={{padding:'4px 10px 8px',background:'var(--bg-input)'}}>
+                      <div style={{fontSize:10,color:'var(--text-muted)',marginBottom:2}}>CPF: {t.cpf} · Base: {t.base_nome}</div>
+                      {t.tarefas.slice(0,8).map(e => (
+                        <div key={e.id} style={{fontSize:10,color:'var(--text-secondary)',padding:'2px 0',borderBottom:'1px solid var(--border)'}}>
+                          <span style={{fontFamily:'JetBrains Mono',fontSize:9}}>{e.codigo_tarefa}</span>
+                          <span style={{float:'right',color:'var(--info)'}}>{e.doses_necessarias} doses</span>
+                        </div>
+                      ))}
+                      {t.tarefas.length > 8 && <div style={{fontSize:10,color:'var(--text-muted)',marginTop:2}}>+{t.tarefas.length-8} mais...</div>}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* CENTER - MAP */}
+        <div style={{flex:1,display:'flex',flexDirection:'column',minWidth:0}}>
+          <MapaRota key={mapKey} paradas={paradas} bases={bases} baseOrigemId={baseOrigem} />
+          <div style={{display:'flex',gap:12,padding:'8px 12px',background:'var(--bg-card)',border:'1px solid var(--border)',borderTop:'none',borderRadius:'0 0 var(--radius) var(--radius)',flexWrap:'wrap',fontSize:12}}>
+            <div><span style={{fontSize:10,color:'var(--text-muted)'}}>ORIGEM</span><br/><strong>{bases.find(b=>b.id===baseOrigem)?.nome||'—'}</strong></div>
+            <div><span style={{fontSize:10,color:'var(--text-muted)'}}>PARADAS</span><br/><strong>{paradas.length}</strong></div>
+            <div><span style={{fontSize:10,color:'var(--text-muted)'}}>DOSES</span><br/><strong>{totalDoses.toLocaleString('pt-BR')}</strong></div>
+            <div><span style={{fontSize:10,color:'var(--text-muted)'}}>DISTÂNCIA</span><br/><strong>{km > 0 ? km.toFixed(0)+' km' : '—'}</strong></div>
+            {veiculoSel && <div><span style={{fontSize:10,color:'var(--text-muted)'}}>CAPACIDADE</span><br/><strong style={{color:totalDoses>veiculoSel.capacidade_doses?'var(--danger)':'inherit'}}>{totalDoses}/{veiculoSel.capacidade_doses}</strong></div>}
+          </div>
+        </div>
+
+        {/* RIGHT */}
+        {rightOpen && (
+          <div style={{width:280,flexShrink:0,display:'flex',flexDirection:'column',overflow:'hidden'}}>
+            <div style={{display:'flex',gap:4,marginBottom:6,flexShrink:0}}>
+              <button className="btn btn-secondary btn-sm" style={{flex:1,fontSize:10}} onClick={otimizarRota} disabled={paradas.length<2}>⚡ Otimizar</button>
+              <button className="btn btn-danger btn-sm" style={{flex:1,fontSize:10}} onClick={() => {if(confirm('Limpar?')){setParadas([]);setMapKey(k=>k+1)}}} disabled={paradas.length===0}>✕ Limpar</button>
+            </div>
+            <div style={{flex:1,overflow:'auto',border:'1px solid var(--border)',borderRadius:'var(--radius)',background:'var(--bg-card)'}}>
+              <div style={{padding:'6px 10px',fontSize:10,color:'var(--text-muted)',borderBottom:'1px solid var(--border)',fontWeight:600}}>ARRASTE PARA REORDENAR</div>
+              {paradas.length === 0 && <div style={{padding:24,textAlign:'center',color:'var(--text-muted)',fontSize:12}}>Clique + nos aplicadores à esquerda</div>}
+              {paradas.map((p,idx) => (
+                <div key={p.cpf} draggable onDragStart={()=>onDragStart(idx)} onDragOver={onDragOver} onDrop={e=>onDrop(e,idx)}
+                  style={{padding:'8px 10px',borderBottom:'1px solid var(--border)',cursor:'grab',background:dragIdx===idx?'var(--accent-subtle)':'transparent'}}>
+                  <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start'}}>
+                    <div style={{display:'flex',gap:6,alignItems:'flex-start',flex:1}}>
+                      <div style={{width:20,height:20,borderRadius:'50%',background:'var(--accent)',color:'#fff',display:'flex',alignItems:'center',justifyContent:'center',fontSize:10,fontWeight:700,flexShrink:0}}>{p.ordem}</div>
+                      <div style={{flex:1,minWidth:0}}>
+                        <div style={{fontSize:11,fontWeight:600,color:'var(--text-primary)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{p.nome}</div>
+                        <div style={{fontSize:10,color:'var(--text-muted)'}}>
+                          {p.ponto_partida||p.cidade} · {p.doses} doses · {p.tarefas_count} tarefas
+                          {!p.lat && <span style={{color:'var(--danger)',marginLeft:3}}>⚠</span>}
+                        </div>
+                      </div>
+                    </div>
+                    <button style={{background:'none',border:'none',color:'var(--danger)',cursor:'pointer',fontSize:12,padding:2}} onClick={e=>{e.stopPropagation();removeParada(idx)}}>✕</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function MapaRota({ paradas, bases, baseOrigemId }) {
+  const mapRef = useRef(null);
+  const mapInstanceRef = useRef(null);
+
+  useEffect(() => {
+    if (mapInstanceRef.current) { mapInstanceRef.current.remove(); mapInstanceRef.current = null; }
+    if (!mapRef.current) return;
+    const map = L.map(mapRef.current).setView([-15.78, -47.93], 4);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OpenStreetMap' }).addTo(map);
+    mapInstanceRef.current = map;
+    const bounds = [];
+    const base = bases.find(b => b.id === baseOrigemId);
+    if (base?.latitude) {
+      const lat = parseFloat(base.latitude), lng = parseFloat(base.longitude);
+      L.marker([lat, lng], { icon: L.divIcon({ className: '', html: '<div style="background:#2563eb;color:#fff;border-radius:50%;width:28px;height:28px;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;border:3px solid #fff;box-shadow:0 2px 8px rgba(0,0,0,.3)">🏢</div>', iconSize:[28,28], iconAnchor:[14,14] }) }).addTo(map).bindPopup('<b>ORIGEM: '+base.nome+'</b>');
+      bounds.push([lat, lng]);
+    }
+    const coords = [];
+    paradas.forEach(p => {
+      if (!p.lat || !p.lng) return;
+      L.marker([p.lat, p.lng], { icon: L.divIcon({ className: '', html: '<div style="background:#10b981;color:#fff;border-radius:50%;width:24px;height:24px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;border:2px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,.3)">'+p.ordem+'</div>', iconSize:[24,24], iconAnchor:[12,12] }) }).addTo(map).bindPopup('<b>'+p.ordem+'. '+p.nome+'</b><br>'+p.ponto_partida+'<br>'+p.doses+' doses · '+p.tarefas_count+' tarefas');
+      bounds.push([p.lat, p.lng]); coords.push([p.lat, p.lng]);
+    });
+    if (base?.latitude && coords.length > 0) L.polyline([[parseFloat(base.latitude),parseFloat(base.longitude)], ...coords], { color:'#2563eb', weight:3, opacity:0.7, dashArray:'8,8' }).addTo(map);
+    else if (coords.length > 1) L.polyline(coords, { color:'#2563eb', weight:3, opacity:0.7, dashArray:'8,8' }).addTo(map);
+    if (bounds.length > 0) map.fitBounds(bounds, { padding:[30,30], maxZoom:12 });
+    return () => { if (mapInstanceRef.current) { mapInstanceRef.current.remove(); mapInstanceRef.current = null; } };
+  }, [paradas, bases, baseOrigemId]);
+
+  return <div ref={mapRef} style={{flex:1,borderRadius:'var(--radius) var(--radius) 0 0',border:'1px solid var(--border)',borderBottom:'none',minHeight:250}} />;
+}
+
+
+function TransferenciaPage() {
+  const [bases, setBases] = useState([]);
+  const [vacinas, setVacinas] = useState([]);
+  const [form, setForm] = useState({ vacina_id:'', quantidade:'', origem_tipo:'base', origem_id:'', destino_tipo:'aplicador', destino_id:'', observacao:'' });
+  const [searchOrig, setSearchOrig] = useState('');
+  const [searchDest, setSearchDest] = useState('');
+  const [origResults, setOrigResults] = useState([]);
+  const [destResults, setDestResults] = useState([]);
+  const [saving, setSaving] = useState(false);
+  const toast = useContext(ToastContext);
+
+  useEffect(() => {
+    sb.from('bases').select('id, nome').eq('ativa', true).order('nome').then(r => setBases(r.data||[]));
+    sb.from('vacinas').select('id, nome, lote').eq('ativa', true).order('nome').then(r => setVacinas(r.data||[]));
+  }, []);
+
+  const searchAp = async (term, setter) => {
+    if (term.length < 2) { setter([]); return; }
+    const { data } = await sb.from('aplicadores').select('id, nome, cpf').or(`nome.ilike.%${term}%,cpf.ilike.%${term}%`).eq('ativo', true).limit(10);
+    setter(data || []);
+  };
+
+  const transfer = async () => {
+    if (!form.vacina_id || !form.quantidade || !form.origem_id || !form.destino_id) { toast('Preencha todos os campos', 'error'); return; }
+    setSaving(true);
+    const { error } = await sb.rpc('transferir_estoque', {
+      p_vacina_id: form.vacina_id, p_quantidade: parseInt(form.quantidade),
+      p_origem_tipo: form.origem_tipo, p_origem_id: form.origem_id,
+      p_destino_tipo: form.destino_tipo, p_destino_id: form.destino_id,
+      p_observacao: form.observacao || null
+    });
+    if (error) toast(error.message, 'error');
+    else { toast('Transferência realizada!', 'success'); setForm(f=>({...f, quantidade:'', observacao:''})); }
+    setSaving(false);
+  };
+
+  return (
+    <div>
+      <div className="page-header"><div><div className="page-title">Transferência de Estoque</div><div className="page-subtitle">Mover doses entre bases e aplicadores</div></div></div>
+      <div className="card">
+        <div className="form-grid">
+          <div className="form-group"><label className="form-label">Vacina *</label>
+            <select className="form-select" value={form.vacina_id} onChange={e=>setForm(f=>({...f,vacina_id:e.target.value}))}><option value="">Selecione...</option>{vacinas.map(v=><option key={v.id} value={v.id}>{v.nome} {v.lote?`(${v.lote})`:''}</option>)}</select></div>
+          <div className="form-group"><label className="form-label">Quantidade *</label>
+            <input className="form-input" type="number" min="1" value={form.quantidade} onChange={e=>setForm(f=>({...f,quantidade:e.target.value}))} /></div>
+          <div className="form-group"><label className="form-label">Tipo Origem</label>
+            <select className="form-select" value={form.origem_tipo} onChange={e=>setForm(f=>({...f,origem_tipo:e.target.value,origem_id:''}))}><option value="base">Base</option><option value="aplicador">Aplicador</option></select></div>
+          <div className="form-group"><label className="form-label">Origem *</label>
+            {form.origem_tipo==='base' ? (
+              <select className="form-select" value={form.origem_id} onChange={e=>setForm(f=>({...f,origem_id:e.target.value}))}><option value="">Selecione...</option>{bases.map(b=><option key={b.id} value={b.id}>{b.nome}</option>)}</select>
+            ) : (
+              <div><input className="form-input" value={searchOrig} onChange={e=>{setSearchOrig(e.target.value);searchAp(e.target.value,setOrigResults)}} placeholder="Buscar..." />
+                {origResults.length>0 && !form.origem_id && <div style={{maxHeight:100,overflow:'auto',marginTop:2,border:'1px solid var(--border)',borderRadius:4}}>{origResults.map(a=><div key={a.id} style={{padding:6,fontSize:12,cursor:'pointer'}} onClick={()=>{setForm(f=>({...f,origem_id:a.id}));setSearchOrig(a.nome);setOrigResults([])}}>{a.nome} ({a.cpf})</div>)}</div>}</div>
+            )}</div>
+          <div className="form-group"><label className="form-label">Tipo Destino</label>
+            <select className="form-select" value={form.destino_tipo} onChange={e=>setForm(f=>({...f,destino_tipo:e.target.value,destino_id:''}))}><option value="base">Base</option><option value="aplicador">Aplicador</option></select></div>
+          <div className="form-group"><label className="form-label">Destino *</label>
+            {form.destino_tipo==='base' ? (
+              <select className="form-select" value={form.destino_id} onChange={e=>setForm(f=>({...f,destino_id:e.target.value}))}><option value="">Selecione...</option>{bases.map(b=><option key={b.id} value={b.id}>{b.nome}</option>)}</select>
+            ) : (
+              <div><input className="form-input" value={searchDest} onChange={e=>{setSearchDest(e.target.value);searchAp(e.target.value,setDestResults)}} placeholder="Buscar..." />
+                {destResults.length>0 && !form.destino_id && <div style={{maxHeight:100,overflow:'auto',marginTop:2,border:'1px solid var(--border)',borderRadius:4}}>{destResults.map(a=><div key={a.id} style={{padding:6,fontSize:12,cursor:'pointer'}} onClick={()=>{setForm(f=>({...f,destino_id:a.id}));setSearchDest(a.nome);setDestResults([])}}>{a.nome} ({a.cpf})</div>)}</div>}</div>
+            )}</div>
+          <div className="form-group" style={{gridColumn:'1/-1'}}><label className="form-label">Observação</label>
+            <input className="form-input" value={form.observacao} onChange={e=>setForm(f=>({...f,observacao:e.target.value}))} /></div>
+        </div>
+        <div style={{marginTop:16}}><button className="btn btn-primary" onClick={transfer} disabled={saving}>{saving ? 'Transferindo...' : '↔ Transferir Estoque'}</button></div>
+      </div>
+    </div>
+  );
+}
+
+
+// ═══════════════════════════════════════════════
+// PLACEHOLDER PAGES
+// ═══════════════════════════════════════════════
+function PlaceholderPage({ title, icon, description }) {
+  return (
+    <div>
+      <div className="page-header">
+        <div className="page-title">{title}</div>
+      </div>
+      <div className="card">
+        <div className="empty-state">
+          <div className="empty-icon">{icon}</div>
+          <div className="empty-text">{description}</div>
+          <p style={{fontSize:12,color:'var(--text-muted)',marginTop:8}}>Este módulo será desenvolvido na próxima etapa.</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════
+// MOVIMENTAÇÕES
+// ═══════════════════════════════════════════════
+function MovimentacoesPage() {
+  const [items, setItems] = useState([]);
+  const toast = useContext(ToastContext);
+
+  useEffect(() => {
+    sb.from('movimentacoes')
+      .select('*, vacinas(nome), profiles(nome)')
+      .order('created_at', { ascending: false })
+      .limit(100)
+      .then(({ data, error }) => {
+        if (error) toast(error.message, 'error');
+        else setItems(data || []);
+      });
+  }, []);
+
+  const TIPO_LABELS = {
+    entrada: { label: 'Entrada', badge: 'badge-green' },
+    saida: { label: 'Saída', badge: 'badge-red' },
+    transferencia: { label: 'Transferência', badge: 'badge-blue' },
+    envio_aplicador: { label: 'Envio → Aplicador', badge: 'badge-yellow' },
+    devolucao: { label: 'Devolução', badge: 'badge-cyan' },
+    aplicacao: { label: 'Aplicação', badge: 'badge-green' },
+    perda: { label: 'Perda', badge: 'badge-red' },
+    dano: { label: 'Dano', badge: 'badge-red' },
+    ajuste: { label: 'Ajuste', badge: 'badge-gray' },
+  };
+
+  return (
+    <div>
+      <div className="page-header">
+        <div className="page-title">Movimentações</div>
+      </div>
+      <div className="card">
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Data</th><th>Tipo</th><th>Vacina</th><th>Qtd</th><th>Usuário</th><th>Obs</th></tr>
+            </thead>
+            <tbody>
+              {items.length === 0 && (
+                <tr><td colSpan={6}><div className="empty-state"><div className="empty-text">Nenhuma movimentação registrada</div></div></td></tr>
+              )}
+              {items.map(m => {
+                const t = TIPO_LABELS[m.tipo] || { label: m.tipo, badge: 'badge-gray' };
+                return (
+                  <tr key={m.id}>
+                    <td>{new Date(m.created_at).toLocaleString('pt-BR')}</td>
+                    <td><span className={`badge ${t.badge}`}>{t.label}</span></td>
+                    <td>{m.vacinas?.nome || '—'}</td>
+                    <td className="mono" style={{fontWeight:600}}>{m.quantidade}</td>
+                    <td>{m.profiles?.nome || '—'}</td>
+                    <td style={{maxWidth:200,overflow:'hidden',textOverflow:'ellipsis',fontSize:12}}>{m.observacao || '—'}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════
+// APLICADORES PAGE
+// ═══════════════════════════════════════════════
+function AplicadoresPage() {
+  const [items, setItems] = useState({ data: [], count: 0 });
+  const [search, setSearch] = useState('');
+  const [page, setPage] = useState(0);
+  const PAGE_SIZE = 50;
+  const toast = useContext(ToastContext);
+
+  const load = async () => {
+    let q = sb.from('aplicadores').select('*, bases(nome)', { count: 'exact' })
+      .order('nome').range(page * PAGE_SIZE, (page+1) * PAGE_SIZE - 1);
+    if (search) q = q.or(`nome.ilike.%${search}%,cpf.ilike.%${search}%,cidade.ilike.%${search}%`);
+    const { data, error, count } = await q;
+    if (error) toast(error.message, 'error');
+    else setItems({ data: data || [], count: count || 0 });
+  };
+  useEffect(() => { load(); }, [page]);
+
+  return (
+    <div>
+      <div className="page-header">
+        <div>
+          <div className="page-title">Aplicadores</div>
+          <div className="page-subtitle">{items.count} aplicadores cadastrados</div>
+        </div>
+      </div>
+      <div className="card" style={{marginBottom:16}}>
+        <form onSubmit={e=>{e.preventDefault();setPage(0);load();}} style={{display:'flex',gap:10,alignItems:'flex-end'}}>
+          <div className="form-group" style={{flex:1}}>
+            <input className="form-input sm" value={search} onChange={e=>setSearch(e.target.value)} placeholder="Buscar por nome, CPF ou cidade..." />
+          </div>
+          <button className="btn btn-primary btn-sm" type="submit">Buscar</button>
+        </form>
+      </div>
+      <div className="card">
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Nome</th><th>CPF</th><th>Cidade/UF</th><th>Telefone</th><th>Base Vinculada</th></tr>
+            </thead>
+            <tbody>
+              {items.data.map(a => (
+                <tr key={a.id}>
+                  <td style={{color:'var(--text-primary)',fontWeight:500}}>{a.nome}</td>
+                  <td className="mono" style={{fontSize:11}}>{a.cpf}</td>
+                  <td>{a.cidade || '—'} / {a.uf || '—'}</td>
+                  <td className="mono" style={{fontSize:12}}>{a.telefone || '—'}</td>
+                  <td>{a.bases?.nome || '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        {items.count > PAGE_SIZE && (
+          <div style={{display:'flex',justifyContent:'center',gap:8,marginTop:16}}>
+            <button className="btn btn-secondary btn-sm" disabled={page===0} onClick={()=>setPage(p=>p-1)}>← Anterior</button>
+            <span style={{padding:'6px 12px',fontSize:13,color:'var(--text-muted)'}}>{page*PAGE_SIZE+1}–{Math.min((page+1)*PAGE_SIZE,items.count)} de {items.count}</span>
+            <button className="btn btn-secondary btn-sm" disabled={(page+1)*PAGE_SIZE>=items.count} onClick={()=>setPage(p=>p+1)}>Próxima →</button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════
+// MAIN APP
+// ═══════════════════════════════════════════════
+function App() {
+  const [session, setSession] = useState(undefined); // undefined = loading
+  const [profile, setProfile] = useState(null);
+  const [currentPage, setCurrentPage] = useState('dashboard');
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+
+  useEffect(() => {
+    sb.auth.getSession().then(({ data: { session } }) => setSession(session));
+    const { data: { subscription } } = sb.auth.onAuthStateChange((_event, session) => setSession(session));
+    return () => subscription.unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    if (!session?.user) { setProfile(null); return; }
+    sb.from('profiles').select('*').eq('id', session.user.id).single()
+      .then(({ data }) => setProfile(data));
+  }, [session]);
+
+  if (session === undefined) {
+    return (
+      <div style={{display:'flex',alignItems:'center',justifyContent:'center',minHeight:'100vh'}}>
+        <div style={{textAlign:'center'}}>
+          <div style={{fontSize:32,marginBottom:8}}>💉</div>
+          <div style={{color:'var(--text-muted)'}}>Carregando...</div>
+        </div>
+      </div>
+    );
+  }
+
+  if (!session) {
+    return <LoginScreen onLogin={({ session }) => setSession(session)} />;
+  }
+
+  const renderPage = () => {
+    switch (currentPage) {
+      case 'dashboard': return <DashboardPage />;
+      case 'bases': return <BasesPage />;
+      case 'vacinas': return <VacinasPage />;
+      case 'aplicadores': return <AplicadoresPage />;
+      case 'importacao': return <ImportacaoPage />;
+      case 'tarefas': return <TarefasPage />;
+      case 'escalas': return <EscalasPage />;
+      case 'estoque': return <EstoquePage />;
+      case 'demanda': return <DemandaOfertaPage />;
+      case 'movimentacoes': return <MovimentacoesPage />;
+      case 'rotas': return <RotasPage />;
+      case 'veiculos': return <VeiculosPage />;
+      case 'transferencia': return <TransferenciaPage />;
+      case 'montagem': return <PlaceholderPage title="Fila de Montagem" icon="📦" description="Montagem de caixas e geração de etiquetas" />;
+      case 'etiquetas': return <PlaceholderPage title="Etiquetas" icon="🏷️" description="Impressão de etiquetas 10x15" />;
+      case 'minhas-rotas': return <PlaceholderPage title="Minhas Rotas" icon="🚚" description="Rotas atribuídas ao motorista" />;
+      case 'minhas-doses': return <PlaceholderPage title="Minhas Doses" icon="💉" description="Saldo de doses sob sua custódia" />;
+      case 'abatimento': return <PlaceholderPage title="Registrar Abatimento" icon="✏️" description="Registrar vacinados, perdas e danos" />;
+      case 'usuarios': return <PlaceholderPage title="Usuários" icon="👥" description="Gestão de usuários e perfis" />;
+      default: return <DashboardPage />;
+    }
+  };
+
+  return (
+    <div className="app-layout">
+      <div className="mobile-toggle" onClick={() => setSidebarOpen(!sidebarOpen)}>☰</div>
+      <Sidebar profile={profile} currentPage={currentPage} onNavigate={setCurrentPage}
+        open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
+      <div className="main-content">
+        {renderPage()}
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════
+// RENDER
+// ═══════════════════════════════════════════════
+ReactDOM.render(
+  <ToastProvider><App /></ToastProvider>,
+  document.getElementById('root')
+);
+</script>
+</body>
+</html>
