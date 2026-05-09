@@ -2064,21 +2064,35 @@ function RoteirizacaoPage({ onBack }) {
   }, []);
 
   const loadEscalas = async () => {
-    const { data } = await sb.from('escalas')
-      .select('id, codigo_tarefa, tutor_nome, tutor_cpf, ponto_partida, doses_necessarias, data_inicio, data_termino, base_nome, base_id, status, endereco_tarefa, aplicador_id, aplicadores(nome, cpf, cidade, uf, endereco)')
-      .in('status', ['aprovada','em_validacao','em_execucao','pronta_faturamento'])
-      .order('tutor_nome');
-    const rows = data || [];
+    // Supabase limita 1000 por request — buscar em páginas
+    let allRows = [];
+    let page = 0;
+    const PAGE = 1000;
+    while (true) {
+      const { data, error } = await sb.from('escalas')
+        .select('id, codigo_tarefa, tutor_nome, tutor_cpf, ponto_partida, doses_necessarias, data_inicio, data_termino, base_nome, base_id, status, endereco_tarefa, aplicador_id, aplicadores(nome, cpf, cidade, uf, endereco)')
+        .in('status', ['aprovada','em_validacao','em_execucao','pronta_faturamento'])
+        .order('tutor_nome')
+        .range(page * PAGE, (page + 1) * PAGE - 1);
+      if (error || !data || data.length === 0) break;
+      allRows = allRows.concat(data);
+      if (data.length < PAGE) break;
+      page++;
+    }
+    const rows = allRows;
     setEscalas(rows);
 
-    // Agrupar por CPF do tutor
+    // Agrupar por CPF do tutor — normaliza CPF removendo pontuação
     const groups = {};
     rows.forEach(e => {
-      const key = e.tutor_cpf || e.id;
+      const cpfRaw = String(e.tutor_cpf || '').trim();
+      const cpfNorm = cpfRaw.replace(/\D/g, ''); // só dígitos
+      const key = cpfNorm || e.id;
       if (!groups[key]) {
         groups[key] = {
-          cpf: e.tutor_cpf,
-          nome: e.tutor_nome,
+          cpf: cpfRaw, // mantém formatado para exibição
+          cpfNorm,
+          nome: (e.tutor_nome || '').trim(),
           ponto_partida: e.ponto_partida,
           cidade: e.aplicadores?.cidade || '',
           uf: e.aplicadores?.uf || '',
@@ -2086,10 +2100,14 @@ function RoteirizacaoPage({ onBack }) {
           base_nome: e.base_nome,
           tarefas: [],
           total_doses: 0,
+          statuses: new Set(),
         };
       }
+      // Atualizar nome se o atual estiver vazio
+      if (!groups[key].nome && e.tutor_nome) groups[key].nome = e.tutor_nome.trim();
       groups[key].tarefas.push(e);
       groups[key].total_doses += (e.doses_necessarias || 0);
+      groups[key].statuses.add(e.status);
     });
     const tutorList = Object.values(groups).sort((a,b) => b.total_doses - a.total_doses);
     setTutores(tutorList);
@@ -2104,12 +2122,19 @@ function RoteirizacaoPage({ onBack }) {
     const addedCPFs = new Set(paradas.map(p => p.cpf));
     f = f.filter(t => !addedCPFs.has(t.cpf));
     if (filterPP) f = f.filter(t => t.ponto_partida === filterPP);
-    if (filterStatus) f = f.filter(t => t.tarefas.some(e => e.status === filterStatus));
+    if (filterStatus) f = f.filter(t => t.statuses ? t.statuses.has(filterStatus) : t.tarefas.some(e => e.status === filterStatus));
     if (filterDateStart) f = f.filter(t => t.tarefas.some(e => e.data_inicio >= filterDateStart));
     if (filterDateEnd) f = f.filter(t => t.tarefas.some(e => e.data_inicio <= filterDateEnd));
     if (searchTarefa) {
-      const s = searchTarefa.toLowerCase();
-      f = f.filter(t => t.nome.toLowerCase().includes(s) || t.cpf.includes(s) || t.tarefas.some(e => (e.codigo_tarefa||'').toLowerCase().includes(s)));
+      const s = searchTarefa.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+      f = f.filter(t => {
+        const nome = (t.nome||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+        const cpfDigits = (t.cpfNorm||t.cpf||'').replace(/\D/g,'');
+        const searchDigits = s.replace(/\D/g,'');
+        return nome.includes(s) ||
+          (searchDigits.length >= 3 && cpfDigits.includes(searchDigits)) ||
+          t.tarefas.some(e => (e.codigo_tarefa||'').toLowerCase().includes(s));
+      });
     }
     setFilteredTutores(f);
   }, [tutores, paradas, filterPP, filterStatus, filterDateStart, filterDateEnd, searchTarefa]);
