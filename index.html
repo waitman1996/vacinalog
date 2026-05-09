@@ -2043,6 +2043,7 @@ function RoteirizacaoPage({ onBack }) {
   const [filterPP, setFilterPP] = useState('');
   const [filterDateStart, setFilterDateStart] = useState('');
   const [filterDateEnd, setFilterDateEnd] = useState('');
+  const [filterStatus, setFilterStatus] = useState('');
   const [searchTarefa, setSearchTarefa] = useState('');
   const [pontosPartida, setPontosPartida] = useState([]);
 
@@ -2103,6 +2104,7 @@ function RoteirizacaoPage({ onBack }) {
     const addedCPFs = new Set(paradas.map(p => p.cpf));
     f = f.filter(t => !addedCPFs.has(t.cpf));
     if (filterPP) f = f.filter(t => t.ponto_partida === filterPP);
+    if (filterStatus) f = f.filter(t => t.tarefas.some(e => e.status === filterStatus));
     if (filterDateStart) f = f.filter(t => t.tarefas.some(e => e.data_inicio >= filterDateStart));
     if (filterDateEnd) f = f.filter(t => t.tarefas.some(e => e.data_inicio <= filterDateEnd));
     if (searchTarefa) {
@@ -2110,7 +2112,7 @@ function RoteirizacaoPage({ onBack }) {
       f = f.filter(t => t.nome.toLowerCase().includes(s) || t.cpf.includes(s) || t.tarefas.some(e => (e.codigo_tarefa||'').toLowerCase().includes(s)));
     }
     setFilteredTutores(f);
-  }, [tutores, paradas, filterPP, filterDateStart, filterDateEnd, searchTarefa]);
+  }, [tutores, paradas, filterPP, filterStatus, filterDateStart, filterDateEnd, searchTarefa]);
 
   useEffect(() => {
     if (veiculoId) {
@@ -2285,6 +2287,13 @@ function RoteirizacaoPage({ onBack }) {
                 <option value="">Todos pontos de partida</option>
                 {pontosPartida.map(([pp,c]) => <option key={pp} value={pp}>{pp} ({c})</option>)}
               </select>
+              <select className="form-select" style={{padding:'5px 6px',fontSize:11,width:'100%',marginTop:4}} value={filterStatus} onChange={e=>setFilterStatus(e.target.value)}>
+                <option value="">Todos os status</option>
+                <option value="aprovada">Aprovada</option>
+                <option value="em_validacao">Em Validação</option>
+                <option value="em_execucao">Em Execução</option>
+                <option value="pronta_faturamento">Pronta p/ Fat.</option>
+              </select>
               <div style={{fontSize:10,color:'var(--text-muted)',marginTop:4}}>
                 <span className="badge badge-blue" style={{fontSize:10}}>Disponíveis {filteredTutores.length}</span>{' '}
                 <span className="badge badge-green" style={{fontSize:10}}>Na rota {paradas.length}</span>
@@ -2293,35 +2302,54 @@ function RoteirizacaoPage({ onBack }) {
 
             <div style={{flex:1,overflow:'auto',border:'1px solid var(--border)',borderRadius:'var(--radius)',background:'var(--bg-card)'}}>
               {filteredTutores.length === 0 && <div style={{padding:20,textAlign:'center',color:'var(--text-muted)',fontSize:12}}>{tutores.length===0?'Importe escalas primeiro':'Nenhum resultado'}</div>}
-              {filteredTutores.slice(0,80).map(t => (
-                <div key={t.cpf} style={{borderBottom:'1px solid var(--border)'}}>
-                  <div style={{padding:'8px 10px',fontSize:11,cursor:'pointer',display:'flex',justifyContent:'space-between',alignItems:'center',transition:'background 0.1s'}}
-                    onMouseEnter={e=>e.currentTarget.style.background='var(--bg-card-hover)'}
-                    onMouseLeave={e=>e.currentTarget.style.background='transparent'}
-                    onClick={() => setExpandedTutor(expandedTutor===t.cpf?null:t.cpf)}>
-                    <div style={{flex:1,minWidth:0}}>
-                      <div style={{fontWeight:600,color:'var(--text-primary)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{t.nome}</div>
-                      <div style={{color:'var(--text-muted)',fontSize:10}}>{t.ponto_partida||t.cidade} · {t.tarefas.length} tarefas</div>
-                    </div>
-                    <div style={{display:'flex',alignItems:'center',gap:6}}>
-                      <span className="badge badge-cyan" style={{fontSize:10}}>{t.total_doses} doses</span>
-                      <button className="btn btn-primary btn-sm" style={{padding:'3px 8px',fontSize:10}} onClick={(e) => {e.stopPropagation(); addTutor(t);}}>+</button>
-                    </div>
-                  </div>
-                  {expandedTutor === t.cpf && (
-                    <div style={{padding:'4px 10px 8px',background:'var(--bg-input)'}}>
-                      <div style={{fontSize:10,color:'var(--text-muted)',marginBottom:2}}>CPF: {t.cpf} · Base: {t.base_nome}</div>
-                      {t.tarefas.slice(0,8).map(e => (
-                        <div key={e.id} style={{fontSize:10,color:'var(--text-secondary)',padding:'2px 0',borderBottom:'1px solid var(--border)'}}>
-                          <span style={{fontFamily:'JetBrains Mono',fontSize:9}}>{e.codigo_tarefa}</span>
-                          <span style={{float:'right',color:'var(--info)'}}>{e.doses_necessarias} doses</span>
+              {filteredTutores.slice(0,80).map(t => {
+                const isExpanded = expandedTutor === t.cpf;
+                const statusCounts = t.tarefas.reduce((acc, e) => { acc[e.status] = (acc[e.status]||0)+1; return acc; }, {});
+                return (
+                  <div key={t.cpf} style={{borderBottom:'1px solid var(--border)'}}>
+                    {/* Header do card - clica para colapsar/expandir */}
+                    <div style={{padding:'7px 10px',fontSize:11,display:'flex',justifyContent:'space-between',alignItems:'center',transition:'background 0.1s',gap:4}}
+                      onMouseEnter={e=>e.currentTarget.style.background='var(--bg-card-hover)'}
+                      onMouseLeave={e=>e.currentTarget.style.background='transparent'}>
+                      {/* Nome + info - clica para expand */}
+                      <div style={{flex:1,minWidth:0,cursor:'pointer'}} onClick={() => setExpandedTutor(isExpanded?null:t.cpf)}>
+                        <div style={{display:'flex',alignItems:'center',gap:4}}>
+                          <span style={{fontSize:9,color:'var(--text-muted)'}}>{isExpanded?'▼':'▶'}</span>
+                          <span style={{fontWeight:600,color:'var(--text-primary)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{t.nome}</span>
                         </div>
-                      ))}
-                      {t.tarefas.length > 8 && <div style={{fontSize:10,color:'var(--text-muted)',marginTop:2}}>+{t.tarefas.length-8} mais...</div>}
+                        <div style={{color:'var(--text-muted)',fontSize:10,marginLeft:12}}>
+                          {t.ponto_partida||t.cidade} · {t.tarefas.length} tar.
+                          {statusCounts['aprovada'] && <span style={{color:'var(--success)',marginLeft:4}}>✓{statusCounts['aprovada']}</span>}
+                          {statusCounts['pronta_faturamento'] && <span style={{color:'var(--info)',marginLeft:4}}>💰{statusCounts['pronta_faturamento']}</span>}
+                          {statusCounts['em_execucao'] && <span style={{color:'var(--accent)',marginLeft:4}}>▶{statusCounts['em_execucao']}</span>}
+                        </div>
+                      </div>
+                      <div style={{display:'flex',alignItems:'center',gap:4,flexShrink:0}}>
+                        <span className="badge badge-cyan" style={{fontSize:10}}>{t.total_doses.toLocaleString('pt-BR')}</span>
+                        <button className="btn btn-primary btn-sm" style={{padding:'3px 8px',fontSize:10}} onClick={(e) => {e.stopPropagation(); addTutor(t);}}>+</button>
+                      </div>
                     </div>
-                  )}
-                </div>
-              ))}
+                    {/* Detalhe colapsável */}
+                    {isExpanded && (
+                      <div style={{padding:'4px 10px 8px',background:'var(--bg-input)'}}>
+                        <div style={{fontSize:10,color:'var(--text-muted)',marginBottom:4}}>
+                          CPF: {t.cpf} · Base: {t.base_nome}
+                        </div>
+                        {t.tarefas.slice(0,10).map(e => (
+                          <div key={e.id} style={{fontSize:10,color:'var(--text-secondary)',padding:'3px 0',borderBottom:'1px solid var(--border)',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                            <span style={{fontFamily:'JetBrains Mono',fontSize:9,overflow:'hidden',textOverflow:'ellipsis',maxWidth:140}}>{e.codigo_tarefa}</span>
+                            <div style={{display:'flex',gap:4,alignItems:'center'}}>
+                              <span className={`badge ${STATUS_BADGES[e.status]||'badge-gray'}`} style={{fontSize:9,padding:'1px 5px'}}>{STATUS_LABELS[e.status]||e.status}</span>
+                              <span style={{color:'var(--info)',minWidth:50,textAlign:'right'}}>{e.doses_necessarias} doses</span>
+                            </div>
+                          </div>
+                        ))}
+                        {t.tarefas.length > 10 && <div style={{fontSize:10,color:'var(--text-muted)',marginTop:3}}>+{t.tarefas.length-10} tarefas...</div>}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           </div>
         )}
