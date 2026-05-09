@@ -2925,6 +2925,10 @@ function MontagemPage() {
           const totalDoses = (rem.remessa_itens||[]).reduce((s,i)=>s+i.quantidade,0);
           const isPronta = rem.status==='pronta';
 
+          // Extrair doses sugeridas da observação (formato: "Nome | 20 doses | ...")
+          const dosesMatch = (rem.observacao||'').match(/(\d+)\s*doses/);
+          const dosesSugeridas = dosesMatch ? parseInt(dosesMatch[1]) : 0;
+
           return (
             <div key={rem.id} className="card" style={{borderColor: isPronta ? 'rgba(16,185,129,0.4)' : 'var(--border)'}}>
               <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:12,flexWrap:'wrap',gap:8}}>
@@ -2985,7 +2989,7 @@ function MontagemPage() {
 
               {/* Adicionar item */}
               {!isPronta && (
-                <AddItemRemessa vacinas={vacinas} onAdd={(vid, qtd) => addItem(rem.id, vid, qtd)} />
+                <AddItemRemessa vacinas={vacinas} dosesSugeridas={dosesSugeridas} onAdd={(vid, qtd) => addItem(rem.id, vid, qtd)} />
               )}
             </div>
           );
@@ -3000,14 +3004,19 @@ function MontagemPage() {
   );
 }
 
-function AddItemRemessa({ vacinas, onAdd }) {
+function AddItemRemessa({ vacinas, onAdd, dosesSugeridas }) {
   const [vacinaId, setVacinaId] = useState('');
-  const [quantidade, setQuantidade] = useState('');
+  const [quantidade, setQuantidade] = useState(dosesSugeridas > 0 ? String(dosesSugeridas) : '');
+
+  // Atualiza sugestão quando muda (ex: troca de remessa)
+  useEffect(() => {
+    if (dosesSugeridas > 0 && !quantidade) setQuantidade(String(dosesSugeridas));
+  }, [dosesSugeridas]);
 
   const add = () => {
     if (!vacinaId || !quantidade) return;
     onAdd(vacinaId, parseInt(quantidade));
-    setVacinaId(''); setQuantidade('');
+    setVacinaId(''); setQuantidade(dosesSugeridas > 0 ? String(dosesSugeridas) : '');
   };
 
   return (
@@ -3020,9 +3029,13 @@ function AddItemRemessa({ vacinas, onAdd }) {
         </select>
       </div>
       <div className="form-group" style={{flex:1,minWidth:80,marginBottom:0}}>
-        <label className="form-label">Doses</label>
-        <input className="form-input sm" type="number" min="1" value={quantidade} onChange={e=>setQuantidade(e.target.value)}
-          onKeyDown={e=>e.key==='Enter'&&add()} />
+        <label className="form-label">
+          Doses {dosesSugeridas > 0 && <span style={{color:'var(--accent)',fontSize:10}}>(sugerido: {dosesSugeridas})</span>}
+        </label>
+        <input className="form-input sm" type="number" min="1" value={quantidade}
+          onChange={e=>setQuantidade(e.target.value)}
+          onKeyDown={e=>e.key==='Enter'&&add()}
+          style={{borderColor: quantidade && parseInt(quantidade) !== dosesSugeridas && dosesSugeridas > 0 ? 'var(--warning)' : undefined}} />
       </div>
       <button className="btn btn-primary btn-sm" onClick={add} disabled={!vacinaId||!quantidade}>+ Adicionar</button>
     </div>
@@ -3031,13 +3044,46 @@ function AddItemRemessa({ vacinas, onAdd }) {
 
 // ── Etiqueta 10x15cm ──
 function EtiquetaModal({ remessa, rota, onClose, totalParadas }) {
-  const destNome = remessa.destino_tipo==='base' ? remessa.bases?.nome : remessa.aplicadores?.nome;
-  const destCidade = remessa.destino_tipo==='base'
+  const [montadorNome, setMontadorNome] = useState('');
+
+  useEffect(() => {
+    // Buscar nome do usuário logado (quem está montando)
+    sb.auth.getUser().then(({ data }) => {
+      if (data?.user) {
+        sb.from('profiles').select('nome').eq('id', data.user.id).single()
+          .then(({ data: p }) => { if (p) setMontadorNome(p.nome); });
+      }
+    });
+  }, []);
+
+  // Destino: tenta do relacionamento, fallback para observação
+  let destNome = remessa.destino_tipo==='base' ? remessa.bases?.nome : remessa.aplicadores?.nome;
+  let destCidade = remessa.destino_tipo==='base'
     ? (remessa.bases?.cidade||'') + (remessa.bases?.uf ? '/'+remessa.bases.uf : '')
     : (remessa.aplicadores?.cidade||'') + (remessa.aplicadores?.uf ? '/'+remessa.aplicadores.uf : '');
-  const destCPF = remessa.destino_tipo==='aplicador' ? remessa.aplicadores?.cpf : null;
+  let destCPF = remessa.destino_tipo==='aplicador' ? remessa.aplicadores?.cpf : null;
+
+  // Se destino igual à origem (bug), parsear da observação
+  const origemNome = rota.bases?.nome || '';
+  if (!destNome || destNome === origemNome) {
+    // Observação formato: "Nome (CPF) | X doses | tarefas..."
+    const obs = remessa.observacao || '';
+    const matchNome = obs.match(/^([^(|]+)/);
+    const matchCPF = obs.match(/\(([^)]+)\)/);
+    if (matchNome) destNome = matchNome[1].trim();
+    if (matchCPF) destCPF = matchCPF[1].trim();
+    destCidade = '';
+  }
+
+  // Doses: usa itens reais se existirem, senão usa da observação
   const totalDoses = (remessa.remessa_itens||[]).reduce((s,i)=>s+i.quantidade,0);
+  const dosesExibir = totalDoses > 0 ? totalDoses : (() => {
+    const m = (remessa.observacao||'').match(/(\d+)\s*doses/);
+    return m ? parseInt(m[1]) : 0;
+  })();
+
   const dataRota = rota.data_prevista ? new Date(rota.data_prevista+'T12:00:00').toLocaleDateString('pt-BR') : '—';
+  const dataHoje = new Date().toLocaleDateString('pt-BR');
 
   const imprimir = () => {
     const w = window.open('', '_blank', 'width=400,height=600');
@@ -3061,8 +3107,8 @@ function EtiquetaModal({ remessa, rota, onClose, totalParadas }) {
   .badge-lbl { font-size:8px; color:#0284c7; text-transform:uppercase; }
   .itens { background:#f8fafc; border:1px solid #e2e8f0; border-radius:4px; padding:6px; margin-bottom:6px; }
   .item-row { display:flex; justify-content:space-between; padding:2px 0; font-size:11px; border-bottom:1px solid #e2e8f0; }
-  .footer { background:#f1f5f9; border-radius:4px; padding:4px 8px; font-size:10px; color:#475569; display:flex; justify-content:space-between; }
-  .qr-placeholder { text-align:center; margin-bottom:6px; }
+  .footer { background:#f1f5f9; border-radius:4px; padding:4px 8px; font-size:9px; color:#475569; }
+  .footer-row { display:flex; justify-content:space-between; margin-bottom:2px; }
 </style></head><body>
 <div class="header">
   <div class="logo">VacinaLog</div>
@@ -3070,25 +3116,32 @@ function EtiquetaModal({ remessa, rota, onClose, totalParadas }) {
 </div>
 
 <div class="grid">
-  <div class="badge-box"><div class="badge-val">${totalDoses}</div><div class="badge-lbl">Doses</div></div>
+  <div class="badge-box"><div class="badge-val">${dosesExibir}</div><div class="badge-lbl">Doses</div></div>
   <div class="badge-box"><div class="badge-val">${remessa.ordem_entrega}/${totalParadas}</div><div class="badge-lbl">Parada</div></div>
 </div>
 
 <hr class="divider"/>
-<div class="row"><div class="label">Origem</div><div class="value-sm">${rota.bases?.nome||'—'}</div></div>
-<div class="row"><div class="label">Destino</div><div class="value">${destNome}</div><div class="value-sm">${destCidade}</div>${destCPF?`<div class="value-sm" style="color:#666">CPF: ${destCPF}</div>`:''}</div>
+<div class="row"><div class="label">Origem</div><div class="value-sm">${origemNome}</div></div>
+<div class="row">
+  <div class="label">Destino</div>
+  <div class="value">${destNome||'—'}</div>
+  ${destCidade ? `<div class="value-sm">${destCidade}</div>` : ''}
+  ${destCPF ? `<div class="value-sm" style="color:#666">CPF: ${destCPF}</div>` : ''}
+</div>
 <hr class="divider"/>
 
 <div class="label" style="margin-bottom:4px">Vacinas</div>
 <div class="itens">
-${(remessa.remessa_itens||[]).map(it=>`<div class="item-row"><span>${it.vacinas?.nome||'—'} ${it.vacinas?.lote?'('+it.vacinas.lote+')':''}</span><span style="font-weight:700">${it.quantidade}</span></div>`).join('')}
-${(remessa.remessa_itens||[]).length===0?'<div style="font-size:11px;color:#999;text-align:center">Sem itens</div>':''}
+${(remessa.remessa_itens||[]).length > 0
+  ? (remessa.remessa_itens||[]).map(it=>`<div class="item-row"><span>${it.vacinas?.nome||'—'} ${it.vacinas?.lote?'('+it.vacinas.lote+')':''}</span><span style="font-weight:700">${it.quantidade}</span></div>`).join('')
+  : `<div style="font-size:11px;color:#999;text-align:center;padding:4px">Adicione itens antes de imprimir</div>`
+}
 </div>
 
 <div class="footer">
-  <span>Rota: ${rota.codigo}</span>
-  <span>Data: ${dataRota}</span>
-  <span>Motorista: ${rota.profiles?.nome?.split(' ')[0]||'—'}</span>
+  <div class="footer-row"><span>Rota: ${rota.codigo}</span><span>Entrega: ${dataRota}</span></div>
+  <div class="footer-row"><span>Motorista: ${rota.profiles?.nome||'—'}</span><span>Tipo: ${remessa.tipo||'entrega'}</span></div>
+  <div class="footer-row"><span>Montado por: ${montadorNome||'—'}</span><span>Em: ${dataHoje}</span></div>
 </div>
 </body></html>`);
     w.document.close();
@@ -3106,7 +3159,7 @@ ${(remessa.remessa_itens||[]).length===0?'<div style="font-size:11px;color:#999;
         </div>
         <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:6,marginBottom:8}}>
           <div style={{background:'#f0f9ff',border:'1px solid #bae6fd',borderRadius:4,padding:'4px 8px',textAlign:'center'}}>
-            <div style={{fontSize:20,fontWeight:900,color:'#0369a1',fontFamily:'monospace'}}>{totalDoses}</div>
+            <div style={{fontSize:20,fontWeight:900,color:'#0369a1',fontFamily:'monospace'}}>{dosesExibir}</div>
             <div style={{fontSize:8,color:'#0284c7',textTransform:'uppercase'}}>Doses</div>
           </div>
           <div style={{background:'#f0f9ff',border:'1px solid #bae6fd',borderRadius:4,padding:'4px 8px',textAlign:'center'}}>
@@ -3115,22 +3168,25 @@ ${(remessa.remessa_itens||[]).length===0?'<div style="font-size:11px;color:#999;
           </div>
         </div>
         <div style={{fontSize:9,color:'#666',textTransform:'uppercase',marginBottom:1}}>Origem</div>
-        <div style={{fontSize:11,marginBottom:6}}>{rota.bases?.nome||'—'}</div>
+        <div style={{fontSize:11,marginBottom:6}}>{origemNome}</div>
         <div style={{fontSize:9,color:'#666',textTransform:'uppercase',marginBottom:1}}>Destino</div>
-        <div style={{fontSize:13,fontWeight:600}}>{destNome}</div>
-        <div style={{fontSize:11,color:'#444'}}>{destCidade}</div>
+        <div style={{fontSize:13,fontWeight:600}}>{destNome||'—'}</div>
+        {destCidade && <div style={{fontSize:11,color:'#444'}}>{destCidade}</div>}
         {destCPF && <div style={{fontSize:10,color:'#666'}}>CPF: {destCPF}</div>}
         <hr style={{margin:'6px 0',borderColor:'#ccc'}}/>
         <div style={{fontSize:9,color:'#666',textTransform:'uppercase',marginBottom:4}}>Vacinas</div>
-        {(remessa.remessa_itens||[]).map(it => (
-          <div key={it.id} style={{display:'flex',justifyContent:'space-between',fontSize:11,padding:'2px 0',borderBottom:'1px solid #eee'}}>
-            <span>{it.vacinas?.nome} {it.vacinas?.lote?`(${it.vacinas.lote})`:''}</span>
-            <strong>{it.quantidade}</strong>
-          </div>
-        ))}
-        <div style={{background:'#f1f5f9',borderRadius:4,padding:'4px 8px',marginTop:6,display:'flex',justifyContent:'space-between',fontSize:9,color:'#475569'}}>
-          <span>Rota: {rota.codigo}</span>
-          <span>Data: {dataRota}</span>
+        {(remessa.remessa_itens||[]).length === 0
+          ? <div style={{fontSize:11,color:'#999',fontStyle:'italic'}}>Adicione itens antes de imprimir</div>
+          : (remessa.remessa_itens||[]).map(it => (
+            <div key={it.id} style={{display:'flex',justifyContent:'space-between',fontSize:11,padding:'2px 0',borderBottom:'1px solid #eee'}}>
+              <span>{it.vacinas?.nome} {it.vacinas?.lote?`(${it.vacinas.lote})`:''}</span>
+              <strong>{it.quantidade}</strong>
+            </div>
+          ))
+        }
+        <div style={{background:'#f1f5f9',borderRadius:4,padding:'4px 8px',marginTop:6,fontSize:9,color:'#475569'}}>
+          <div style={{display:'flex',justifyContent:'space-between',marginBottom:2}}><span>Rota: {rota.codigo}</span><span>Entrega: {dataRota}</span></div>
+          <div style={{display:'flex',justifyContent:'space-between'}}><span>Montado por: {montadorNome||'—'}</span><span>Em: {dataHoje}</span></div>
         </div>
       </div>
       <div className="modal-actions">
