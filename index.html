@@ -2123,38 +2123,55 @@ function RoteirizacaoPage({ onBack }) {
 
   const geocode = async (query) => {
     if (geocodeCache[query]) return geocodeCache[query];
-    try {
-      const res = await fetch('https://nominatim.openstreetmap.org/search?q='+encodeURIComponent(query+', Brasil')+'&format=json&limit=1&countrycodes=br');
-      const data = await res.json();
-      if (data?.[0]) {
-        const coords = { lat: parseFloat(data[0].lat), lng: parseFloat(data[0].lon) };
-        setGeocodeCache(c => ({...c, [query]: coords}));
-        return coords;
-      }
-    } catch(e) {}
+    // Tentar variações do ponto de partida
+    const queries = [
+      query + ', Brasil',
+      query.replace('-', ', ') + ', Brasil', // "São Paulo-sp" -> "São Paulo, sp, Brasil"
+      query.split('-')[0].trim() + ', Brasil', // só a cidade
+    ];
+    for (const q of queries) {
+      try {
+        const res = await fetch('https://nominatim.openstreetmap.org/search?q='+encodeURIComponent(q)+'&format=json&limit=1&countrycodes=br');
+        const data = await res.json();
+        if (data?.[0]) {
+          const coords = { lat: parseFloat(data[0].lat), lng: parseFloat(data[0].lon) };
+          setGeocodeCache(c => ({...c, [query]: coords}));
+          return coords;
+        }
+      } catch(e) {}
+    }
     return null;
   };
 
   const addTutor = async (tutor) => {
-    toast('Buscando coordenadas...', 'info');
+    toast('Buscando coordenadas para ' + (tutor.ponto_partida||tutor.cidade) + '...', 'info');
     const query = tutor.ponto_partida || (tutor.cidade + ', ' + tutor.uf);
     const coords = await geocode(query);
+    if (!coords) toast('⚠ Coordenadas não encontradas para "' + query + '" — parada adicionada sem pin no mapa', 'error');
+
+    // Filtrar tarefas pelo status selecionado (se houver filtro ativo)
+    const tarefasFiltradas = filterStatus
+      ? tutor.tarefas.filter(e => e.status === filterStatus)
+      : tutor.tarefas;
+    const dosesFiltradas = tarefasFiltradas.reduce((s, e) => s + (e.doses_necessarias||0), 0);
+
     const parada = {
       cpf: tutor.cpf,
       nome: tutor.nome,
       ponto_partida: tutor.ponto_partida,
       cidade: tutor.cidade,
       uf: tutor.uf,
-      doses: tutor.total_doses,
-      tarefas_count: tutor.tarefas.length,
-      tarefas: tutor.tarefas,
+      doses: dosesFiltradas,
+      tarefas_count: tarefasFiltradas.length,
+      tarefas: tarefasFiltradas,
+      status_filtro: filterStatus || null,
       lat: coords?.lat || null,
       lng: coords?.lng || null,
       ordem: paradas.length + 1
     };
     setParadas(p => [...p, parada]);
     setMapKey(k => k+1);
-    toast(tutor.nome + ' adicionado(a) à rota', 'success');
+    if (coords) toast(tutor.nome + ' adicionado(a) ✓ (' + tarefasFiltradas.length + ' tarefas · ' + dosesFiltradas + ' doses)', 'success');
   };
 
   const removeParada = (idx) => {
@@ -2287,7 +2304,12 @@ function RoteirizacaoPage({ onBack }) {
                 <option value="">Todos pontos de partida</option>
                 {pontosPartida.map(([pp,c]) => <option key={pp} value={pp}>{pp} ({c})</option>)}
               </select>
-              <select className="form-select" style={{padding:'5px 6px',fontSize:11,width:'100%',marginTop:4}} value={filterStatus} onChange={e=>setFilterStatus(e.target.value)}>
+              <select className="form-select" style={{padding:'5px 6px',fontSize:11,width:'100%',marginTop:4}} value={filterStatus} onChange={e=>{
+                if (paradas.length > 0 && e.target.value !== filterStatus) {
+                  if (!confirm('Mudar o filtro de status vai afetar apenas novos aplicadores adicionados. Paradas já adicionadas mantêm o status original. Continuar?')) return;
+                }
+                setFilterStatus(e.target.value);
+              }}>
                 <option value="">Todos os status</option>
                 <option value="aprovada">Aprovada</option>
                 <option value="em_validacao">Em Validação</option>
@@ -2422,7 +2444,7 @@ function MapaRota({ paradas, bases, baseOrigemId }) {
     const coords = [];
     paradas.forEach(p => {
       if (!p.lat || !p.lng) return;
-      L.marker([p.lat, p.lng], { icon: L.divIcon({ className: '', html: '<div style="background:#10b981;color:#fff;border-radius:50%;width:24px;height:24px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;border:2px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,.3)">'+p.ordem+'</div>', iconSize:[24,24], iconAnchor:[12,12] }) }).addTo(map).bindPopup('<b>'+p.ordem+'. '+p.nome+'</b><br>'+p.ponto_partida+'<br>'+p.doses+' doses · '+p.tarefas_count+' tarefas');
+      L.marker([p.lat, p.lng], { icon: L.divIcon({ className: '', html: '<div style="background:#10b981;color:#fff;border-radius:50%;width:24px;height:24px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;border:2px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,.3)">'+p.ordem+'</div>', iconSize:[24,24], iconAnchor:[12,12] }) }).addTo(map).bindPopup('<b>'+p.ordem+'. '+p.nome+'</b><br>'+p.ponto_partida+'<br>'+p.doses+' doses · '+p.tarefas_count+' tarefas'+(p.status_filtro ? '<br><i>Status: '+p.status_filtro+'</i>' : ''));
       bounds.push([p.lat, p.lng]); coords.push([p.lat, p.lng]);
     });
     if (base?.latitude && coords.length > 0) L.polyline([[parseFloat(base.latitude),parseFloat(base.longitude)], ...coords], { color:'#2563eb', weight:3, opacity:0.7, dashArray:'8,8' }).addTo(map);
@@ -2511,6 +2533,206 @@ function TransferenciaPage() {
 // ═══════════════════════════════════════════════
 // PLACEHOLDER PAGES
 // ═══════════════════════════════════════════════
+// ═══════════════════════════════════════════════
+// GESTÃO DE USUÁRIOS
+// ═══════════════════════════════════════════════
+function UsuariosPage() {
+  const [usuarios, setUsuarios] = useState([]);
+  const [bases, setBases] = useState([]);
+  const [modal, setModal] = useState(null); // null | 'novo' | {user}
+  const [loading, setLoading] = useState(true);
+  const toast = useContext(ToastContext);
+
+  const ROLE_COLORS = { admin:'badge-red', planejador:'badge-blue', montador:'badge-yellow', motorista:'badge-green', aplicador:'badge-cyan' };
+
+  const load = async () => {
+    setLoading(true);
+    const { data, error } = await sb.from('profiles')
+      .select('*, bases(nome)')
+      .order('nome');
+    if (error) toast(error.message, 'error');
+    else setUsuarios(data || []);
+    setLoading(false);
+  };
+
+  useEffect(() => {
+    load();
+    sb.from('bases').select('id, nome').eq('ativa', true).order('nome').then(r => setBases(r.data||[]));
+  }, []);
+
+  const updatePerfil = async (form) => {
+    const { error } = await sb.from('profiles').update({
+      nome: form.nome,
+      role: form.role,
+      base_id: form.base_id || null,
+      ativo: form.ativo,
+    }).eq('id', form.id);
+    if (error) { toast(error.message, 'error'); return; }
+    toast('Usuário atualizado!', 'success');
+    setModal(null); load();
+  };
+
+  const toggleAtivo = async (user) => {
+    const { error } = await sb.from('profiles').update({ ativo: !user.ativo }).eq('id', user.id);
+    if (error) toast(error.message, 'error');
+    else { toast(user.ativo ? 'Usuário desativado' : 'Usuário ativado', 'success'); load(); }
+  };
+
+  const criarUsuario = async (form) => {
+    // Criar via Auth Admin API não é possível no frontend sem service_role key
+    // Instrução: usuário cria a conta, admin promove o perfil
+    // Alternativa: usar signUp do lado do cliente
+    const { data, error } = await sb.auth.admin ? 
+      sb.auth.admin.createUser({ email: form.email, password: form.senha, email_confirm: true }) :
+      sb.auth.signUp({ email: form.email, password: form.senha, options: { data: { nome: form.nome } } });
+    
+    if (error) { toast(error.message, 'error'); return; }
+    
+    // Aguardar o trigger criar o profile e depois atualizar
+    setTimeout(async () => {
+      const { data: profile } = await sb.from('profiles').select('id').eq('email', form.email).single();
+      if (profile) {
+        await sb.from('profiles').update({ nome: form.nome, role: form.role, base_id: form.base_id || null }).eq('id', profile.id);
+      }
+      toast(`Usuário ${form.email} criado! Ele deve confirmar o e-mail se necessário.`, 'success');
+      setModal(null); load();
+    }, 1500);
+  };
+
+  return (
+    <div>
+      <div className="page-header">
+        <div><div className="page-title">Usuários</div><div className="page-subtitle">{usuarios.length} usuários cadastrados</div></div>
+        <button className="btn btn-primary" onClick={() => setModal('novo')}>+ Novo Usuário</button>
+      </div>
+
+      <div style={{padding:12,background:'var(--warning-bg)',border:'1px solid rgba(245,158,11,0.3)',borderRadius:'var(--radius-sm)',marginBottom:16,fontSize:13,color:'var(--warning)'}}>
+        💡 Para criar usuários, o novo membro deve acessar o sistema e se cadastrar, ou use o painel do Supabase (Authentication → Users → Add User). Aqui você gerencia perfis e permissões.
+      </div>
+
+      <div className="card">
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Nome</th><th>Email</th><th>Perfil</th><th>Base</th><th>Status</th><th>Ações</th></tr>
+            </thead>
+            <tbody>
+              {usuarios.length === 0 && !loading && (
+                <tr><td colSpan={6}><div className="empty-state"><div className="empty-icon">👥</div><div className="empty-text">Nenhum usuário encontrado</div></div></td></tr>
+              )}
+              {usuarios.map(u => (
+                <tr key={u.id}>
+                  <td style={{fontWeight:500,color:'var(--text-primary)'}}>{u.nome}</td>
+                  <td style={{fontSize:12,color:'var(--text-secondary)'}}>{u.email}</td>
+                  <td><span className={`badge ${ROLE_COLORS[u.role]||'badge-gray'}`}>{ROLE_LABELS[u.role]||u.role}</span></td>
+                  <td>{u.bases?.nome || '—'}</td>
+                  <td>
+                    <span className={`badge ${u.ativo ? 'badge-green' : 'badge-red'}`}>
+                      {u.ativo ? 'Ativo' : 'Inativo'}
+                    </span>
+                  </td>
+                  <td>
+                    <div style={{display:'flex',gap:4}}>
+                      <button className="btn btn-secondary btn-sm" onClick={() => setModal(u)}>Editar</button>
+                      <button className={`btn btn-sm ${u.ativo ? 'btn-danger' : 'btn-success'}`} onClick={() => toggleAtivo(u)}>
+                        {u.ativo ? 'Desativar' : 'Ativar'}
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {modal === 'novo' && (
+        <NovoUsuarioModal bases={bases} onClose={() => setModal(null)} onSave={criarUsuario} />
+      )}
+      {modal && modal !== 'novo' && (
+        <EditarUsuarioModal user={modal} bases={bases} onClose={() => setModal(null)} onSave={updatePerfil} />
+      )}
+    </div>
+  );
+}
+
+function NovoUsuarioModal({ bases, onClose, onSave }) {
+  const [form, setForm] = useState({ nome:'', email:'', senha:'', role:'aplicador', base_id:'' });
+  const [saving, setSaving] = useState(false);
+  const set = (k,v) => setForm(f=>({...f,[k]:v}));
+
+  const save = async () => {
+    if (!form.email || !form.senha || !form.nome) { return; }
+    setSaving(true);
+    await onSave(form);
+    setSaving(false);
+  };
+
+  return (
+    <Modal title="Novo Usuário" onClose={onClose}>
+      <div className="form-grid">
+        <div className="form-group"><label className="form-label">Nome *</label>
+          <input className="form-input" value={form.nome} onChange={e=>set('nome',e.target.value)} placeholder="Nome completo" /></div>
+        <div className="form-group"><label className="form-label">Email *</label>
+          <input className="form-input" type="email" value={form.email} onChange={e=>set('email',e.target.value)} placeholder="email@empresa.com" /></div>
+        <div className="form-group"><label className="form-label">Senha provisória *</label>
+          <input className="form-input" type="password" value={form.senha} onChange={e=>set('senha',e.target.value)} placeholder="Mínimo 6 caracteres" /></div>
+        <div className="form-group"><label className="form-label">Perfil</label>
+          <select className="form-select" value={form.role} onChange={e=>set('role',e.target.value)}>
+            {Object.entries(ROLE_LABELS).map(([k,v]) => <option key={k} value={k}>{v}</option>)}
+          </select></div>
+        <div className="form-group"><label className="form-label">Base vinculada</label>
+          <select className="form-select" value={form.base_id} onChange={e=>set('base_id',e.target.value)}>
+            <option value="">Nenhuma</option>{bases.map(b=><option key={b.id} value={b.id}>{b.nome}</option>)}
+          </select></div>
+      </div>
+      <div style={{marginTop:12,padding:10,background:'var(--info-bg)',borderRadius:'var(--radius-sm)',fontSize:12,color:'var(--info)'}}>
+        ℹ O usuário receberá um e-mail de confirmação. Após confirmar, o acesso será liberado com o perfil selecionado.
+      </div>
+      <div className="modal-actions">
+        <button className="btn btn-secondary" onClick={onClose}>Cancelar</button>
+        <button className="btn btn-primary" onClick={save} disabled={saving||!form.email||!form.senha||!form.nome}>
+          {saving ? 'Criando...' : 'Criar Usuário'}
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
+function EditarUsuarioModal({ user, bases, onClose, onSave }) {
+  const [form, setForm] = useState({ ...user, base_id: user.base_id||'' });
+  const set = (k,v) => setForm(f=>({...f,[k]:v}));
+
+  return (
+    <Modal title="Editar Usuário" onClose={onClose}>
+      <div style={{marginBottom:12,padding:10,background:'var(--bg-input)',borderRadius:'var(--radius-sm)',fontSize:12,color:'var(--text-muted)'}}>
+        <strong style={{color:'var(--text-secondary)'}}>ID:</strong> {user.id}<br/>
+        <strong style={{color:'var(--text-secondary)'}}>Email:</strong> {user.email}
+      </div>
+      <div className="form-grid">
+        <div className="form-group"><label className="form-label">Nome</label>
+          <input className="form-input" value={form.nome} onChange={e=>set('nome',e.target.value)} /></div>
+        <div className="form-group"><label className="form-label">Perfil</label>
+          <select className="form-select" value={form.role} onChange={e=>set('role',e.target.value)}>
+            {Object.entries(ROLE_LABELS).map(([k,v]) => <option key={k} value={k}>{v}</option>)}
+          </select></div>
+        <div className="form-group"><label className="form-label">Base vinculada</label>
+          <select className="form-select" value={form.base_id||''} onChange={e=>set('base_id',e.target.value||null)}>
+            <option value="">Nenhuma</option>{bases.map(b=><option key={b.id} value={b.id}>{b.nome}</option>)}
+          </select></div>
+        <div className="form-group"><label className="form-label">Status</label>
+          <select className="form-select" value={form.ativo?'1':'0'} onChange={e=>set('ativo',e.target.value==='1')}>
+            <option value="1">Ativo</option><option value="0">Inativo</option>
+          </select></div>
+      </div>
+      <div className="modal-actions">
+        <button className="btn btn-secondary" onClick={onClose}>Cancelar</button>
+        <button className="btn btn-primary" onClick={() => onSave(form)}>Salvar</button>
+      </div>
+    </Modal>
+  );
+}
+
 function PlaceholderPage({ title, icon, description }) {
   return (
     <div>
@@ -2717,7 +2939,7 @@ function App() {
       case 'minhas-rotas': return <PlaceholderPage title="Minhas Rotas" icon="🚚" description="Rotas atribuídas ao motorista" />;
       case 'minhas-doses': return <PlaceholderPage title="Minhas Doses" icon="💉" description="Saldo de doses sob sua custódia" />;
       case 'abatimento': return <PlaceholderPage title="Registrar Abatimento" icon="✏️" description="Registrar vacinados, perdas e danos" />;
-      case 'usuarios': return <PlaceholderPage title="Usuários" icon="👥" description="Gestão de usuários e perfis" />;
+      case 'usuarios': return <UsuariosPage />;
       default: return <DashboardPage />;
     }
   };
