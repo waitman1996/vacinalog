@@ -2123,11 +2123,14 @@ function RoteirizacaoPage({ onBack }) {
 
   const geocode = async (query) => {
     if (geocodeCache[query]) return geocodeCache[query];
-    // Tentar variações do ponto de partida
+    // Normalizar: "São José Do Rio Preto-sp" → "São José do Rio Preto, SP"
+    const normalizado = query
+      .replace(/-([a-z]{2})$/i, ', $1') // "cidade-uf" → "cidade, uf"
+      .replace(/\b(\w)/g, c => c.toUpperCase()); // Title Case
     const queries = [
-      query + ', Brasil',
-      query.replace('-', ', ') + ', Brasil', // "São Paulo-sp" -> "São Paulo, sp, Brasil"
+      normalizado + ', Brasil',
       query.split('-')[0].trim() + ', Brasil', // só a cidade
+      query + ', Brasil', // original
     ];
     for (const q of queries) {
       try {
@@ -2340,14 +2343,19 @@ function RoteirizacaoPage({ onBack }) {
                           <span style={{fontWeight:600,color:'var(--text-primary)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{t.nome}</span>
                         </div>
                         <div style={{color:'var(--text-muted)',fontSize:10,marginLeft:12}}>
-                          {t.ponto_partida||t.cidade} · {t.tarefas.length} tar.
+                          {t.ponto_partida||t.cidade} · {filterStatus ? t.tarefas.filter(e=>e.status===filterStatus).length : t.tarefas.length} tar.
                           {statusCounts['aprovada'] && <span style={{color:'var(--success)',marginLeft:4}}>✓{statusCounts['aprovada']}</span>}
                           {statusCounts['pronta_faturamento'] && <span style={{color:'var(--info)',marginLeft:4}}>💰{statusCounts['pronta_faturamento']}</span>}
                           {statusCounts['em_execucao'] && <span style={{color:'var(--accent)',marginLeft:4}}>▶{statusCounts['em_execucao']}</span>}
                         </div>
                       </div>
                       <div style={{display:'flex',alignItems:'center',gap:4,flexShrink:0}}>
-                        <span className="badge badge-cyan" style={{fontSize:10}}>{t.total_doses.toLocaleString('pt-BR')}</span>
+                        <span className="badge badge-cyan" style={{fontSize:10}}>
+                          {filterStatus
+                            ? t.tarefas.filter(e=>e.status===filterStatus).reduce((s,e)=>s+(e.doses_necessarias||0),0).toLocaleString('pt-BR')
+                            : t.total_doses.toLocaleString('pt-BR')
+                          }
+                        </span>
                         <button className="btn btn-primary btn-sm" style={{padding:'3px 8px',fontSize:10}} onClick={(e) => {e.stopPropagation(); addTutor(t);}}>+</button>
                       </div>
                     </div>
@@ -2356,8 +2364,9 @@ function RoteirizacaoPage({ onBack }) {
                       <div style={{padding:'4px 10px 8px',background:'var(--bg-input)'}}>
                         <div style={{fontSize:10,color:'var(--text-muted)',marginBottom:4}}>
                           CPF: {t.cpf} · Base: {t.base_nome}
+                          {filterStatus && <span style={{marginLeft:6,color:'var(--warning)'}}>⚠ Mostrando só: {STATUS_LABELS[filterStatus]}</span>}
                         </div>
-                        {t.tarefas.slice(0,10).map(e => (
+                        {(filterStatus ? t.tarefas.filter(e => e.status === filterStatus) : t.tarefas).slice(0,10).map(e => (
                           <div key={e.id} style={{fontSize:10,color:'var(--text-secondary)',padding:'3px 0',borderBottom:'1px solid var(--border)',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
                             <span style={{fontFamily:'JetBrains Mono',fontSize:9,overflow:'hidden',textOverflow:'ellipsis',maxWidth:140}}>{e.codigo_tarefa}</span>
                             <div style={{display:'flex',gap:4,alignItems:'center'}}>
@@ -2366,7 +2375,7 @@ function RoteirizacaoPage({ onBack }) {
                             </div>
                           </div>
                         ))}
-                        {t.tarefas.length > 10 && <div style={{fontSize:10,color:'var(--text-muted)',marginTop:3}}>+{t.tarefas.length-10} tarefas...</div>}
+                        {(filterStatus ? t.tarefas.filter(e => e.status === filterStatus) : t.tarefas).length > 10 && <div style={{fontSize:10,color:'var(--text-muted)',marginTop:3}}>+{(filterStatus ? t.tarefas.filter(e => e.status === filterStatus) : t.tarefas).length-10} tarefas...</div>}
                       </div>
                     )}
                   </div>
