@@ -12,6 +12,7 @@
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
+<script src="https://unpkg.com/qrcode-generator@1.4.4/qrcode.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
 :root {
@@ -3086,7 +3087,7 @@ function EtiquetaModal({ remessa, rota, onClose, totalParadas }) {
   const dataRota = rota.data_prevista ? new Date(rota.data_prevista+'T12:00:00').toLocaleDateString('pt-BR') : '—';
   const dataHoje = new Date().toLocaleDateString('pt-BR');
 
-  const imprimir = async () => {
+  const imprimir = () => {
     const qrData = JSON.stringify({
       rm: remessa.codigo_rastreio,
       rt: rota.codigo,
@@ -3100,11 +3101,30 @@ function EtiquetaModal({ remessa, rota, onClose, totalParadas }) {
     });
     const qrUrl = `${window.location.origin}${window.location.pathname}#conferir=${encodeURIComponent(qrData)}`;
 
-    // Gerar QR como dataURL via canvas (sem CDN externo na janela de impressão)
+    // Gerar QR como dataURL — usa qrcode-generator (global: qrcode)
     let qrDataURL = '';
     try {
+      const qr = qrcode(0, 'M');
+      qr.addData(qrUrl);
+      qr.make();
+      // Gerar como canvas dataURL
+      const size = 80;
       const canvas = document.createElement('canvas');
-      await QRCode.toCanvas(canvas, qrUrl, { width: 80, margin: 1, errorCorrectionLevel: 'M' });
+      const modules = qr.getModuleCount();
+      const cellSize = Math.floor(size / modules);
+      canvas.width = modules * cellSize;
+      canvas.height = modules * cellSize;
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = '#000';
+      for (let row = 0; row < modules; row++) {
+        for (let col = 0; col < modules; col++) {
+          if (qr.isDark(row, col)) {
+            ctx.fillRect(col * cellSize, row * cellSize, cellSize, cellSize);
+          }
+        }
+      }
       qrDataURL = canvas.toDataURL('image/png');
     } catch(e) { console.warn('QR error:', e); }
 
