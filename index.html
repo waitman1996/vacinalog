@@ -2654,31 +2654,37 @@ function EntradaEstoqueModal({ onClose }) {
 // DEMANDA vs OFERTA — CENTRAL DE DECISÃO LOGÍSTICA
 // ═══════════════════════════════════════════════
 function DemandaOfertaPage({ profile }) {
+  const WEEK1_START = new Date('2026-03-08T00:00:00');
+  function getCurrentOperationalWeek() {
+    const today = new Date();
+    const todayOnly = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+    const diff = Math.floor((todayOnly - WEEK1_START) / 86400000);
+    return Math.max(1, Math.floor(diff / 7) + 1);
+  }
+  function safeSemana(value) {
+    const n = parseInt(value, 10);
+    return Number.isFinite(n) && n > 0 ? n : getCurrentOperationalWeek();
+  }
+  function weekRange(w) {
+    const semanaNum = safeSemana(w);
+    const ini = new Date(WEEK1_START);
+    ini.setDate(ini.getDate() + (semanaNum - 1) * 7);
+    const fim = new Date(ini);
+    fim.setDate(fim.getDate() + 6);
+    const iso = d => d.toISOString().split('T')[0];
+    return { inicio: iso(ini), fim: iso(fim), semana: semanaNum, label: `${ini.toLocaleDateString('pt-BR')} até ${fim.toLocaleDateString('pt-BR')}` };
+  }
+
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
-  const [filter, setFilter] = useState('precisa_enviar');
-  const [semana, setSemana] = useState(getCurrentOperationalWeek());
+  const [filter, setFilter] = useState('todos');
+  const [semana, setSemana] = useState(() => getCurrentOperationalWeek());
   const [pontoPartida, setPontoPartida] = useState('');
   const [vacinaFiltro, setVacinaFiltro] = useState('');
   const [planejamentos, setPlanejamentos] = useState({});
   const toast = useContext(ToastContext);
   const isAdmin = profile?.role === 'admin';
-
-  const WEEK1_START = new Date('2026-03-08T00:00:00');
-  function getCurrentOperationalWeek() {
-    const today = new Date();
-    const diff = Math.floor((new Date(today.getFullYear(), today.getMonth(), today.getDate()) - WEEK1_START) / 86400000);
-    return Math.max(1, Math.floor(diff / 7) + 1);
-  }
-  function weekRange(w) {
-    const ini = new Date(WEEK1_START);
-    ini.setDate(ini.getDate() + ((Number(w) || 1) - 1) * 7);
-    const fim = new Date(ini);
-    fim.setDate(fim.getDate() + 6);
-    const iso = d => d.toISOString().split('T')[0];
-    return { inicio: iso(ini), fim: iso(fim), label: `${ini.toLocaleDateString('pt-BR')} até ${fim.toLocaleDateString('pt-BR')}` };
-  }
   async function fetchAll(table, select, build) {
     let all = [], from = 0, step = 1000;
     while (true) {
@@ -2729,7 +2735,7 @@ function DemandaOfertaPage({ profile }) {
         fetchAll('estoque', 'vacina_id,aplicador_id,base_id,localizacao_tipo,quantidade,aplicadores(id,nome,cpf,cidade,uf,base_vinculada_id),vacinas(id,nome)', q => q.eq('localizacao_tipo','aplicador')),
         fetchAll('vacinas', 'id,nome'),
         fetchAll('bases', 'id,nome,cidade,uf,ponto_partida'),
-        fetchAll('planejamento_logistico', '*', q => q.eq('semana', Number(semana))).catch(() => [])
+        fetchAll('planejamento_logistico', '*', q => q.eq('semana', safeSemana(semana))).catch(() => [])
       ]);
 
       const vacinaMap = {}; (vacinas || []).forEach(v => vacinaMap[v.id] = v.nome);
@@ -2801,6 +2807,41 @@ function DemandaOfertaPage({ profile }) {
         });
       });
 
+      // Se a escala não trouxe demanda, tenta montar a demanda usando tarefas futuras por ponto/base como visão de cliente.
+      // Assim a tela não fica vazia durante a migração, mesmo antes do vínculo perfeito da escala.
+      if (Object.keys(grouped).length === 0) {
+        const tarefasFallback = await fetchAll('tarefas', 'id,codigo,cliente,cidade_campanha,uf_campanha,data_inicio,doses_previstas,status_logistica,semanas,vacina_id,vacina,ponto_partida,base_id,base_nome');
+        (tarefasFallback || []).forEach(t => {
+          const data = (t.data_inicio || '').slice(0,10);
+          if (!data || data < start || data > end) return;
+          const statusLog = t.status_logistica || 'nao_roteirizado';
+          if (statusLog === 'concluido') return;
+          const vacinaId = t.vacina_id;
+          if (!vacinaId) return;
+          const key = `cliente|${t.cliente || t.codigo}|${vacinaId}`;
+          if (!grouped[key]) {
+            const base = baseMap[t.base_id] || {};
+            grouped[key] = {
+              key,
+              aplicador_id: null,
+              aplicador_nome: t.cliente || 'Cliente sem escala',
+              cpf: '', cidade: t.cidade_campanha || '', uf: t.uf_campanha || '',
+              ponto_partida: t.ponto_partida || base.ponto_partida || t.base_nome || base.nome || '',
+              base_origem_id: t.base_id || null,
+              base_origem_nome: t.base_nome || base.nome || '—',
+              vacina_id: vacinaId,
+              vacina_nome: vacinaMap[vacinaId] || t.vacina || 'Vacina',
+              estoque_atual: 0,
+              demanda_futura: 0,
+              tarefas: []
+            };
+          }
+          const doses = Number(t.doses_previstas || 0);
+          grouped[key].demanda_futura += doses;
+          grouped[key].tarefas.push({ tarefa_id: t.id, codigo: t.codigo || '', cliente: t.cliente || '', data_inicio: data, doses, status_logistica: statusLog });
+        });
+      }
+
       // Inclui aplicadores com estoque, mesmo sem demanda na semana, para análise completa.
       Object.entries(estoqueMap).forEach(([k, e]) => {
         if (!grouped[k]) {
@@ -2839,7 +2880,7 @@ function DemandaOfertaPage({ profile }) {
       aplicador_id: item.aplicador_id,
       vacina_id: item.vacina_id,
       base_origem_id: item.base_origem_id || null,
-      semana: Number(semana),
+      semana: safeSemana(semana),
       estoque_atual: Number(item.estoque_atual || 0),
       demanda_futura: Number(item.demanda_futura || 0),
       saldo_projetado: Number(item.saldo_projetado || 0),
@@ -2876,10 +2917,10 @@ function DemandaOfertaPage({ profile }) {
         p_destino_tipo: 'aplicador',
         p_destino_id: item.aplicador_id,
         p_remessa_id: null,
-        p_observacao: `Demanda vs Oferta - Semana ${semana}`
+        p_observacao: `Demanda vs Oferta - Semana ${safeSemana(semana)}`
       });
       if (error) throw error;
-      await savePlanning(item, 'entregue', { observacao: `Entrega confirmada pela tela Demanda vs Oferta - Semana ${semana}` });
+      await savePlanning(item, 'entregue', { observacao: `Entrega confirmada pela tela Demanda vs Oferta - Semana ${safeSemana(semana)}` });
       await load();
     } catch (err) {
       toast('Erro ao confirmar entrega: ' + err.message, 'error');
@@ -2916,7 +2957,7 @@ function DemandaOfertaPage({ profile }) {
       <div className="page-header">
         <div>
           <div className="page-title">Demanda vs Oferta</div>
-          <div className="page-subtitle">Decisão de envio por aplicador · Semana {semana}: {range.label}</div>
+          <div className="page-subtitle">Decisão de envio por aplicador · Semana {range.semana}: {range.label}</div>
         </div>
         <button className="btn btn-secondary" onClick={load}>↻ Atualizar</button>
       </div>
@@ -2947,7 +2988,7 @@ function DemandaOfertaPage({ profile }) {
             </thead>
             <tbody>
               {loading && <tr><td colSpan={9}><div className="empty-state"><div className="empty-text">Carregando...</div></div></td></tr>}
-              {!loading && filtered.length === 0 && <tr><td colSpan={9}><div className="empty-state"><div className="empty-text">Nenhum registro encontrado para os filtros.</div></div></td></tr>}
+              {!loading && filtered.length === 0 && <tr><td colSpan={9}><div className="empty-state"><div className="empty-text">Nenhum registro encontrado. Confira a semana, tire o filtro ou verifique se existem escalas vinculadas às tarefas.</div></div></td></tr>}
               {!loading && filtered.slice(0,300).map(i => {
                 const st = statusPlanejamento(i);
                 return (
@@ -2961,7 +3002,7 @@ function DemandaOfertaPage({ profile }) {
                     <td><span className={`badge ${i.necessidade>0?'badge-yellow':'badge-green'}`}>{i.sugestao}</span></td>
                     <td><span className={`badge ${badgeStatus(st)}`}>{labelStatus(st)}</span></td>
                     <td>
-                      {isAdmin ? (
+                      {isAdmin && i.aplicador_id ? (
                         <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
                           <select className="form-select" style={{padding:'6px 8px',fontSize:12,minWidth:150}} value={st} onChange={e=>updateStatus(i,e.target.value)}>
                             <option value="pendente_analise">Pendente análise</option>
@@ -2978,7 +3019,7 @@ function DemandaOfertaPage({ profile }) {
                           {i.necessidade > 0 && <button className="btn btn-success btn-sm" onClick={()=>confirmarEntrega(i)}>Confirmar entrega</button>}
                           {i.necessidade <= 0 && i.demanda_futura > 0 && <button className="btn btn-secondary btn-sm" onClick={()=>savePlanning(i,'nao_enviar_estoque_suficiente',{observacao:'Estoque atual cobre a demanda futura.'})}>Confirmar não envio</button>}
                         </div>
-                      ) : <span style={{fontSize:12,color:'var(--text-muted)'}}>Somente ADM</span>}
+                      ) : <span style={{fontSize:12,color:'var(--text-muted)'}}>{!i.aplicador_id ? 'Aguardando escala' : 'Somente ADM'}</span>}
                     </td>
                   </tr>
                 );
