@@ -787,70 +787,193 @@ function DashboardPage({ onNavigate }) {
 
 function ArvoreDistribuicaoPage() {
   const [tree, setTree] = useState([]);
+  const [report, setReport] = useState([]);
   const [open, setOpen] = useState({});
   const [loading, setLoading] = useState(true);
   const toast = useContext(ToastContext);
 
   const toggle = (key) => setOpen(o => ({...o, [key]: !o[key]}));
 
+  const normText = (v) => String(v || '')
+    .trim()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/\s+/g, ' ');
+
+  const titleCase = (v) => String(v || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\b\w/g, c => c.toUpperCase());
+
+  const splitPonto = (ponto) => {
+    const raw = String(ponto || '').trim();
+    const m = raw.match(/^(.+?)[\s\-\/]+([A-Za-z]{2})$/);
+    if (m) return { cidade: m[1].trim(), uf: m[2].toUpperCase() };
+    return { cidade: raw, uf: '' };
+  };
+
+  const pontoInfo = (ponto, cidade, uf) => {
+    const fromPonto = splitPonto(ponto);
+    const cid = (cidade || fromPonto.cidade || 'Sem cidade').trim();
+    const estado = String(uf || fromPonto.uf || '').trim().toUpperCase();
+    const key = normText(cid) + '|' + estado;
+    const label = titleCase(cid) + (estado ? '-' + estado : '');
+    return { key, label, cidade: titleCase(cid), uf: estado };
+  };
+
+  const addTreeItem = (pontos, tipo, info, item) => {
+    if (!pontos[info.key]) pontos[info.key] = {
+      key: info.key,
+      nome: info.label,
+      cidade: info.cidade,
+      uf: info.uf,
+      tipos: { Base: [], Aplicador: [], Clínica: [] }
+    };
+    pontos[info.key].tipos[tipo].push(item);
+  };
+
+  const totalTipo = (items) => items.reduce((s, x) => s + Number(x.doses || 0), 0);
+  const totalPonto = (p) => Object.values(p.tipos).reduce((s, items) => s + totalTipo(items), 0);
+
   useEffect(() => {
     async function load() {
       setLoading(true);
       try {
-        const [basesEst, aplicEst] = await Promise.all([
+        const hoje = new Date().toISOString().split('T')[0];
+        const [basesEst, aplicEst, tarefasRes, remessasRes] = await Promise.all([
           sb.from('estoque').select('quantidade, bases(nome, cidade, uf, ponto_partida), vacinas(nome)').eq('localizacao_tipo','base'),
           sb.from('estoque').select('quantidade, aplicadores(nome, cidade, uf), vacinas(nome)').eq('localizacao_tipo','aplicador'),
+          sb.from('tarefas').select('codigo, ponto_partida, cidade_campanha, uf_campanha, data_inicio, doses_previstas, status').gt('data_inicio', hoje).limit(20000),
+          sb.from('remessas').select('status, observacao').limit(20000),
         ]);
         if (basesEst.error) throw basesEst.error;
         if (aplicEst.error) throw aplicEst.error;
+        if (tarefasRes.error) throw tarefasRes.error;
+        if (remessasRes.error) throw remessasRes.error;
+
         const pontos = {};
-        const ensure = (ponto) => {
-          const p = ponto || 'Sem ponto de partida';
-          if (!pontos[p]) pontos[p] = { nome: p, tipos: { Base: [], Aplicador: [], Clínica: [] } };
-          return pontos[p];
+        const rel = {};
+        const ensureReport = (info) => {
+          if (!rel[info.key]) rel[info.key] = {
+            key: info.key,
+            ponto_partida: info.nome || info.label,
+            cidade: info.cidade,
+            uf: info.uf,
+            aplicadores: 0,
+            clinicas: 0,
+            demanda_aplicadores: 0
+          };
+          return rel[info.key];
         };
+
         (basesEst.data || []).forEach(r => {
-          const p = ensure(r.bases?.ponto_partida || `${r.bases?.cidade || 'Sem cidade'}-${r.bases?.uf || ''}`);
-          p.tipos.Base.push({ nome: r.bases?.nome || 'Base', cidade: r.bases?.cidade || '', uf: r.bases?.uf || '', vacina: r.vacinas?.nome || '—', doses: Number(r.quantidade || 0) });
+          const b = r.bases || {};
+          const info = pontoInfo(b.ponto_partida, b.cidade, b.uf);
+          addTreeItem(pontos, 'Base', info, {
+            nome: b.nome || 'Base', cidade: info.cidade, uf: info.uf,
+            vacina: r.vacinas?.nome || '—', doses: Number(r.quantidade || 0)
+          });
+          ensureReport({...info, nome: info.label});
         });
+
         (aplicEst.data || []).forEach(r => {
-          const p = ensure(`${r.aplicadores?.cidade || 'Sem cidade'}-${r.aplicadores?.uf || ''}`);
-          p.tipos.Aplicador.push({ nome: r.aplicadores?.nome || 'Aplicador', cidade: r.aplicadores?.cidade || '', uf: r.aplicadores?.uf || '', vacina: r.vacinas?.nome || '—', doses: Number(r.quantidade || 0) });
+          const a = r.aplicadores || {};
+          const info = pontoInfo('', a.cidade, a.uf);
+          addTreeItem(pontos, 'Aplicador', info, {
+            nome: a.nome || 'Aplicador', cidade: info.cidade, uf: info.uf,
+            vacina: r.vacinas?.nome || '—', doses: Number(r.quantidade || 0)
+          });
+          ensureReport({...info, nome: info.label}).aplicadores += Number(r.quantidade || 0);
         });
+
+        // Códigos de tarefas já entregues/concluídas pela logística.
+        const codigosEntregues = new Set();
+        (remessasRes.data || []).forEach(rem => {
+          if (rem.status !== 'concluida') return;
+          const obs = String(rem.observacao || '');
+          const codigos = obs.match(/[A-Z0-9]+(?:\.[A-Z0-9&]+)+/gi) || [];
+          codigos.forEach(c => codigosEntregues.add(c.trim()));
+        });
+
+        (tarefasRes.data || []).forEach(t => {
+          if (codigosEntregues.has(String(t.codigo || '').trim())) return;
+          if (t.status === 'cancelada') return;
+          const info = pontoInfo(t.ponto_partida, t.cidade_campanha, t.uf_campanha);
+          ensureReport({...info, nome: info.label}).demanda_aplicadores += Number(t.doses_previstas || 0);
+        });
+
         setTree(Object.values(pontos).sort((a,b)=>a.nome.localeCompare(b.nome)));
+        setReport(Object.values(rel).sort((a,b)=>a.ponto_partida.localeCompare(b.ponto_partida)));
       } catch (err) { toast('Erro ao carregar árvore: ' + err.message, 'error'); }
       setLoading(false);
     }
     load();
   }, []);
 
-  const totalTipo = (items) => items.reduce((s, x) => s + Number(x.doses || 0), 0);
-  const totalPonto = (p) => Object.values(p.tipos).reduce((s, items) => s + totalTipo(items), 0);
-
   return (
     <div>
       <div className="page-header">
         <div>
           <div className="page-title">Árvore de Distribuição</div>
-          <div className="page-subtitle">Ponto de partida → tipo de estoque → local/aplicador</div>
+          <div className="page-subtitle">Ponto de partida consolidado → tipo de estoque → local/aplicador</div>
         </div>
       </div>
+
+      <div className="card" style={{marginBottom:16}}>
+        <div className="card-header">
+          <div>
+            <div className="card-title">Relatório Consolidado</div>
+            <div className="page-subtitle">Demanda considera tarefas futuras ainda não entregues pela logística</div>
+          </div>
+        </div>
+        {loading ? <div className="empty-state"><div className="empty-text">Carregando...</div></div> : (
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Ponto de Partida</th><th>Cidade</th><th>UF</th><th>Aplicadores</th><th>Clínicas</th><th>Demanda Aplicadores</th>
+                </tr>
+              </thead>
+              <tbody>
+                {report.length === 0 ? <tr><td colSpan={6}>Nenhum dado encontrado</td></tr> : report.map(r => (
+                  <tr key={r.key}>
+                    <td style={{color:'var(--text-primary)',fontWeight:600}}>{r.ponto_partida}</td>
+                    <td>{r.cidade}</td>
+                    <td className="mono">{r.uf || '—'}</td>
+                    <td className="mono">{r.aplicadores}</td>
+                    <td className="mono">{r.clinicas}</td>
+                    <td className="mono" style={{color:r.demanda_aplicadores>0?'var(--warning)':'var(--text-secondary)'}}>{r.demanda_aplicadores}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
       <div className="card">
+        <div className="card-header">
+          <div>
+            <div className="card-title">Árvore Expandível</div>
+            <div className="page-subtitle">Pontos repetidos como “Marília” e “Marília-SP” são consolidados pelo par Cidade/UF</div>
+          </div>
+        </div>
         {loading ? <div className="empty-state"><div className="empty-text">Carregando...</div></div> : tree.length === 0 ? <div className="empty-state"><div className="empty-text">Nenhum estoque encontrado</div></div> : (
           <div style={{display:'flex',flexDirection:'column',gap:8}}>
             {tree.map(p => (
-              <div key={p.nome} style={{border:'1px solid var(--border)',borderRadius:'var(--radius-sm)',overflow:'hidden'}}>
-                <div onClick={()=>toggle('p:'+p.nome)} style={{cursor:'pointer',padding:'12px 14px',background:'var(--bg-input)',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
-                  <strong>{open['p:'+p.nome] ? '▼' : '▶'} {p.nome}</strong>
+              <div key={p.key} style={{border:'1px solid var(--border)',borderRadius:'var(--radius-sm)',overflow:'hidden'}}>
+                <div onClick={()=>toggle('p:'+p.key)} style={{cursor:'pointer',padding:'12px 14px',background:'var(--bg-input)',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                  <strong>{open['p:'+p.key] ? '▼' : '▶'} {p.nome}</strong>
                   <span className="badge badge-blue">{totalPonto(p)} doses</span>
                 </div>
-                {open['p:'+p.nome] && Object.entries(p.tipos).map(([tipo, items]) => (
+                {open['p:'+p.key] && Object.entries(p.tipos).map(([tipo, items]) => (
                   <div key={tipo} style={{marginLeft:18,borderLeft:'1px solid var(--border)'}}>
-                    <div onClick={()=>toggle('t:'+p.nome+tipo)} style={{cursor:'pointer',padding:'10px 14px',display:'flex',justifyContent:'space-between'}}>
-                      <span>{open['t:'+p.nome+tipo] ? '▼' : '▶'} {tipo}</span>
+                    <div onClick={()=>toggle('t:'+p.key+tipo)} style={{cursor:'pointer',padding:'10px 14px',display:'flex',justifyContent:'space-between'}}>
+                      <span>{open['t:'+p.key+tipo] ? '▼' : '▶'} {tipo}</span>
                       <span className="badge badge-gray">{items.length} itens · {totalTipo(items)} doses</span>
                     </div>
-                    {open['t:'+p.nome+tipo] && <div className="table-wrap" style={{margin:'0 12px 12px 18px'}}><table><thead><tr><th>Nome</th><th>Cidade</th><th>UF</th><th>Vacina</th><th>Doses</th></tr></thead><tbody>{items.length === 0 ? <tr><td colSpan={5}>Ainda sem registros</td></tr> : items.map((x,i)=><tr key={i}><td>{x.nome}</td><td>{x.cidade}</td><td>{x.uf}</td><td>{x.vacina}</td><td className="mono">{x.doses}</td></tr>)}</tbody></table></div>}
+                    {open['t:'+p.key+tipo] && <div className="table-wrap" style={{margin:'0 12px 12px 18px'}}><table><thead><tr><th>Nome</th><th>Cidade</th><th>UF</th><th>Vacina</th><th>Doses</th></tr></thead><tbody>{items.length === 0 ? <tr><td colSpan={5}>Ainda sem registros</td></tr> : items.map((x,i)=><tr key={i}><td>{x.nome}</td><td>{x.cidade}</td><td>{x.uf}</td><td>{x.vacina}</td><td className="mono">{x.doses}</td></tr>)}</tbody></table></div>}
                   </div>
                 ))}
               </div>
