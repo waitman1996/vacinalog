@@ -384,6 +384,19 @@ function excelTimeToString(val) {
   return null;
 }
 
+
+// Helper: extrai número da semana da coluna Semanas da planilha Consulta
+function extractWeekNumber(val) {
+  if (val === null || val === undefined || String(val).trim() === '') return null;
+  const raw = String(val).trim().replace(',', '.');
+  const direto = Number(raw);
+  if (!Number.isNaN(direto) && direto > 0) return Math.round(direto);
+  const match = raw.match(/(\d+(?:\.\d+)?)/);
+  if (!match) return null;
+  const n = Number(match[1]);
+  return (!Number.isNaN(n) && n > 0) ? Math.round(n) : null;
+}
+
 // ═══════════════════════════════════════════════
 // CONTEXTS
 // ═══════════════════════════════════════════════
@@ -614,21 +627,21 @@ function DashboardPage({ onNavigate }) {
   const [apFilters, setApFilters] = useState({ ponto: '', uf: '', cidade: '', nome: '' });
   const toast = useContext(ToastContext);
 
-  const semanaCampanha = (dataISO, semanaPlanilha) => {
-    // Prioridade: usar a coluna "Semanas" da planilha de Consulta, quando ela existir.
-    if (semanaPlanilha !== null && semanaPlanilha !== undefined && semanaPlanilha !== '') {
-      const n = Number(String(semanaPlanilha).replace(',', '.'));
-      if (!Number.isNaN(n) && n > 0) return Math.round(n);
-    }
-    // Fallback: calcular a partir da semana 1 informada.
+  const semanaCampanha = (dataISO) => {
+    // Semana operacional fixa:
+    // Semana 1 = 08/03/2026 a 14/03/2026
+    // Semana 2 = 15/03/2026 a 21/03/2026
+    // e assim por diante.
+    // Não usa a coluna "Semanas" da planilha porque ela pode vir como duração/decimal.
     if (!dataISO) return null;
     const inicio = new Date('2026-03-08T00:00:00');
     const d = new Date(dataISO + 'T00:00:00');
     if (Number.isNaN(d.getTime())) return null;
-    return Math.floor((d - inicio) / (7 * 24 * 60 * 60 * 1000)) + 1;
+    const semana = Math.floor((d - inicio) / (7 * 24 * 60 * 60 * 1000)) + 1;
+    return semana > 0 ? semana : null;
   };
 
-  const isEntregueStatus = (st) => ['concluida','concluído','entregue','finalizada','finalizado'].includes(String(st || '').toLowerCase());
+  const isEntregueStatus = (st) => ['concluida','concluído','concluido','entregue','finalizada','finalizado'].includes(String(st || '').toLowerCase());
 
   const codigosEntreguesFromRemessas = (remessas) => {
     const set = new Set();
@@ -658,7 +671,7 @@ function DashboardPage({ onNavigate }) {
         sb.from('aplicadores').select('id', { count: 'exact', head: true }),
         sb.from('tarefas').select('id', { count: 'exact', head: true }),
         sb.from('escalas').select('id', { count: 'exact', head: true }),
-        sb.from('tarefas').select('id, codigo, cliente, cidade_campanha, uf_campanha, data_inicio, semanas, doses_previstas, status').order('data_inicio', { ascending: true }).limit(20000),
+        sb.from('tarefas').select('*').order('data_inicio', { ascending: true }).limit(20000),
         sb.from('remessas').select('status, observacao').limit(20000),
       ]);
       setStats({ bases: b.count || 0, vacinas: v.count || 0, aplicadores: a.count || 0, tarefas: t.count || 0, escalas: e.count || 0 });
@@ -666,10 +679,10 @@ function DashboardPage({ onNavigate }) {
       const entregues = codigosEntreguesFromRemessas(remessasRes.data || []);
       const porSemana = {};
       (tarefasSemana.data || []).forEach(t => {
-        const sem = semanaCampanha(t.data_inicio, t.semanas);
+        const sem = semanaCampanha(t.data_inicio);
         if (!sem || sem < 1) return;
         if (!porSemana[sem]) porSemana[sem] = { semana: sem, total: 0, entregues: 0, pendentes: 0, doses: 0, dias: {} };
-        const entregue = entregues.has(String(t.codigo || '').trim());
+        const entregue = t.status_logistica === 'concluido' || entregues.has(String(t.codigo || '').trim());
         porSemana[sem].total += 1;
         porSemana[sem].doses += Number(t.doses_previstas || 0);
         if (entregue) porSemana[sem].entregues += 1;
@@ -1604,7 +1617,7 @@ function ImportConsulta() {
             pp_uf: r['P.P. UF'] || '',
             profissionais: parseInt(r['Profissionais']) || 0,
             administrativo: parseInt(r['Administrativo']) || 0,
-            semanas: parseFloat(r['Semanas']) || null,
+            semanas: extractWeekNumber(r['Semanas']),
             endereco: r['Endereço'] || '',
             terceirizada: parseFloat(r['Terceirizada']) > 0,
             campanha: r['Campanha'] || '',
@@ -1844,7 +1857,7 @@ function ImportTutores() {
             terceirizada: parseFloat(r['terceirizada']) > 0,
             profissionais: parseInt(r['Qntd de enfermeiros']) || 0,
             administrativo: parseInt(r["Qntd de ADM's"]) || 0,
-            semanas: parseFloat(r['Semanas']) || null,
+            semanas: extractWeekNumber(r['Semanas']),
             particularidade: r['particularidade'] || '',
             status: STATUS_MAP[statusRaw] || 'aprovada',
             status_original: statusRaw,
@@ -1980,7 +1993,7 @@ function ImportHistorico() {
 // ═══════════════════════════════════════════════
 // TAREFAS (visualização)
 // ═══════════════════════════════════════════════
-function TarefasPage() {
+function TarefasPage({ profile }) {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
@@ -1988,6 +2001,34 @@ function TarefasPage() {
   const [page, setPage] = useState(0);
   const PAGE_SIZE = 50;
   const toast = useContext(ToastContext);
+
+  const LOGISTICA_LABELS = {
+    nao_roteirizado: 'Não roteirizado',
+    roteirizado: 'Roteirizado',
+    montado: 'Montado',
+    carregado: 'Carregado',
+    em_rota: 'Em rota',
+    concluido: 'Concluído'
+  };
+  const LOGISTICA_BADGES = {
+    nao_roteirizado: 'badge-gray',
+    roteirizado: 'badge-blue',
+    montado: 'badge-yellow',
+    carregado: 'badge-cyan',
+    em_rota: 'badge-green',
+    concluido: 'badge-green'
+  };
+  const normalizaStatusLogistica = (status) => {
+    const st = String(status || '').toLowerCase();
+    if (['concluida','concluído','entregue','finalizada','finalizado'].includes(st)) return 'concluido';
+    if (['em_transito','em trânsito','em rota'].includes(st)) return 'em_rota';
+    if (['carregada','carregado'].includes(st)) return 'carregado';
+    if (['pronta','montada','montado'].includes(st)) return 'montado';
+    if (['montagem'].includes(st)) return 'roteirizado';
+    if (['planejada','planejado'].includes(st)) return 'roteirizado';
+    return 'roteirizado';
+  };
+  const codigosDaObservacao = (obs) => String(obs || '').match(/[A-Z0-9]+(?:\.[A-Z0-9&]+)+/gi) || [];
 
   const load = async () => {
     setLoading(true);
@@ -1997,11 +2038,49 @@ function TarefasPage() {
     if (search) q = q.or(`codigo.ilike.%${search}%,cliente.ilike.%${search}%,cidade_campanha.ilike.%${search}%`);
     if (statusFilter) q = q.eq('status', statusFilter);
     const { data, error, count } = await q;
-    if (error) toast(error.message, 'error');
-    else setItems({ data: data || [], count: count || 0 });
+    if (error) { toast(error.message, 'error'); setLoading(false); return; }
+
+    const codigosPagina = new Set((data || []).map(t => String(t.codigo || '').trim()).filter(Boolean));
+    const logMap = {};
+    try {
+      const { data: remessas } = await sb.from('remessas').select('status, observacao').limit(20000);
+      (remessas || []).forEach(rem => {
+        const st = normalizaStatusLogistica(rem.status);
+        codigosDaObservacao(rem.observacao).forEach(c => {
+          const cod = c.trim();
+          if (codigosPagina.has(cod)) logMap[cod] = st;
+        });
+      });
+    } catch (e) {
+      console.warn('Não foi possível carregar status de logística', e);
+    }
+
+    const enriched = (data || []).map(t => ({
+      ...t,
+      status_logistica_calc: t.status_logistica || logMap[String(t.codigo || '').trim()] || 'nao_roteirizado'
+    }));
+    setItems({ data: enriched, count: count || 0 });
     setLoading(false);
   };
   useEffect(() => { load(); }, [page, statusFilter]);
+
+  const isAdmin = profile?.role === 'admin';
+
+  const updateStatusLogistica = async (tarefaId, novoStatus) => {
+    if (!isAdmin) return;
+    const anterior = items.data || [];
+    setItems(prev => ({
+      ...prev,
+      data: (prev.data || []).map(t => t.id === tarefaId ? { ...t, status_logistica: novoStatus, status_logistica_calc: novoStatus } : t)
+    }));
+    const { error } = await sb.from('tarefas').update({ status_logistica: novoStatus }).eq('id', tarefaId);
+    if (error) {
+      setItems(prev => ({ ...prev, data: anterior }));
+      toast('Erro ao salvar status da logística. Rode o SQL da coluna status_logistica se ainda não rodou. Detalhe: ' + error.message, 'error');
+    } else {
+      toast('Status da logística atualizado!', 'success');
+    }
+  };
 
   const handleSearch = (e) => { e.preventDefault(); setPage(0); load(); };
 
@@ -2035,7 +2114,7 @@ function TarefasPage() {
         <div className="table-wrap">
           <table>
             <thead>
-              <tr><th>Código</th><th>Cliente</th><th>Cidade</th><th>UF</th><th>Data</th><th>Doses Prev.</th><th>Doses Aplic.</th><th>Status</th><th>Base</th></tr>
+              <tr><th>Código</th><th>Cliente</th><th>Cidade</th><th>UF</th><th>Data</th><th>Doses Prev.</th><th>Doses Aplic.</th><th>Status</th><th>Status Logística</th><th>Base</th></tr>
             </thead>
             <tbody>
               {(items.data || []).map(t => (
@@ -2048,6 +2127,13 @@ function TarefasPage() {
                   <td className="mono">{t.doses_previstas}</td>
                   <td className="mono">{t.doses_aplicadas}</td>
                   <td><span className={`badge ${STATUS_BADGES[t.status]||'badge-gray'}`}>{STATUS_LABELS[t.status]||t.status}</span></td>
+                  <td>{isAdmin ? (
+                    <select className="form-select" style={{padding:'6px 8px',fontSize:12,minWidth:150}} value={t.status_logistica_calc || 'nao_roteirizado'} onChange={e=>updateStatusLogistica(t.id, e.target.value)}>
+                      {Object.entries(LOGISTICA_LABELS).map(([k,v]) => <option key={k} value={k}>{v}</option>)}
+                    </select>
+                  ) : (
+                    <span className={`badge ${LOGISTICA_BADGES[t.status_logistica_calc]||'badge-gray'}`}>{LOGISTICA_LABELS[t.status_logistica_calc]||'Não roteirizado'}</span>
+                  )}</td>
                   <td>{t.base_nome || '—'}</td>
                 </tr>
               ))}
@@ -4986,7 +5072,7 @@ function App() {
       case 'vacinas': return <VacinasPage />;
       case 'aplicadores': return <AplicadoresPage />;
       case 'importacao': return <ImportacaoPage />;
-      case 'tarefas': return <TarefasPage />;
+      case 'tarefas': return <TarefasPage profile={profile} />;
       case 'escalas': return <EscalasPage />;
       case 'estoque': return <EstoquePage />;
       case 'demanda': return <DemandaOfertaPage />;
