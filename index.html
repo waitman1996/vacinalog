@@ -166,6 +166,24 @@ body {
 .form-select option { background: var(--bg-card); }
 .form-input.sm { padding: 7px 10px; font-size: 13px; }
 
+/* Date picker clickable */
+.form-input[type="date"], input[type="date"] {
+  cursor: pointer;
+  color-scheme: dark;
+  position: relative;
+}
+.form-input[type="date"]::-webkit-calendar-picker-indicator,
+input[type="date"]::-webkit-calendar-picker-indicator {
+  cursor: pointer;
+  opacity: 0.85;
+  filter: invert(1);
+}
+.form-input[type="date"]::-webkit-calendar-picker-indicator:hover,
+input[type="date"]::-webkit-calendar-picker-indicator:hover {
+  opacity: 1;
+}
+
+
 /* Buttons */
 .btn {
   display: inline-flex; align-items: center; gap: 6px; padding: 9px 16px;
@@ -351,6 +369,16 @@ const { useState, useEffect, useCallback, useRef, createContext, useContext } = 
 const SUPABASE_URL = 'https://ojmuykptmsoiligirqru.supabase.co';
 const SUPABASE_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9qbXV5a3B0bXNvaWxpZ2lycXJ1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzgyODM0MTAsImV4cCI6MjA5Mzg1OTQxMH0.5h_3nqLEA-zHVwFCmLTzN5z3GoAzfu2zjBp7McQPUzY';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON);
+
+
+// Abre o calendário nativo ao clicar/focar no campo de data
+function openDatePicker(e) {
+  try {
+    if (e && e.currentTarget && typeof e.currentTarget.showPicker === 'function') {
+      e.currentTarget.showPicker();
+    }
+  } catch (_) {}
+}
 
 
 // Helper: converte serial date do Excel para string YYYY-MM-DD
@@ -1213,8 +1241,8 @@ function ArvoreDistribuicaoPage() {
             <div className="page-subtitle">Filtra somente a demanda dos aplicadores/clientes. O estoque permanece completo.</div>
           </div>
           <div style={{display:'flex',gap:10,alignItems:'flex-end',flexWrap:'wrap'}}>
-            <div className="form-group" style={{minWidth:150}}><label className="form-label">De</label><input className="form-input sm" type="date" value={dateFrom} onChange={e=>setDateFrom(e.target.value)} /></div>
-            <div className="form-group" style={{minWidth:150}}><label className="form-label">Até</label><input className="form-input sm" type="date" value={dateTo} onChange={e=>setDateTo(e.target.value)} /></div>
+            <div className="form-group" style={{minWidth:150}}><label className="form-label">De</label><input className="form-input sm" type="date" onClick={openDatePicker} onFocus={openDatePicker} value={dateFrom} onChange={e=>setDateFrom(e.target.value)} /></div>
+            <div className="form-group" style={{minWidth:150}}><label className="form-label">Até</label><input className="form-input sm" type="date" onClick={openDatePicker} onFocus={openDatePicker} value={dateTo} onChange={e=>setDateTo(e.target.value)} /></div>
             <button className="btn btn-secondary btn-sm" onClick={()=>{setDateFrom('');setDateTo('');}}>Limpar</button>
           </div>
         </div>
@@ -1582,7 +1610,7 @@ function VacinaForm({ initial, onSave, onClose }) {
         </div>
         <div className="form-group">
           <label className="form-label">Validade</label>
-          <input className="form-input" type="date" value={form.validade||''} onChange={e=>set('validade',e.target.value||null)} />
+          <input className="form-input" type="date" onClick={openDatePicker} onFocus={openDatePicker} value={form.validade||''} onChange={e=>set('validade',e.target.value||null)} />
         </div>
         <div className="form-group">
           <label className="form-label">Doses por Frasco</label>
@@ -2524,11 +2552,11 @@ function TarefasPage({ profile }) {
           </div>
           <div className="form-group">
             <label className="form-label">Data inicial</label>
-            <input className="form-input sm" type="date" value={dataInicioFilter} onChange={e=>{setDataInicioFilter(e.target.value);setPage(0);}} />
+            <input className="form-input sm" type="date" onClick={openDatePicker} onFocus={openDatePicker} value={dataInicioFilter} onChange={e=>{setDataInicioFilter(e.target.value);setPage(0);}} />
           </div>
           <div className="form-group">
             <label className="form-label">Data final</label>
-            <input className="form-input sm" type="date" value={dataFimFilter} onChange={e=>{setDataFimFilter(e.target.value);setPage(0);}} />
+            <input className="form-input sm" type="date" onClick={openDatePicker} onFocus={openDatePicker} value={dataFimFilter} onChange={e=>{setDataFimFilter(e.target.value);setPage(0);}} />
           </div>
           <div className="form-group">
             <label className="form-label">Status</label>
@@ -2628,11 +2656,11 @@ function EscalasPage() {
           </div>
           <div className="form-group">
             <label className="form-label">Data inicial</label>
-            <input className="form-input sm" type="date" value={dataInicioFilter} onChange={e=>{setDataInicioFilter(e.target.value);setPage(0);}} />
+            <input className="form-input sm" type="date" onClick={openDatePicker} onFocus={openDatePicker} value={dataInicioFilter} onChange={e=>{setDataInicioFilter(e.target.value);setPage(0);}} />
           </div>
           <div className="form-group">
             <label className="form-label">Data final</label>
-            <input className="form-input sm" type="date" value={dataFimFilter} onChange={e=>{setDataFimFilter(e.target.value);setPage(0);}} />
+            <input className="form-input sm" type="date" onClick={openDatePicker} onFocus={openDatePicker} value={dataFimFilter} onChange={e=>{setDataFimFilter(e.target.value);setPage(0);}} />
           </div>
           <button className="btn btn-secondary btn-sm" type="button" onClick={()=>{setDataInicioFilter('');setDataFimFilter('');setPage(0);}}>Limpar datas</button>
           <button className="btn btn-primary btn-sm" type="submit">Buscar</button>
@@ -4170,7 +4198,7 @@ function RoteirizacaoPage({ onBack }) {
                     <option value="">Selecione</option>{bases.map(b=><option key={b.id} value={b.id}>{b.nome}</option>)}
                   </select></div>
                 <div className="form-group"><label className="form-label" style={{fontSize:10}}>Data</label>
-                  <input className="form-input" style={{padding:'5px 6px',fontSize:11}} type="date" value={rotaData} onChange={e=>setRotaData(e.target.value)} /></div>
+                  <input className="form-input" style={{padding:'5px 6px',fontSize:11}} type="date" onClick={openDatePicker} onFocus={openDatePicker} value={rotaData} onChange={e=>setRotaData(e.target.value)} /></div>
                 <div className="form-group"><label className="form-label" style={{fontSize:10}}>Motorista</label>
                   <select className="form-select" style={{padding:'5px 6px',fontSize:11}} value={motoristaId} onChange={e=>setMotoristaId(e.target.value)}>
                     <option value="">Selecione</option>{motoristas.map(m=><option key={m.id} value={m.id}>{m.nome}</option>)}
@@ -4186,8 +4214,8 @@ function RoteirizacaoPage({ onBack }) {
               <div style={{fontSize:12,fontWeight:600,marginBottom:6}}>Filtros</div>
               <input className="form-input" style={{padding:'5px 8px',fontSize:11,marginBottom:4}} value={searchTarefa} onChange={e=>setSearchTarefa(e.target.value)} placeholder="🔍 Nome, CPF, código..." />
               <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:4,marginBottom:4}}>
-                <input className="form-input" style={{padding:'5px 6px',fontSize:11}} type="date" value={filterDateStart} onChange={e=>setFilterDateStart(e.target.value)} />
-                <input className="form-input" style={{padding:'5px 6px',fontSize:11}} type="date" value={filterDateEnd} onChange={e=>setFilterDateEnd(e.target.value)} />
+                <input className="form-input" style={{padding:'5px 6px',fontSize:11}} type="date" onClick={openDatePicker} onFocus={openDatePicker} value={filterDateStart} onChange={e=>setFilterDateStart(e.target.value)} />
+                <input className="form-input" style={{padding:'5px 6px',fontSize:11}} type="date" onClick={openDatePicker} onFocus={openDatePicker} value={filterDateEnd} onChange={e=>setFilterDateEnd(e.target.value)} />
               </div>
               <select className="form-select" style={{padding:'5px 6px',fontSize:11,width:'100%'}} value={filterPP} onChange={e=>setFilterPP(e.target.value)}>
                 <option value="">Todos pontos de partida</option>
