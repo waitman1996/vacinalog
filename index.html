@@ -2730,29 +2730,44 @@ function DemandaOfertaPage({ profile }) {
     setLoading(true);
     try {
       const range = weekRange(semana);
-      const [escalas, estoque, vacinas, bases, planning] = await Promise.all([
-        fetchAll('escalas', 'id,tarefa_id,codigo_tarefa,aplicador_id,tutor_nome,tutor_cpf,ponto_partida,doses_necessarias,doses_aplicadas,vacina_id,tipo_vacina,data_inicio,semanas,status,base_id,base_nome,tarefas(id,codigo,cliente,cidade_campanha,uf_campanha,data_inicio,doses_previstas,status_logistica,semanas,vacina_id,vacina,ponto_partida)'),
+      const [escalas, tarefasFallback, estoque, vacinas, bases, aplicadores, planning] = await Promise.all([
+        fetchAll('escalas', 'id,tarefa_id,codigo_tarefa,aplicador_id,tutor_nome,tutor_cpf,ponto_partida,doses_necessarias,doses_aplicadas,vacina_id,tipo_vacina,data_inicio,data_termino,semanas,status,base_id,base_nome,tarefas(id,codigo,cliente,cidade_campanha,uf_campanha,data_inicio,doses_previstas,status_logistica,semanas,vacina_id,vacina,ponto_partida,base_id,base_nome)'),
+        fetchAll('tarefas', 'id,codigo,cliente,cidade_campanha,uf_campanha,data_inicio,doses_previstas,status,status_logistica,semanas,vacina_id,vacina,ponto_partida,base_id,base_nome'),
         fetchAll('estoque', 'vacina_id,aplicador_id,base_id,localizacao_tipo,quantidade,aplicadores(id,nome,cpf,cidade,uf,base_vinculada_id),vacinas(id,nome)', q => q.eq('localizacao_tipo','aplicador')),
         fetchAll('vacinas', 'id,nome'),
         fetchAll('bases', 'id,nome,cidade,uf,ponto_partida'),
+        fetchAll('aplicadores', 'id,nome,cpf,cidade,uf,base_vinculada_id'),
         fetchAll('planejamento_logistico', '*', q => q.eq('semana', safeSemana(semana))).catch(() => [])
       ]);
 
-      const vacinaMap = {}; (vacinas || []).forEach(v => vacinaMap[v.id] = v.nome);
+      const norm = (v) => String(v || '').trim().toLowerCase()
+        .normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+      const vacinaMap = {}; const vacinaNomeMap = {};
+      (vacinas || []).forEach(v => { vacinaMap[v.id] = v.nome; vacinaNomeMap[norm(v.nome)] = v.id; });
       const baseMap = {}; (bases || []).forEach(b => baseMap[b.id] = b);
+      const apMap = {}; (aplicadores || []).forEach(a => apMap[a.id] = a);
+
+      const resolveVacinaId = (e, t={}) => {
+        if (e?.vacina_id) return e.vacina_id;
+        if (t?.vacina_id) return t.vacina_id;
+        const nome = e?.tipo_vacina || t?.vacina || 'Gripe';
+        return vacinaNomeMap[norm(nome)] || vacinaNomeMap['gripe'] || null;
+      };
+      const resolveVacinaNome = (id, e={}, t={}) => vacinaMap[id] || e.tipo_vacina || t.vacina || 'Vacina';
+
       const estoqueMap = {};
       (estoque || []).forEach(e => {
         if (!e.aplicador_id || !e.vacina_id) return;
         const k = `${e.aplicador_id}|${e.vacina_id}`;
         if (!estoqueMap[k]) {
-          const ap = e.aplicadores || {};
+          const ap = e.aplicadores || apMap[e.aplicador_id] || {};
           estoqueMap[k] = {
             aplicador_id: e.aplicador_id,
             aplicador_nome: ap.nome || 'Aplicador',
             cpf: ap.cpf || '',
             cidade: ap.cidade || '',
             uf: ap.uf || '',
-            base_id: ap.base_vinculada_id || null,
+            base_id: ap.base_vinculada_id || e.base_id || null,
             vacina_id: e.vacina_id,
             vacina_nome: e.vacinas?.nome || vacinaMap[e.vacina_id] || 'Vacina',
             estoque_atual: 0
@@ -2763,32 +2778,40 @@ function DemandaOfertaPage({ profile }) {
 
       const grouped = {};
       const start = range.inicio, end = range.fim;
+      const codigosComEscala = new Set();
+
+      // Principal: todos os aplicadores escalados entram, mesmo com estoque zerado.
       (escalas || []).forEach(e => {
         const t = e.tarefas || {};
         const data = (t.data_inicio || e.data_inicio || '').slice(0,10);
         if (!data || data < start || data > end) return;
+        const statusEscala = String(e.status || t.status || '').toLowerCase();
+        if (statusEscala === 'cancelada' || statusEscala === 'cancelado') return;
         const statusLog = t.status_logistica || 'nao_roteirizado';
         if (statusLog === 'concluido') return;
-        if (!e.aplicador_id) return;
-        const vacinaId = e.vacina_id || t.vacina_id;
+
+        const vacinaId = resolveVacinaId(e, t);
         if (!vacinaId) return;
-        const k = `${e.aplicador_id}|${vacinaId}`;
-        const est = estoqueMap[k] || {};
+        const apId = e.aplicador_id || null;
+        const cpfKey = String(e.tutor_cpf || '').trim();
+        const k = apId ? `${apId}|${vacinaId}` : `escala|${cpfKey || e.tutor_nome || e.id}|${vacinaId}`;
+        const est = apId ? (estoqueMap[`${apId}|${vacinaId}`] || {}) : {};
+        const ap = apId ? (apMap[apId] || {}) : {};
+        const baseId = e.base_id || est.base_id || ap.base_vinculada_id || t.base_id || null;
+        const base = baseMap[baseId] || {};
         if (!grouped[k]) {
-          const baseId = e.base_id || est.base_id || null;
-          const base = baseMap[baseId] || {};
           grouped[k] = {
             key: k,
-            aplicador_id: e.aplicador_id,
-            aplicador_nome: est.aplicador_nome || e.tutor_nome || 'Aplicador',
-            cpf: est.cpf || e.tutor_cpf || '',
-            cidade: est.cidade || '',
-            uf: est.uf || '',
+            aplicador_id: apId,
+            aplicador_nome: est.aplicador_nome || e.tutor_nome || ap.nome || 'Aplicador sem cadastro',
+            cpf: est.cpf || e.tutor_cpf || ap.cpf || '',
+            cidade: est.cidade || ap.cidade || t.cidade_campanha || '',
+            uf: est.uf || ap.uf || t.uf_campanha || '',
             ponto_partida: e.ponto_partida || t.ponto_partida || base.ponto_partida || base.nome || '',
             base_origem_id: baseId,
-            base_origem_nome: base.nome || e.base_nome || '—',
+            base_origem_nome: base.nome || e.base_nome || t.base_nome || '—',
             vacina_id: vacinaId,
-            vacina_nome: vacinaMap[vacinaId] || e.tipo_vacina || t.vacina || 'Vacina',
+            vacina_nome: resolveVacinaNome(vacinaId, e, t),
             estoque_atual: est.estoque_atual || 0,
             demanda_futura: 0,
             tarefas: []
@@ -2805,44 +2828,46 @@ function DemandaOfertaPage({ profile }) {
           doses,
           status_logistica: statusLog
         });
+        const codigo = String(e.codigo_tarefa || t.codigo || '').trim();
+        if (codigo) codigosComEscala.add(codigo);
       });
 
-      // Se a escala não trouxe demanda, tenta montar a demanda usando tarefas futuras por ponto/base como visão de cliente.
-      // Assim a tela não fica vazia durante a migração, mesmo antes do vínculo perfeito da escala.
-      if (Object.keys(grouped).length === 0) {
-        const tarefasFallback = await fetchAll('tarefas', 'id,codigo,cliente,cidade_campanha,uf_campanha,data_inicio,doses_previstas,status_logistica,semanas,vacina_id,vacina,ponto_partida,base_id,base_nome');
-        (tarefasFallback || []).forEach(t => {
-          const data = (t.data_inicio || '').slice(0,10);
-          if (!data || data < start || data > end) return;
-          const statusLog = t.status_logistica || 'nao_roteirizado';
-          if (statusLog === 'concluido') return;
-          const vacinaId = t.vacina_id;
-          if (!vacinaId) return;
-          const key = `cliente|${t.cliente || t.codigo}|${vacinaId}`;
-          if (!grouped[key]) {
-            const base = baseMap[t.base_id] || {};
-            grouped[key] = {
-              key,
-              aplicador_id: null,
-              aplicador_nome: t.cliente || 'Cliente sem escala',
-              cpf: '', cidade: t.cidade_campanha || '', uf: t.uf_campanha || '',
-              ponto_partida: t.ponto_partida || base.ponto_partida || t.base_nome || base.nome || '',
-              base_origem_id: t.base_id || null,
-              base_origem_nome: t.base_nome || base.nome || '—',
-              vacina_id: vacinaId,
-              vacina_nome: vacinaMap[vacinaId] || t.vacina || 'Vacina',
-              estoque_atual: 0,
-              demanda_futura: 0,
-              tarefas: []
-            };
-          }
-          const doses = Number(t.doses_previstas || 0);
-          grouped[key].demanda_futura += doses;
-          grouped[key].tarefas.push({ tarefa_id: t.id, codigo: t.codigo || '', cliente: t.cliente || '', data_inicio: data, doses, status_logistica: statusLog });
-        });
-      }
+      // Clientes sem escala ainda entram como demanda sem aplicador, para programar escala/envio depois.
+      (tarefasFallback || []).forEach(t => {
+        const data = (t.data_inicio || '').slice(0,10);
+        if (!data || data < start || data > end) return;
+        const statusTarefa = String(t.status || '').toLowerCase();
+        if (statusTarefa === 'cancelada' || statusTarefa === 'cancelado') return;
+        const statusLog = t.status_logistica || 'nao_roteirizado';
+        if (statusLog === 'concluido') return;
+        const codigo = String(t.codigo || '').trim();
+        if (codigo && codigosComEscala.has(codigo)) return;
+        const vacinaId = resolveVacinaId({}, t);
+        if (!vacinaId) return;
+        const key = `cliente|${t.cliente || codigo || t.id}|${vacinaId}`;
+        if (!grouped[key]) {
+          const base = baseMap[t.base_id] || {};
+          grouped[key] = {
+            key,
+            aplicador_id: null,
+            aplicador_nome: t.cliente || 'Cliente sem escala',
+            cpf: '', cidade: t.cidade_campanha || '', uf: t.uf_campanha || '',
+            ponto_partida: t.ponto_partida || base.ponto_partida || t.base_nome || base.nome || '',
+            base_origem_id: t.base_id || null,
+            base_origem_nome: t.base_nome || base.nome || '—',
+            vacina_id: vacinaId,
+            vacina_nome: resolveVacinaNome(vacinaId, {}, t),
+            estoque_atual: 0,
+            demanda_futura: 0,
+            tarefas: []
+          };
+        }
+        const doses = Number(t.doses_previstas || 0);
+        grouped[key].demanda_futura += doses;
+        grouped[key].tarefas.push({ tarefa_id: t.id, codigo, cliente: t.cliente || '', data_inicio: data, doses, status_logistica: statusLog });
+      });
 
-      // Inclui aplicadores com estoque, mesmo sem demanda na semana, para análise completa.
+      // Inclui aplicadores com estoque, mesmo sem demanda na semana, para analisar transferência para outro aplicador.
       Object.entries(estoqueMap).forEach(([k, e]) => {
         if (!grouped[k]) {
           const base = baseMap[e.base_id] || {};
@@ -2859,19 +2884,43 @@ function DemandaOfertaPage({ profile }) {
       });
 
       const planMap = {};
-      (planning || []).forEach(p => { planMap[`${p.aplicador_id}|${p.vacina_id}`] = p; });
+      (planning || []).forEach(p => { if (p.aplicador_id && p.vacina_id) planMap[`${p.aplicador_id}|${p.vacina_id}`] = p; });
       setPlanejamentos(planMap);
 
-      const rows = Object.values(grouped).map(i => {
+      let rows = Object.values(grouped).map(i => {
         const saldo = Number(i.estoque_atual || 0) - Number(i.demanda_futura || 0);
         const necessidade = Math.max(0, Number(i.demanda_futura || 0) - Number(i.estoque_atual || 0));
         return { ...i, saldo_projetado: saldo, necessidade, sugestao: necessidade > 0 ? `Enviar ${necessidade}` : 'Não enviar' };
-      }).sort((a,b) => (b.necessidade - a.necessidade) || (b.demanda_futura - a.demanda_futura));
+      });
+
+      // Sugestão profissional de transferência: dentro do mesmo ponto + vacina, procura aplicadores com sobra.
+      const donorsByGroup = {};
+      rows.forEach(r => {
+        if (!r.aplicador_id || r.saldo_projetado <= 0) return;
+        const g = `${r.ponto_partida || ''}|${r.vacina_id}`;
+        if (!donorsByGroup[g]) donorsByGroup[g] = [];
+        donorsByGroup[g].push({ nome: r.aplicador_nome, aplicador_id: r.aplicador_id, disponivel: r.saldo_projetado });
+      });
+      Object.values(donorsByGroup).forEach(list => list.sort((a,b)=>b.disponivel-a.disponivel));
+      rows = rows.map(r => {
+        if (r.necessidade <= 0) return r;
+        const g = `${r.ponto_partida || ''}|${r.vacina_id}`;
+        const donor = (donorsByGroup[g] || []).find(d => d.aplicador_id !== r.aplicador_id && d.disponivel > 0);
+        if (donor) {
+          return { ...r, sugestao: `Transferir ${Math.min(r.necessidade, donor.disponivel)} de ${donor.nome}` };
+        }
+        return r;
+      });
+
+      rows.sort((a,b) => (b.necessidade - a.necessidade) || (b.demanda_futura - a.demanda_futura) || String(a.aplicador_nome).localeCompare(String(b.aplicador_nome)));
       setItems(rows);
     } catch (err) {
       toast('Erro ao carregar Demanda vs Oferta: ' + err.message, 'error');
-    } finally { setLoading(false); }
+    } finally {
+      setLoading(false);
+    }
   };
+
   useEffect(() => { load(); }, [semana]);
 
   const savePlanning = async (item, status, extra = {}) => {
@@ -2988,7 +3037,7 @@ function DemandaOfertaPage({ profile }) {
             </thead>
             <tbody>
               {loading && <tr><td colSpan={9}><div className="empty-state"><div className="empty-text">Carregando...</div></div></td></tr>}
-              {!loading && filtered.length === 0 && <tr><td colSpan={9}><div className="empty-state"><div className="empty-text">Nenhum registro encontrado. Confira a semana, tire o filtro ou verifique se existem escalas vinculadas às tarefas.</div></div></td></tr>}
+              {!loading && filtered.length === 0 && <tr><td colSpan={9}><div className="empty-state"><div className="empty-text">Nenhum registro encontrado. Confira a semana, tire o filtro ou verifique se existem escalas/tarefas futuras importadas.</div></div></td></tr>}
               {!loading && filtered.slice(0,300).map(i => {
                 const st = statusPlanejamento(i);
                 return (
