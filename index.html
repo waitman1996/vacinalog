@@ -3401,9 +3401,11 @@ function MotoristaPage() {
   );
 }
 
-function MotoristaRota({ rota, onBack }) {
+function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
+  const [rota, setRota] = useState(rotaInit);
   const [remessas, setRemessas] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [checkoutModal, setCheckoutModal] = useState(false);
   const toast = useContext(ToastContext);
 
   const ST_REM = { planejada:'Planejada', montagem:'Montagem', pronta:'Pronta', carregada:'Carregada', em_transito:'Em Trânsito', concluida:'Entregue', cancelada:'Cancelada' };
@@ -3411,48 +3413,106 @@ function MotoristaRota({ rota, onBack }) {
 
   const load = async () => {
     setLoading(true);
-    const { data } = await sb.from('remessas')
-      .select('*, remessa_itens(quantidade, vacinas(nome)), bases(nome,cidade,uf), aplicadores(nome,cpf,cidade,uf,endereco)')
-      .eq('rota_id', rota.id)
-      .order('ordem_entrega');
-    setRemessas(data || []);
+    const [remRes, rotaRes] = await Promise.all([
+      sb.from('remessas')
+        .select('*, remessa_itens(quantidade, vacinas(nome)), bases(nome,cidade,uf), aplicadores(nome,cpf,cidade,uf,endereco)')
+        .eq('rota_id', rota.id).order('ordem_entrega'),
+      sb.from('rotas')
+        .select('*, bases!rotas_base_origem_id_fkey(nome), profiles!rotas_motorista_id_fkey(nome)')
+        .eq('id', rota.id).single()
+    ]);
+    setRemessas(remRes.data || []);
+    if (rotaRes.data) setRota(rotaRes.data);
     setLoading(false);
   };
   useEffect(() => { load(); }, []);
 
+  // Helper: pegar localização atual
+  const getLocation = () => new Promise((resolve) => {
+    if (!navigator.geolocation) { resolve(null); return; }
+    navigator.geolocation.getCurrentPosition(
+      pos => resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+      () => resolve(null),
+      { timeout: 8000 }
+    );
+  });
+
   const iniciarRota = async () => {
-    const { error } = await sb.from('rotas').update({ status: 'em_transito' }).eq('id', rota.id);
+    if (!confirm('Confirmar início da rota? Isso registrará seu check-in.')) return;
+    toast('Registrando localização...', 'info');
+    const loc = await getLocation();
+    const now = new Date().toISOString();
+    const payload = {
+      status: 'em_transito',
+      checkin_at: now,
+      ...(loc ? { checkin_lat: loc.lat, checkin_lng: loc.lng } : {})
+    };
+    const { error } = await sb.from('rotas').update(payload).eq('id', rota.id);
     if (error) { toast(error.message, 'error'); return; }
-    // Marcar todas as remessas prontas como "em_transito"
     await sb.from('remessas').update({ status: 'em_transito' }).eq('rota_id', rota.id).in('status', ['pronta','carregada']);
-    toast('Rota iniciada! Boa viagem!', 'success');
+    toast('Check-in registrado! Boa viagem! 🚀', 'success');
     load();
   };
 
   const confirmarEntrega = async (remId) => {
     const { error } = await sb.from('remessas').update({ status: 'concluida' }).eq('id', remId);
     if (error) { toast(error.message, 'error'); return; }
-    toast('Entrega confirmada!', 'success');
+    toast('Entrega confirmada! ✓', 'success');
     load();
-    // Verificar se todas foram concluídas
     const { data } = await sb.from('remessas').select('status').eq('rota_id', rota.id);
     const allDone = (data||[]).every(r => ['concluida','cancelada'].includes(r.status));
-    if (allDone) {
-      await sb.from('rotas').update({ status: 'concluida' }).eq('id', rota.id);
-      toast('Todas as entregas concluídas! Rota finalizada.', 'success');
-    }
+    if (allDone) toast('Todas as entregas feitas! Faça o check-out quando chegar na empresa.', 'success');
+  };
+
+  const fazerCheckout = async (obs) => {
+    toast('Registrando localização...', 'info');
+    const loc = await getLocation();
+    const now = new Date().toISOString();
+    const { error } = await sb.from('rotas').update({
+      status: 'concluida',
+      checkout_at: now,
+      checkout_obs: obs || null,
+      ...(loc ? { checkout_lat: loc.lat, checkout_lng: loc.lng } : {})
+    }).eq('id', rota.id);
+    if (error) { toast(error.message, 'error'); return; }
+    toast('Check-out registrado! Rota finalizada.', 'success');
+    setCheckoutModal(false);
+    load();
+    setTimeout(() => onBack(), 1500);
   };
 
   const reportarProblema = async (remId, problema) => {
-    const { error } = await sb.from('remessas').update({ observacao: (remessas.find(r=>r.id===remId)?.observacao||'') + '\n[PROBLEMA] ' + problema }).eq('id', remId);
+    const obs = (remessas.find(r=>r.id===remId)?.observacao||'') + '\n[PROBLEMA ' + new Date().toLocaleTimeString('pt-BR') + '] ' + problema;
+    const { error } = await sb.from('remessas').update({ observacao: obs }).eq('id', remId);
     if (error) toast(error.message, 'error');
     else { toast('Problema reportado', 'success'); load(); }
+  };
+
+  const abrirMaps = (destEnd, destCidade) => {
+    const q = encodeURIComponent([destEnd, destCidade, 'Brasil'].filter(Boolean).join(', '));
+    // Tenta abrir o app Maps nativo, fallback para web
+    const urlApp = `geo:0,0?q=${q}`;
+    const urlWeb = `https://www.google.com/maps/search/?api=1&query=${q}`;
+    // Em mobile abre o app; em desktop abre no browser
+    const isMobile = /Android|iPhone|iPad/i.test(navigator.userAgent);
+    window.open(isMobile ? urlApp : urlWeb, '_blank');
   };
 
   const totalDoses = remessas.reduce((s,r) => s + (r.remessa_itens||[]).reduce((ss,i)=>ss+i.quantidade,0), 0);
   const entregues = remessas.filter(r => r.status === 'concluida').length;
   const pendentes = remessas.filter(r => !['concluida','cancelada'].includes(r.status)).length;
   const progresso = remessas.length > 0 ? (entregues / remessas.length * 100) : 0;
+  const todasEntregues = remessas.length > 0 && pendentes === 0;
+
+  // Formatação de data/hora
+  const fmtDateTime = (iso) => iso ? new Date(iso).toLocaleString('pt-BR') : '—';
+  const calcDuracao = (ini, fim) => {
+    if (!ini || !fim) return null;
+    const diff = new Date(fim) - new Date(ini);
+    const h = Math.floor(diff / 3600000);
+    const m = Math.floor((diff % 3600000) / 60000);
+    return `${h}h ${m}min`;
+  };
 
   return (
     <div>
@@ -3465,20 +3525,74 @@ function MotoristaRota({ rota, onBack }) {
             <div className="page-subtitle">{rota.bases?.nome} · {rota.data_prevista ? new Date(rota.data_prevista+'T12:00:00').toLocaleDateString('pt-BR') : '—'}</div>
           </div>
         </div>
-        {rota.status === 'pronta' && (
-          <button className="btn btn-success" onClick={iniciarRota}>🚀 Iniciar Rota</button>
-        )}
-        {rota.status === 'concluida' && (
-          <span className="badge badge-gray" style={{fontSize:14,padding:'8px 16px'}}>✓ Rota Concluída</span>
-        )}
+        <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
+          {rota.status === 'pronta' && (
+            <button className="btn btn-success" onClick={iniciarRota}>🚀 Check-in / Iniciar Rota</button>
+          )}
+          {rota.status === 'em_transito' && todasEntregues && (
+            <button className="btn btn-primary" onClick={() => setCheckoutModal(true)}>
+              🏁 Check-out / Finalizar Rota
+            </button>
+          )}
+          {rota.status === 'concluida' && (
+            <span className="badge badge-gray" style={{fontSize:13,padding:'6px 14px'}}>✓ Rota Concluída</span>
+          )}
+        </div>
       </div>
+
+      {/* Check-in / Check-out info */}
+      {(rota.checkin_at || rota.checkout_at) && (
+        <div className="card" style={{marginBottom:16,padding:14}}>
+          <div style={{fontSize:13,fontWeight:600,marginBottom:10}}>Registro de Jornada</div>
+          <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(200px,1fr))',gap:12}}>
+            <div>
+              <div style={{fontSize:10,color:'var(--text-muted)',textTransform:'uppercase',marginBottom:2}}>Check-in (Início)</div>
+              <div style={{fontSize:14,fontWeight:600,color:'var(--success)'}}>{fmtDateTime(rota.checkin_at)}</div>
+              {rota.checkin_lat && (
+                <button className="btn btn-secondary btn-sm" style={{marginTop:4,fontSize:10}}
+                  onClick={() => window.open('https://www.google.com/maps?q='+rota.checkin_lat+','+rota.checkin_lng,'_blank')}>
+                  📍 Ver localização
+                </button>
+              )}
+            </div>
+            <div>
+              <div style={{fontSize:10,color:'var(--text-muted)',textTransform:'uppercase',marginBottom:2}}>Check-out (Devolução)</div>
+              {rota.checkout_at ? (
+                <>
+                  <div style={{fontSize:14,fontWeight:600,color:'var(--accent)'}}>{fmtDateTime(rota.checkout_at)}</div>
+                  {rota.checkout_lat && (
+                    <button className="btn btn-secondary btn-sm" style={{marginTop:4,fontSize:10}}
+                      onClick={() => window.open('https://www.google.com/maps?q='+rota.checkout_lat+','+rota.checkout_lng,'_blank')}>
+                      📍 Ver localização
+                    </button>
+                  )}
+                </>
+              ) : <div style={{fontSize:13,color:'var(--text-muted)'}}>Aguardando...</div>}
+            </div>
+            {rota.checkin_at && rota.checkout_at && (
+              <div>
+                <div style={{fontSize:10,color:'var(--text-muted)',textTransform:'uppercase',marginBottom:2}}>Duração Total</div>
+                <div style={{fontSize:18,fontWeight:700,color:'var(--warning)',fontFamily:'JetBrains Mono'}}>
+                  {calcDuracao(rota.checkin_at, rota.checkout_at)}
+                </div>
+              </div>
+            )}
+            {rota.checkout_obs && (
+              <div style={{gridColumn:'1/-1'}}>
+                <div style={{fontSize:10,color:'var(--text-muted)',textTransform:'uppercase',marginBottom:2}}>Observação do Motorista</div>
+                <div style={{fontSize:12,color:'var(--text-secondary)'}}>{rota.checkout_obs}</div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Resumo */}
       <div className="stats-grid" style={{marginBottom:16}}>
         <div className="stat-card">
           <div className="stat-icon" style={{background:'var(--accent-subtle)',color:'var(--accent)'}}>📦</div>
           <div className="stat-value">{remessas.length}</div>
-          <div className="stat-label">Total de Paradas</div>
+          <div className="stat-label">Paradas</div>
         </div>
         <div className="stat-card">
           <div className="stat-icon" style={{background:'var(--success-bg)',color:'var(--success)'}}>✓</div>
@@ -3493,19 +3607,30 @@ function MotoristaRota({ rota, onBack }) {
         <div className="stat-card">
           <div className="stat-icon" style={{background:'var(--info-bg)',color:'var(--info)'}}>💉</div>
           <div className="stat-value">{totalDoses.toLocaleString('pt-BR')}</div>
-          <div className="stat-label">Total de Doses</div>
+          <div className="stat-label">Doses</div>
         </div>
       </div>
 
       {/* Barra de progresso */}
-      <div style={{marginBottom:20}}>
+      <div style={{marginBottom:16}}>
         <div style={{display:'flex',justifyContent:'space-between',fontSize:12,color:'var(--text-muted)',marginBottom:4}}>
-          <span>Progresso</span><span>{entregues}/{remessas.length} entregas</span>
+          <span>Progresso das entregas</span><span>{entregues}/{remessas.length}</span>
         </div>
         <div className="progress-bar" style={{height:10}}>
           <div className="progress-fill" style={{width:progresso+'%',background:progresso===100?'var(--success)':'var(--accent)'}} />
         </div>
       </div>
+
+      {/* Aviso check-out */}
+      {rota.status==='em_transito' && todasEntregues && (
+        <div style={{padding:14,background:'var(--success-bg)',border:'1px solid rgba(16,185,129,0.3)',borderRadius:'var(--radius-sm)',marginBottom:16,display:'flex',justifyContent:'space-between',alignItems:'center',gap:8,flexWrap:'wrap'}}>
+          <div>
+            <div style={{fontSize:14,fontWeight:600,color:'var(--success)'}}>✓ Todas as entregas concluídas!</div>
+            <div style={{fontSize:12,color:'var(--text-muted)'}}>Ao chegar na empresa, faça o check-out para finalizar a rota.</div>
+          </div>
+          <button className="btn btn-success" onClick={() => setCheckoutModal(true)}>🏁 Fazer Check-out</button>
+        </div>
+      )}
 
       {/* Lista de remessas */}
       {loading && <div style={{textAlign:'center',padding:40,color:'var(--text-muted)'}}>Carregando...</div>}
@@ -3521,9 +3646,9 @@ function MotoristaRota({ rota, onBack }) {
           const destEnd = rem.destino_tipo==='aplicador' ? rem.aplicadores?.endereco : null;
           const doses = (rem.remessa_itens||[]).reduce((s,i)=>s+i.quantidade,0);
 
-          // Parse destino da observação se necessário
           let nomeExibir = destNome;
           let cpfExibir = destCPF;
+          let endExibir = destEnd;
           if (!nomeExibir || nomeExibir === rota.bases?.nome) {
             const obs = rem.observacao || '';
             const mNome = obs.match(/^([^(|]+)/);
@@ -3538,7 +3663,6 @@ function MotoristaRota({ rota, onBack }) {
               opacity: isCancelada ? 0.6 : 1
             }}>
               <div style={{display:'flex',gap:12,alignItems:'flex-start'}}>
-                {/* Número da parada */}
                 <div style={{
                   width:36,height:36,borderRadius:'50%',flexShrink:0,
                   background: isConcluida ? 'var(--success)' : 'var(--accent)',
@@ -3546,14 +3670,13 @@ function MotoristaRota({ rota, onBack }) {
                   fontWeight:700,fontSize:16
                 }}>{isConcluida ? '✓' : rem.ordem_entrega}</div>
 
-                {/* Info da remessa */}
                 <div style={{flex:1,minWidth:0}}>
                   <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',flexWrap:'wrap',gap:6,marginBottom:6}}>
                     <div>
                       <div style={{fontFamily:'JetBrains Mono',fontSize:12,color:'var(--accent)',fontWeight:600}}>{rem.codigo_rastreio}</div>
                       <div style={{fontSize:14,fontWeight:600,color:'var(--text-primary)',marginTop:2}}>{nomeExibir || '—'}</div>
                       <div style={{fontSize:12,color:'var(--text-muted)'}}>{destCidade}{cpfExibir && ' · CPF: '+cpfExibir}</div>
-                      {destEnd && <div style={{fontSize:11,color:'var(--text-muted)',marginTop:2}}>{destEnd}</div>}
+                      {endExibir && <div style={{fontSize:11,color:'var(--text-muted)',marginTop:2}}>{endExibir}</div>}
                     </div>
                     <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>
                       <span className={`badge ${SB_REM[rem.status]||'badge-gray'}`}>{ST_REM[rem.status]||rem.status}</span>
@@ -3561,7 +3684,6 @@ function MotoristaRota({ rota, onBack }) {
                     </div>
                   </div>
 
-                  {/* Vacinas */}
                   {(rem.remessa_itens||[]).length > 0 && (
                     <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:8}}>
                       {(rem.remessa_itens||[]).map((it,i) => (
@@ -3572,7 +3694,6 @@ function MotoristaRota({ rota, onBack }) {
                     </div>
                   )}
 
-                  {/* Ações */}
                   {!isConcluida && !isCancelada && rota.status === 'em_transito' && (
                     <div style={{display:'flex',gap:8,flexWrap:'wrap',marginTop:4}}>
                       <button className="btn btn-success btn-sm" onClick={() => confirmarEntrega(rem.id)}>
@@ -3581,22 +3702,23 @@ function MotoristaRota({ rota, onBack }) {
                       <button className="btn btn-secondary btn-sm" onClick={() => {
                         const p = prompt('Descreva o problema:');
                         if (p) reportarProblema(rem.id, p);
-                      }}>
-                        ⚠ Reportar Problema
+                      }}>⚠ Problema</button>
+                      <button className="btn btn-secondary btn-sm" onClick={() => abrirMaps(endExibir, destCidade)}>
+                        🗺 Abrir Maps
                       </button>
-                      {rem.aplicadores?.cidade && (
-                        <a href={'https://maps.google.com/?q='+encodeURIComponent((destEnd||'')+' '+destCidade)}
-                          target="_blank" rel="noopener" className="btn btn-secondary btn-sm">
-                          🗺 Abrir no Maps
-                        </a>
-                      )}
                     </div>
                   )}
 
-                  {/* Problema reportado */}
-                  {rem.observacao && rem.observacao.includes('[PROBLEMA]') && (
+                  {/* Sempre mostrar Maps mesmo sem estar em trânsito */}
+                  {(isConcluida || rota.status !== 'em_transito') && (endExibir || destCidade) && (
+                    <button className="btn btn-secondary btn-sm" style={{marginTop:4}} onClick={() => abrirMaps(endExibir, destCidade)}>
+                      🗺 Abrir Maps
+                    </button>
+                  )}
+
+                  {rem.observacao && rem.observacao.includes('[PROBLEMA') && (
                     <div style={{marginTop:8,padding:'6px 10px',background:'var(--danger-bg)',borderRadius:'var(--radius-sm)',fontSize:11,color:'var(--danger)'}}>
-                      {rem.observacao.split('\n').filter(l=>l.includes('[PROBLEMA]')).join('\n')}
+                      {rem.observacao.split('\n').filter(l=>l.includes('[PROBLEMA')).join(' | ')}
                     </div>
                   )}
                 </div>
@@ -3605,7 +3727,63 @@ function MotoristaRota({ rota, onBack }) {
           );
         })}
       </div>
+
+      {/* Modal Check-out */}
+      {checkoutModal && (
+        <CheckoutModal
+          rota={rota}
+          entregues={entregues}
+          total={remessas.length}
+          onClose={() => setCheckoutModal(false)}
+          onConfirm={fazerCheckout}
+        />
+      )}
     </div>
+  );
+}
+
+function CheckoutModal({ rota, entregues, total, onClose, onConfirm }) {
+  const [obs, setObs] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  const handleConfirm = async () => {
+    setSaving(true);
+    await onConfirm(obs);
+    setSaving(false);
+  };
+
+  const checkinTime = rota.checkin_at ? new Date(rota.checkin_at) : null;
+  const now = new Date();
+  const duracao = checkinTime ? Math.round((now - checkinTime) / 60000) : null;
+  const duracaoStr = duracao ? `${Math.floor(duracao/60)}h ${duracao%60}min` : '—';
+
+  return (
+    <Modal title="Check-out — Devolução do Veículo" onClose={onClose}>
+      <div style={{padding:16,background:'var(--bg-input)',borderRadius:'var(--radius-sm)',marginBottom:16}}>
+        <div style={{fontSize:13,fontWeight:600,marginBottom:10}}>Resumo da Jornada</div>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,fontSize:13}}>
+          <div><span style={{color:'var(--text-muted)'}}>Rota:</span> <strong>{rota.codigo}</strong></div>
+          <div><span style={{color:'var(--text-muted)'}}>Entregas:</span> <strong style={{color:'var(--success)'}}>{entregues}/{total}</strong></div>
+          <div><span style={{color:'var(--text-muted)'}}>Check-in:</span> <strong>{checkinTime ? checkinTime.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'}) : '—'}</strong></div>
+          <div><span style={{color:'var(--text-muted)'}}>Duração:</span> <strong style={{color:'var(--warning)'}}>{duracaoStr}</strong></div>
+        </div>
+      </div>
+      <div className="form-group">
+        <label className="form-label">Observações do motorista (opcional)</label>
+        <textarea className="form-input" value={obs} onChange={e=>setObs(e.target.value)}
+          placeholder="Ex: Veículo devolvido sem avarias. Problema na entrega 3..." rows={3}
+          style={{resize:'vertical',fontFamily:'inherit'}} />
+      </div>
+      <div style={{fontSize:12,color:'var(--text-muted)',marginTop:8}}>
+        Ao confirmar, sua localização atual será registrada como ponto de devolução.
+      </div>
+      <div className="modal-actions">
+        <button className="btn btn-secondary" onClick={onClose}>Cancelar</button>
+        <button className="btn btn-primary" onClick={handleConfirm} disabled={saving}>
+          {saving ? 'Registrando...' : '🏁 Confirmar Check-out'}
+        </button>
+      </div>
+    </Modal>
   );
 }
 
