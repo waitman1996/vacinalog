@@ -2072,6 +2072,7 @@ function RoteirizacaoPage({ onBack }) {
   const [filterDateStart, setFilterDateStart] = useState('');
   const [filterDateEnd, setFilterDateEnd] = useState('');
   const [filterStatus, setFilterStatus] = useState('');
+  const [showJaRoteirizado, setShowJaRoteirizado] = useState(false);
   const [searchTarefa, setSearchTarefa] = useState('');
   const [pontosPartida, setPontosPartida] = useState([]);
 
@@ -2107,6 +2108,15 @@ function RoteirizacaoPage({ onBack }) {
       if (data.length < PAGE) break;
       page++;
     }
+
+    // Buscar aplicadores que JÁ têm remessas ativas (não concluídas/canceladas)
+    // para excluí-los da roteirização
+    const { data: remessasAtivas } = await sb.from('remessas')
+      .select('destino_aplicador_id')
+      .not('destino_aplicador_id', 'is', null)
+      .not('status', 'in', '("concluida","cancelada")');
+    const apJaRoteirizados = new Set((remessasAtivas || []).map(r => r.destino_aplicador_id));
+
     const rows = allRows;
     setEscalas(rows);
 
@@ -2118,7 +2128,7 @@ function RoteirizacaoPage({ onBack }) {
       const key = cpfNorm || e.id;
       if (!groups[key]) {
         groups[key] = {
-          cpf: cpfRaw, // mantém formatado para exibição
+          cpf: cpfRaw,
           cpfNorm,
           nome: (e.tutor_nome || '').trim(),
           ponto_partida: e.ponto_partida,
@@ -2126,12 +2136,13 @@ function RoteirizacaoPage({ onBack }) {
           uf: e.aplicadores?.uf || '',
           endereco: e.aplicadores?.endereco || '',
           base_nome: e.base_nome,
+          aplicador_id: e.aplicador_id,
           tarefas: [],
           total_doses: 0,
           statuses: new Set(),
+          jaRoteirizado: apJaRoteirizados.has(e.aplicador_id),
         };
       }
-      // Atualizar nome se o atual estiver vazio
       if (!groups[key].nome && e.tutor_nome) groups[key].nome = e.tutor_nome.trim();
       groups[key].tarefas.push(e);
       groups[key].total_doses += (e.doses_necessarias || 0);
@@ -2149,6 +2160,8 @@ function RoteirizacaoPage({ onBack }) {
     let f = [...tutores];
     const addedCPFs = new Set(paradas.map(p => p.cpf));
     f = f.filter(t => !addedCPFs.has(t.cpf));
+    // Ocultar já roteirizados por padrão
+    if (!showJaRoteirizado) f = f.filter(t => !t.jaRoteirizado);
     if (filterPP) f = f.filter(t => t.ponto_partida === filterPP);
     if (filterStatus) f = f.filter(t => t.statuses ? t.statuses.has(filterStatus) : t.tarefas.some(e => e.status === filterStatus));
     if (filterDateStart) f = f.filter(t => t.tarefas.some(e => e.data_inicio >= filterDateStart));
@@ -2165,7 +2178,7 @@ function RoteirizacaoPage({ onBack }) {
       });
     }
     setFilteredTutores(f);
-  }, [tutores, paradas, filterPP, filterStatus, filterDateStart, filterDateEnd, searchTarefa]);
+  }, [tutores, paradas, filterPP, filterStatus, showJaRoteirizado, filterDateStart, filterDateEnd, searchTarefa]);
 
   useEffect(() => {
     if (veiculoId) {
@@ -2390,9 +2403,16 @@ function RoteirizacaoPage({ onBack }) {
                 <option value="em_execucao">Em Execução</option>
                 <option value="pronta_faturamento">Pronta p/ Fat.</option>
               </select>
-              <div style={{fontSize:10,color:'var(--text-muted)',marginTop:4}}>
-                <span className="badge badge-blue" style={{fontSize:10}}>Disponíveis {filteredTutores.length}</span>{' '}
+              <div style={{fontSize:10,color:'var(--text-muted)',marginTop:4,display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>
+                <span className="badge badge-blue" style={{fontSize:10}}>Disponíveis {filteredTutores.length}</span>
                 <span className="badge badge-green" style={{fontSize:10}}>Na rota {paradas.length}</span>
+                <span className="badge badge-gray" style={{fontSize:10}}>
+                  Já roteirizados {tutores.filter(t=>t.jaRoteirizado).length}
+                </span>
+                <button className="btn btn-secondary btn-sm" style={{fontSize:9,padding:'2px 6px'}}
+                  onClick={() => setShowJaRoteirizado(s=>!s)}>
+                  {showJaRoteirizado ? '🙈 Ocultar roteirizados' : '👁 Ver roteirizados'}
+                </button>
               </div>
             </div>
 
@@ -2402,16 +2422,17 @@ function RoteirizacaoPage({ onBack }) {
                 const isExpanded = expandedTutor === t.cpf;
                 const statusCounts = t.tarefas.reduce((acc, e) => { acc[e.status] = (acc[e.status]||0)+1; return acc; }, {});
                 return (
-                  <div key={t.cpf} style={{borderBottom:'1px solid var(--border)'}}>
+                  <div key={t.cpf} style={{borderBottom:'1px solid var(--border)', opacity: t.jaRoteirizado ? 0.65 : 1}}>
                     {/* Header do card - clica para colapsar/expandir */}
-                    <div style={{padding:'7px 10px',fontSize:11,display:'flex',justifyContent:'space-between',alignItems:'center',transition:'background 0.1s',gap:4}}
+                    <div style={{padding:'7px 10px',fontSize:11,display:'flex',justifyContent:'space-between',alignItems:'center',transition:'background 0.1s',gap:4, background: t.jaRoteirizado ? 'rgba(245,158,11,0.06)' : 'transparent'}}
                       onMouseEnter={e=>e.currentTarget.style.background='var(--bg-card-hover)'}
-                      onMouseLeave={e=>e.currentTarget.style.background='transparent'}>
+                      onMouseLeave={e=>e.currentTarget.style.background=t.jaRoteirizado?'rgba(245,158,11,0.06)':'transparent'}>
                       {/* Nome + info - clica para expand */}
                       <div style={{flex:1,minWidth:0,cursor:'pointer'}} onClick={() => setExpandedTutor(isExpanded?null:t.cpf)}>
                         <div style={{display:'flex',alignItems:'center',gap:4}}>
                           <span style={{fontSize:9,color:'var(--text-muted)'}}>{isExpanded?'▼':'▶'}</span>
                           <span style={{fontWeight:600,color:'var(--text-primary)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{t.nome}</span>
+                          {t.jaRoteirizado && <span style={{fontSize:9,color:'var(--warning)',flexShrink:0}}>🚚 em rota</span>}
                         </div>
                         <div style={{color:'var(--text-muted)',fontSize:10,marginLeft:12}}>
                           {t.ponto_partida||t.cidade} · {filterStatus ? t.tarefas.filter(e=>e.status===filterStatus).length : t.tarefas.length} tar.
@@ -3537,6 +3558,13 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
     if (itens.length > 0 && destId) {
       let erros = 0;
       for (const item of itens) {
+        const obs = [
+          'Rota: ' + rota.codigo,
+          'Remessa: ' + rem.codigo_rastreio,
+          'Aplicador: ' + (rem.aplicadores?.nome || destId),
+          item.vacinas?.nome ? 'Vacina: ' + item.vacinas.nome : null
+        ].filter(Boolean).join(' | ');
+
         const { error } = await sb.rpc('transferir_estoque', {
           p_vacina_id: item.vacina_id,
           p_quantidade: item.quantidade,
@@ -3545,7 +3573,7 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
           p_destino_tipo: destTipo,
           p_destino_id: destId,
           p_remessa_id: remId,
-          p_observacao: 'Entrega confirmada ' + rem.codigo_rastreio
+          p_observacao: obs
         });
         if (error) {
           console.error('Erro transferência:', error.message);
@@ -4203,9 +4231,9 @@ function MovimentacoesPage() {
 
   useEffect(() => {
     sb.from('movimentacoes')
-      .select('*, vacinas(nome), profiles(nome)')
+      .select('*, vacinas(nome), profiles(nome), remessas(codigo_rastreio, rota_id, rotas(codigo))')
       .order('created_at', { ascending: false })
-      .limit(100)
+      .limit(200)
       .then(({ data, error }) => {
         if (error) toast(error.message, 'error');
         else setItems(data || []);
@@ -4233,22 +4261,26 @@ function MovimentacoesPage() {
         <div className="table-wrap">
           <table>
             <thead>
-              <tr><th>Data</th><th>Tipo</th><th>Vacina</th><th>Qtd</th><th>Usuário</th><th>Obs</th></tr>
+              <tr><th>Data</th><th>Tipo</th><th>Vacina</th><th>Qtd</th><th>Rota</th><th>Remessa</th><th>Usuário</th><th>Obs</th></tr>
             </thead>
             <tbody>
               {items.length === 0 && (
-                <tr><td colSpan={6}><div className="empty-state"><div className="empty-text">Nenhuma movimentação registrada</div></div></td></tr>
+                <tr><td colSpan={8}><div className="empty-state"><div className="empty-text">Nenhuma movimentação registrada</div></div></td></tr>
               )}
               {items.map(m => {
                 const t = TIPO_LABELS[m.tipo] || { label: m.tipo, badge: 'badge-gray' };
+                const rotaCodigo = m.remessas?.rotas?.codigo || '—';
+                const remessaCodigo = m.remessas?.codigo_rastreio || '—';
                 return (
                   <tr key={m.id}>
-                    <td>{new Date(m.created_at).toLocaleString('pt-BR')}</td>
+                    <td style={{fontSize:11}}>{new Date(m.created_at).toLocaleString('pt-BR')}</td>
                     <td><span className={`badge ${t.badge}`}>{t.label}</span></td>
                     <td>{m.vacinas?.nome || '—'}</td>
                     <td className="mono" style={{fontWeight:600}}>{m.quantidade}</td>
-                    <td>{m.profiles?.nome || '—'}</td>
-                    <td style={{maxWidth:200,overflow:'hidden',textOverflow:'ellipsis',fontSize:12}}>{m.observacao || '—'}</td>
+                    <td className="mono" style={{fontSize:11,color:'var(--accent)'}}>{rotaCodigo}</td>
+                    <td className="mono" style={{fontSize:10,color:'var(--text-muted)'}}>{remessaCodigo}</td>
+                    <td style={{fontSize:12}}>{m.profiles?.nome || '—'}</td>
+                    <td style={{maxWidth:180,overflow:'hidden',textOverflow:'ellipsis',fontSize:11,color:'var(--text-muted)'}}>{m.observacao || '—'}</td>
                   </tr>
                 );
               })}
