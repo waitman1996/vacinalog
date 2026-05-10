@@ -11,7 +11,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
 :root {
@@ -3086,8 +3086,7 @@ function EtiquetaModal({ remessa, rota, onClose, totalParadas }) {
   const dataRota = rota.data_prevista ? new Date(rota.data_prevista+'T12:00:00').toLocaleDateString('pt-BR') : '—';
   const dataHoje = new Date().toLocaleDateString('pt-BR');
 
-  const imprimir = () => {
-    // Dados do QR: URL de conferência com todos os dados codificados
+  const imprimir = async () => {
     const qrData = JSON.stringify({
       rm: remessa.codigo_rastreio,
       rt: rota.codigo,
@@ -3099,12 +3098,18 @@ function EtiquetaModal({ remessa, rota, onClose, totalParadas }) {
       data: dataRota,
       montador: montadorNome,
     });
-    // URL de conferência (mesma página com hash)
     const qrUrl = `${window.location.origin}${window.location.pathname}#conferir=${encodeURIComponent(qrData)}`;
 
-    const w = window.open('', '_blank', 'width=400,height=650');
+    // Gerar QR como dataURL via canvas (sem CDN externo na janela de impressão)
+    let qrDataURL = '';
+    try {
+      const canvas = document.createElement('canvas');
+      await QRCode.toCanvas(canvas, qrUrl, { width: 80, margin: 1, errorCorrectionLevel: 'M' });
+      qrDataURL = canvas.toDataURL('image/png');
+    } catch(e) { console.warn('QR error:', e); }
+
+    const w = window.open('', '_blank', 'width=420,height=650');
     w.document.write(`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Etiqueta ${remessa.codigo_rastreio}</title>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"><\/script>
 <style>
   * { margin:0; padding:0; box-sizing:border-box; }
   body { width:10cm; height:15cm; font-family:'Arial',sans-serif; padding:5mm; background:#fff; color:#000; }
@@ -3118,27 +3123,23 @@ function EtiquetaModal({ remessa, rota, onClose, totalParadas }) {
   .value { font-size:12px; font-weight:700; color:#111; }
   .value-sm { font-size:10px; color:#333; }
   .row { margin-bottom:4px; }
-  .grid-top { display:grid; grid-template-columns:1fr 1fr 80px; gap:5px; margin-bottom:5px; align-items:start; }
+  .grid-top { display:grid; grid-template-columns:1fr 1fr 82px; gap:5px; margin-bottom:5px; align-items:start; }
   .badge-box { background:#f0f9ff; border:1px solid #bae6fd; border-radius:4px; padding:3px 6px; text-align:center; }
   .badge-val { font-size:18px; font-weight:900; color:#0369a1; font-family:monospace; line-height:1; }
   .badge-lbl { font-size:7px; color:#0284c7; text-transform:uppercase; }
-  .qr-box { background:#fff; border:1px solid #ddd; border-radius:4px; padding:2px; display:flex; align-items:center; justify-content:center; }
   .itens { background:#f8fafc; border:1px solid #e2e8f0; border-radius:3px; padding:4px 6px; margin-bottom:4px; }
   .item-row { display:flex; justify-content:space-between; padding:1px 0; font-size:10px; border-bottom:1px solid #eee; }
   .footer { background:#f1f5f9; border-radius:3px; padding:3px 6px; font-size:8px; color:#475569; }
   .footer-row { display:flex; justify-content:space-between; margin-bottom:1px; }
-  #qrcode-print canvas, #qrcode-print img { width:76px !important; height:76px !important; }
 </style></head><body>
 <div class="header">
   <div><div class="logo">VacinaLog</div><div class="rastreio">${remessa.codigo_rastreio}</div></div>
 </div>
-
 <div class="grid-top">
   <div class="badge-box"><div class="badge-val">${dosesExibir}</div><div class="badge-lbl">Doses</div></div>
   <div class="badge-box"><div class="badge-val">${remessa.ordem_entrega}/${totalParadas}</div><div class="badge-lbl">Parada</div></div>
-  <div class="qr-box"><div id="qrcode-print"></div></div>
+  <div style="text-align:center">${qrDataURL ? `<img src="${qrDataURL}" width="80" height="80"/>` : `<div style="width:80px;height:80px;border:1px solid #ccc;font-size:8px;color:#999;display:flex;align-items:center;justify-content:center">QR</div>`}</div>
 </div>
-
 <hr class="divider"/>
 <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:4px">
   <div><div class="label">Origem</div><div class="value-sm">${origemNome}</div></div>
@@ -3151,35 +3152,23 @@ function EtiquetaModal({ remessa, rota, onClose, totalParadas }) {
   ${destCPF ? `<div class="value-sm" style="color:#555">CPF: ${destCPF}</div>` : ''}
 </div>
 <hr class="divider"/>
-
 <div class="label" style="margin-bottom:3px">Vacinas</div>
 <div class="itens">
 ${(remessa.remessa_itens||[]).length > 0
   ? (remessa.remessa_itens||[]).map(it=>`<div class="item-row"><span>${it.vacinas?.nome||'—'} ${it.vacinas?.lote?'('+it.vacinas.lote+')':''}</span><span style="font-weight:700">${it.quantidade}</span></div>`).join('')
-  : `<div style="font-size:10px;color:#999;text-align:center">Sem itens cadastrados</div>`
-}
+  : `<div style="font-size:10px;color:#999;text-align:center">Sem itens</div>`}
 </div>
-
 <div class="footer">
   <div class="footer-row"><span>Rota: ${rota.codigo}</span><span>Entrega: ${dataRota}</span></div>
   <div class="footer-row"><span>Montado por: ${montadorNome||'—'}</span><span>Em: ${dataHoje}</span></div>
 </div>
-
-<script>
-  // Gerar QR code após carregar
-  window.onload = function() {
-    try {
-      new QRCode(document.getElementById('qrcode-print'), {
-        text: ${JSON.stringify(qrUrl)},
-        width: 76, height: 76,
-        correctLevel: QRCode.CorrectLevel.M
-      });
-      setTimeout(function() { window.print(); }, 600);
-    } catch(e) {
-      setTimeout(function() { window.print(); }, 300);
-    }
+<script>window.onload=function(){window.print();}</script>
+</body></html>\`);
+    w.document.close();
+    w.focus();
   };
-<\/script>
+
+</script>
 </body></html>`);
     w.document.close();
     w.focus();
