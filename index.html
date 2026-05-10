@@ -11,6 +11,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
 :root {
@@ -3086,67 +3087,102 @@ function EtiquetaModal({ remessa, rota, onClose, totalParadas }) {
   const dataHoje = new Date().toLocaleDateString('pt-BR');
 
   const imprimir = () => {
-    const w = window.open('', '_blank', 'width=400,height=600');
+    // Dados do QR: URL de conferência com todos os dados codificados
+    const qrData = JSON.stringify({
+      rm: remessa.codigo_rastreio,
+      rt: rota.codigo,
+      dest: destNome,
+      cpf: destCPF,
+      doses: dosesExibir,
+      parada: `${remessa.ordem_entrega}/${totalParadas}`,
+      motorista: rota.profiles?.nome || '',
+      data: dataRota,
+      montador: montadorNome,
+    });
+    // URL de conferência (mesma página com hash)
+    const qrUrl = `${window.location.origin}${window.location.pathname}#conferir=${encodeURIComponent(qrData)}`;
+
+    const w = window.open('', '_blank', 'width=400,height=650');
     w.document.write(`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Etiqueta ${remessa.codigo_rastreio}</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"><\/script>
 <style>
   * { margin:0; padding:0; box-sizing:border-box; }
-  body { width:10cm; height:15cm; font-family:'Arial',sans-serif; padding:6mm; background:#fff; color:#000; }
+  body { width:10cm; height:15cm; font-family:'Arial',sans-serif; padding:5mm; background:#fff; color:#000; }
   @page { size:10cm 15cm; margin:0; }
   @media print { body { margin:0; } }
-  .header { background:#1e3a5f; color:#fff; padding:5px 8px; border-radius:4px; margin-bottom:8px; }
-  .logo { font-size:16px; font-weight:900; letter-spacing:1px; }
-  .rastreio { font-family:monospace; font-size:13px; font-weight:700; color:#60a5fa; margin-top:2px; }
-  .divider { border:none; border-top:1.5px solid #ccc; margin:6px 0; }
-  .label { font-size:8px; color:#666; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:1px; }
-  .value { font-size:13px; font-weight:600; color:#111; }
-  .value-sm { font-size:11px; font-weight:500; color:#222; }
-  .row { margin-bottom:6px; }
-  .grid { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:6px; }
-  .badge-box { background:#f0f9ff; border:1px solid #bae6fd; border-radius:4px; padding:4px 8px; text-align:center; }
-  .badge-val { font-size:20px; font-weight:900; color:#0369a1; font-family:monospace; }
-  .badge-lbl { font-size:8px; color:#0284c7; text-transform:uppercase; }
-  .itens { background:#f8fafc; border:1px solid #e2e8f0; border-radius:4px; padding:6px; margin-bottom:6px; }
-  .item-row { display:flex; justify-content:space-between; padding:2px 0; font-size:11px; border-bottom:1px solid #e2e8f0; }
-  .footer { background:#f1f5f9; border-radius:4px; padding:4px 8px; font-size:9px; color:#475569; }
-  .footer-row { display:flex; justify-content:space-between; margin-bottom:2px; }
+  .header { background:#1e3a5f; color:#fff; padding:4px 8px; border-radius:4px; margin-bottom:6px; display:flex; justify-content:space-between; align-items:center; }
+  .logo { font-size:15px; font-weight:900; letter-spacing:1px; }
+  .rastreio { font-family:monospace; font-size:11px; font-weight:700; color:#60a5fa; }
+  .divider { border:none; border-top:1px solid #ddd; margin:4px 0; }
+  .label { font-size:7px; color:#888; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:1px; }
+  .value { font-size:12px; font-weight:700; color:#111; }
+  .value-sm { font-size:10px; color:#333; }
+  .row { margin-bottom:4px; }
+  .grid-top { display:grid; grid-template-columns:1fr 1fr 80px; gap:5px; margin-bottom:5px; align-items:start; }
+  .badge-box { background:#f0f9ff; border:1px solid #bae6fd; border-radius:4px; padding:3px 6px; text-align:center; }
+  .badge-val { font-size:18px; font-weight:900; color:#0369a1; font-family:monospace; line-height:1; }
+  .badge-lbl { font-size:7px; color:#0284c7; text-transform:uppercase; }
+  .qr-box { background:#fff; border:1px solid #ddd; border-radius:4px; padding:2px; display:flex; align-items:center; justify-content:center; }
+  .itens { background:#f8fafc; border:1px solid #e2e8f0; border-radius:3px; padding:4px 6px; margin-bottom:4px; }
+  .item-row { display:flex; justify-content:space-between; padding:1px 0; font-size:10px; border-bottom:1px solid #eee; }
+  .footer { background:#f1f5f9; border-radius:3px; padding:3px 6px; font-size:8px; color:#475569; }
+  .footer-row { display:flex; justify-content:space-between; margin-bottom:1px; }
+  #qrcode-print canvas, #qrcode-print img { width:76px !important; height:76px !important; }
 </style></head><body>
 <div class="header">
-  <div class="logo">VacinaLog</div>
-  <div class="rastreio">${remessa.codigo_rastreio}</div>
+  <div><div class="logo">VacinaLog</div><div class="rastreio">${remessa.codigo_rastreio}</div></div>
 </div>
 
-<div class="grid">
+<div class="grid-top">
   <div class="badge-box"><div class="badge-val">${dosesExibir}</div><div class="badge-lbl">Doses</div></div>
   <div class="badge-box"><div class="badge-val">${remessa.ordem_entrega}/${totalParadas}</div><div class="badge-lbl">Parada</div></div>
+  <div class="qr-box"><div id="qrcode-print"></div></div>
 </div>
 
 <hr class="divider"/>
-<div class="row"><div class="label">Origem</div><div class="value-sm">${origemNome}</div></div>
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:4px">
+  <div><div class="label">Origem</div><div class="value-sm">${origemNome}</div></div>
+  <div><div class="label">Motorista</div><div class="value-sm">${rota.profiles?.nome||'—'}</div></div>
+</div>
 <div class="row">
-  <div class="label">Destino</div>
+  <div class="label">Destino / Aplicador</div>
   <div class="value">${destNome||'—'}</div>
   ${destCidade ? `<div class="value-sm">${destCidade}</div>` : ''}
-  ${destCPF ? `<div class="value-sm" style="color:#666">CPF: ${destCPF}</div>` : ''}
+  ${destCPF ? `<div class="value-sm" style="color:#555">CPF: ${destCPF}</div>` : ''}
 </div>
 <hr class="divider"/>
 
-<div class="label" style="margin-bottom:4px">Vacinas</div>
+<div class="label" style="margin-bottom:3px">Vacinas</div>
 <div class="itens">
 ${(remessa.remessa_itens||[]).length > 0
   ? (remessa.remessa_itens||[]).map(it=>`<div class="item-row"><span>${it.vacinas?.nome||'—'} ${it.vacinas?.lote?'('+it.vacinas.lote+')':''}</span><span style="font-weight:700">${it.quantidade}</span></div>`).join('')
-  : `<div style="font-size:11px;color:#999;text-align:center;padding:4px">Adicione itens antes de imprimir</div>`
+  : `<div style="font-size:10px;color:#999;text-align:center">Sem itens cadastrados</div>`
 }
 </div>
 
 <div class="footer">
   <div class="footer-row"><span>Rota: ${rota.codigo}</span><span>Entrega: ${dataRota}</span></div>
-  <div class="footer-row"><span>Motorista: ${rota.profiles?.nome||'—'}</span><span>Tipo: ${remessa.tipo||'entrega'}</span></div>
   <div class="footer-row"><span>Montado por: ${montadorNome||'—'}</span><span>Em: ${dataHoje}</span></div>
 </div>
+
+<script>
+  // Gerar QR code após carregar
+  window.onload = function() {
+    try {
+      new QRCode(document.getElementById('qrcode-print'), {
+        text: ${JSON.stringify(qrUrl)},
+        width: 76, height: 76,
+        correctLevel: QRCode.CorrectLevel.M
+      });
+      setTimeout(function() { window.print(); }, 600);
+    } catch(e) {
+      setTimeout(function() { window.print(); }, 300);
+    }
+  };
+<\/script>
 </body></html>`);
     w.document.close();
     w.focus();
-    setTimeout(() => { w.print(); }, 300);
   };
 
   return (
@@ -3397,11 +3433,62 @@ function AplicadoresPage() {
 // ═══════════════════════════════════════════════
 // MAIN APP
 // ═══════════════════════════════════════════════
+// ── Página de Conferência (bipagem do QR) ──
+function ConferirPage({ dados, onClose }) {
+  const ok = dados && dados.rm;
+  return (
+    <div style={{minHeight:'100vh',background:'var(--bg-deep)',display:'flex',alignItems:'center',justifyContent:'center',padding:20}}>
+      <div style={{background:'var(--bg-card)',border:'1px solid var(--border)',borderRadius:16,padding:32,maxWidth:420,width:'100%',boxShadow:'0 20px 60px rgba(0,0,0,0.4)'}}>
+        <div style={{textAlign:'center',marginBottom:24}}>
+          <div style={{fontSize:48,marginBottom:8}}>{ok ? '✅' : '❌'}</div>
+          <div style={{fontSize:22,fontWeight:700,color:'var(--text-primary)'}}>Conferência de Remessa</div>
+          <div style={{fontSize:13,color:'var(--text-muted)',marginTop:4}}>Bipagem do QR Code — VacinaLog</div>
+        </div>
+
+        {ok ? (
+          <div style={{display:'flex',flexDirection:'column',gap:14}}>
+            <InfoRow label="Rastreio" value={dados.rm} mono accent />
+            <InfoRow label="Rota" value={dados.rt} mono />
+            <InfoRow label="Parada" value={dados.parada} badge="badge-blue" />
+            <InfoRow label="Doses" value={dados.doses} badge="badge-cyan" />
+            <div style={{height:1,background:'var(--border)',margin:'4px 0'}} />
+            <InfoRow label="Destino / Aplicador" value={dados.dest} bold />
+            {dados.cpf && <InfoRow label="CPF" value={dados.cpf} mono />}
+            <div style={{height:1,background:'var(--border)',margin:'4px 0'}} />
+            <InfoRow label="Motorista" value={dados.motorista} />
+            <InfoRow label="Data de Entrega" value={dados.data} />
+            <InfoRow label="Montado por" value={dados.montador} />
+          </div>
+        ) : (
+          <div style={{textAlign:'center',color:'var(--danger)'}}>QR Code inválido ou corrompido.</div>
+        )}
+
+        <button className="btn btn-primary" style={{width:'100%',marginTop:24}} onClick={onClose}>
+          Fechar e ir para o sistema
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function InfoRow({ label, value, mono, accent, bold, badge }) {
+  return (
+    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8}}>
+      <span style={{fontSize:12,color:'var(--text-muted)',flexShrink:0}}>{label}</span>
+      {badge
+        ? <span className={`badge ${badge}`} style={{fontSize:13}}>{value}</span>
+        : <span style={{fontSize:13,fontFamily:mono?'JetBrains Mono':'inherit',fontWeight:bold?600:500,color:accent?'var(--accent)':'var(--text-primary)',textAlign:'right'}}>{value||'—'}</span>
+      }
+    </div>
+  );
+}
+
 function App() {
   const [session, setSession] = useState(undefined); // undefined = loading
   const [profile, setProfile] = useState(null);
   const [currentPage, setCurrentPage] = useState('dashboard');
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [conferirDados, setConferirDados] = useState(null);
 
   useEffect(() => {
     sb.auth.getSession().then(({ data: { session } }) => setSession(session));
@@ -3415,7 +3502,20 @@ function App() {
       .then(({ data }) => setProfile(data));
   }, [session]);
 
-  if (session === undefined) {
+  // Verificar se há hash de conferência (bipagem do QR)
+  useEffect(() => {
+    const hash = window.location.hash;
+    if (hash.startsWith('#conferir=')) {
+      try {
+        const dados = JSON.parse(decodeURIComponent(hash.replace('#conferir=', '')));
+        setConferirDados(dados);
+      } catch(e) {}
+    }
+  }, []);
+
+  if (conferirDados) {
+    return <ConferirPage dados={conferirDados} onClose={() => { setConferirDados(null); window.location.hash = ''; }} />;
+  }
     return (
       <div style={{display:'flex',alignItems:'center',justifyContent:'center',minHeight:'100vh'}}>
         <div style={{textAlign:'center'}}>
