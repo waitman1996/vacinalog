@@ -618,7 +618,7 @@ function Modal({ title, onClose, children, large }) {
 // DASHBOARD
 // ═══════════════════════════════════════════════
 function DashboardPage({ onNavigate }) {
-  const [stats, setStats] = useState({ bases: 0, vacinas: 0, aplicadores: 0, tarefas: 0, escalas: 0 });
+  const [stats, setStats] = useState({ bases: 0, vacinas: 0, aplicadores: 0, tarefas: 0, escalas: 0, doses: 0, dosesBase: 0, dosesClinica: 0, dosesAplicador: 0, dosesTransito: 0 });
   const [modal, setModal] = useState(null);
   const [modalData, setModalData] = useState([]);
   const [modalLoading, setModalLoading] = useState(false);
@@ -627,18 +627,34 @@ function DashboardPage({ onNavigate }) {
   const [apFilters, setApFilters] = useState({ ponto: '', uf: '', cidade: '', nome: '' });
   const toast = useContext(ToastContext);
 
+  const DATA_INICIO_SEMANA_1 = '2026-03-08';
   const semanaCampanha = (dataISO) => {
     // Semana operacional fixa:
     // Semana 1 = 08/03/2026 a 14/03/2026
     // Semana 2 = 15/03/2026 a 21/03/2026
     // e assim por diante.
-    // Não usa a coluna "Semanas" da planilha porque ela pode vir como duração/decimal.
     if (!dataISO) return null;
-    const inicio = new Date('2026-03-08T00:00:00');
+    const inicio = new Date(DATA_INICIO_SEMANA_1 + 'T00:00:00');
     const d = new Date(dataISO + 'T00:00:00');
     if (Number.isNaN(d.getTime())) return null;
     const semana = Math.floor((d - inicio) / (7 * 24 * 60 * 60 * 1000)) + 1;
     return semana > 0 ? semana : null;
+  };
+
+  const semanaAtualOperacional = () => {
+    const inicio = new Date(DATA_INICIO_SEMANA_1 + 'T00:00:00');
+    const hoje = new Date();
+    const hojeLocal = new Date(hoje.getFullYear(), hoje.getMonth(), hoje.getDate());
+    const semana = Math.floor((hojeLocal - inicio) / (7 * 24 * 60 * 60 * 1000)) + 1;
+    return semana > 0 ? semana : 1;
+  };
+
+  const intervaloSemana = (semana) => {
+    const inicio = new Date(DATA_INICIO_SEMANA_1 + 'T00:00:00');
+    inicio.setDate(inicio.getDate() + ((Number(semana) || 1) - 1) * 7);
+    const fim = new Date(inicio);
+    fim.setDate(fim.getDate() + 6);
+    return `${inicio.toLocaleDateString('pt-BR')} a ${fim.toLocaleDateString('pt-BR')}`;
   };
 
   const isEntregueStatus = (st) => ['concluida','concluído','concluido','entregue','finalizada','finalizado'].includes(String(st || '').toLowerCase());
@@ -663,22 +679,112 @@ function DashboardPage({ onNavigate }) {
 
   const formatDate = (d) => d ? new Date(d + 'T12:00:00').toLocaleDateString('pt-BR') : '—';
 
+
+  const fetchAllEstoqueDashboard = async () => {
+    const all = [];
+    const pageSize = 1000;
+    for (let from = 0; ; from += pageSize) {
+      const { data, error } = await sb.from('estoque')
+        .select('quantidade, localizacao_tipo')
+        .range(from, from + pageSize - 1);
+      if (error) throw error;
+      all.push(...(data || []));
+      if (!data || data.length < pageSize) break;
+    }
+    return all;
+  };
+
+  const fetchAllRemessaItensTransito = async () => {
+    const all = [];
+    const pageSize = 1000;
+    for (let from = 0; ; from += pageSize) {
+      const { data, error } = await sb.from('remessa_itens')
+        .select('quantidade, remessas(status)')
+        .range(from, from + pageSize - 1);
+      if (error) return [];
+      all.push(...(data || []));
+      if (!data || data.length < pageSize) break;
+    }
+    return all;
+  };
+
+  const calcularResumoDoses = (estoqueRows, remessaItensRows) => {
+    const resumo = { base: 0, clinica: 0, aplicador: 0, transito: 0, total: 0 };
+    (estoqueRows || []).forEach(r => {
+      const tipo = String(r.localizacao_tipo || '').toLowerCase();
+      const qtd = Number(r.quantidade || 0);
+      if (tipo === 'base') resumo.base += qtd;
+      else if (tipo === 'aplicador') resumo.aplicador += qtd;
+      else if (['clinica','clínica','clinicas','clínicas'].includes(tipo)) resumo.clinica += qtd;
+    });
+    const statusTransito = ['montagem','pronta','carregada','em_transito','em trânsito','em rota','roteirizada','roteirizado'];
+    (remessaItensRows || []).forEach(r => {
+      const st = String(r.remessas?.status || '').toLowerCase();
+      if (statusTransito.includes(st)) resumo.transito += Number(r.quantidade || 0);
+    });
+    resumo.total = resumo.base + resumo.clinica + resumo.aplicador + resumo.transito;
+    return resumo;
+  };
+
+  const openDosesModal = () => {
+    setModal('doses');
+    setModalLoading(false);
+    setModalData([
+      { local: 'Bases', doses: stats.dosesBase || 0, obs: 'Estoque físico nas bases' },
+      { local: 'Clínicas', doses: stats.dosesClinica || 0, obs: 'Estoque em clínicas' },
+      { local: 'Aplicadores', doses: stats.dosesAplicador || 0, obs: 'Estoque em posse dos aplicadores' },
+      { local: 'Em trânsito', doses: stats.dosesTransito || 0, obs: 'Itens em remessas ativas' },
+    ]);
+  };
+
+  const fetchAllTarefasDashboard = async () => {
+    // Supabase costuma limitar retorno em 1000 linhas por chamada.
+    // Como temos mais de 6 mil tarefas, o gráfico precisa buscar em páginas.
+    const all = [];
+    const pageSize = 1000;
+    for (let from = 0; ; from += pageSize) {
+      const { data, error } = await sb.from('tarefas')
+        .select('id,codigo,data_inicio,doses_previstas,status_logistica')
+        .gte('data_inicio', DATA_INICIO_SEMANA_1)
+        .order('data_inicio', { ascending: true })
+        .range(from, from + pageSize - 1);
+      if (error) throw error;
+      all.push(...(data || []));
+      if (!data || data.length < pageSize) break;
+    }
+    return all;
+  };
+
   const load = async () => {
     try {
-      const [b, v, a, t, e, tarefasSemana, remessasRes] = await Promise.all([
+      const [b, v, a, t, e, tarefasSemana, remessasRes, estoqueRows, remessaItensRows] = await Promise.all([
         sb.from('bases').select('id', { count: 'exact', head: true }),
         sb.from('vacinas').select('id', { count: 'exact', head: true }),
         sb.from('aplicadores').select('id', { count: 'exact', head: true }),
         sb.from('tarefas').select('id', { count: 'exact', head: true }),
         sb.from('escalas').select('id', { count: 'exact', head: true }),
-        sb.from('tarefas').select('*').order('data_inicio', { ascending: true }).limit(20000),
+        fetchAllTarefasDashboard(),
         sb.from('remessas').select('status, observacao').limit(20000),
+        fetchAllEstoqueDashboard(),
+        fetchAllRemessaItensTransito(),
       ]);
-      setStats({ bases: b.count || 0, vacinas: v.count || 0, aplicadores: a.count || 0, tarefas: t.count || 0, escalas: e.count || 0 });
+      const resumoDoses = calcularResumoDoses(estoqueRows, remessaItensRows);
+      setStats({
+        bases: b.count || 0,
+        vacinas: v.count || 0,
+        aplicadores: a.count || 0,
+        tarefas: t.count || 0,
+        escalas: e.count || 0,
+        doses: resumoDoses.total,
+        dosesBase: resumoDoses.base,
+        dosesClinica: resumoDoses.clinica,
+        dosesAplicador: resumoDoses.aplicador,
+        dosesTransito: resumoDoses.transito,
+      });
 
       const entregues = codigosEntreguesFromRemessas(remessasRes.data || []);
       const porSemana = {};
-      (tarefasSemana.data || []).forEach(t => {
+      (tarefasSemana || []).forEach(t => {
         const sem = semanaCampanha(t.data_inicio);
         if (!sem || sem < 1) return;
         if (!porSemana[sem]) porSemana[sem] = { semana: sem, total: 0, entregues: 0, pendentes: 0, doses: 0, dias: {} };
@@ -695,7 +801,13 @@ function DashboardPage({ onNavigate }) {
         else porSemana[sem].dias[dia].pendentes += 1;
         porSemana[sem].dias[dia].tarefas.push({ ...t, entregue });
       });
-      setWeekData(Object.values(porSemana).sort((x,y) => x.semana - y.semana));
+      const maiorSemanaComDados = Math.max(0, ...Object.keys(porSemana).map(n => Number(n)));
+      const maiorSemana = Math.max(semanaAtualOperacional(), maiorSemanaComDados);
+      const semanasCompletas = [];
+      for (let sem = 1; sem <= maiorSemana; sem++) {
+        semanasCompletas.push(porSemana[sem] || { semana: sem, total: 0, entregues: 0, pendentes: 0, doses: 0, dias: {} });
+      }
+      setWeekData(semanasCompletas);
     } catch (err) { toast('Erro ao carregar dashboard: ' + err.message, 'error'); }
   };
 
@@ -769,6 +881,7 @@ function DashboardPage({ onNavigate }) {
         <button className="btn btn-primary" onClick={() => onNavigate && onNavigate('arvore-distribuicao')}>🌳 Árvore de Distribuição</button>
       </div>
       <div className="stats-grid">
+        <div className="stat-card" onClick={openDosesModal} style={{cursor:'pointer'}} title="Ver distribuição das doses"><div className="stat-icon" style={{background: 'rgba(34,197,94,0.12)', color: '#22c55e'}}>💊</div><div className="stat-value">{stats.doses}</div><div className="stat-label">Doses</div></div>
         <div className="stat-card" onClick={openBasesModal} style={{cursor:'pointer'}} title="Ver doses por base"><div className="stat-icon" style={{background: 'var(--accent-subtle)', color: 'var(--accent)'}}>🏢</div><div className="stat-value">{stats.bases}</div><div className="stat-label">Bases</div></div>
         <div className="stat-card" onClick={openVacinasModal} style={{cursor:'pointer'}} title="Ver vacinas"><div className="stat-icon" style={{background: 'var(--success-bg)', color: 'var(--success)'}}>💉</div><div className="stat-value">{stats.vacinas}</div><div className="stat-label">Vacinas</div></div>
         <div className="stat-card" onClick={openAplicadoresModal} style={{cursor:'pointer'}} title="Ver doses por aplicador"><div className="stat-icon" style={{background: 'var(--warning-bg)', color: 'var(--warning)'}}>👤</div><div className="stat-value">{stats.aplicadores}</div><div className="stat-label">Aplicadores</div></div>
@@ -780,7 +893,7 @@ function DashboardPage({ onNavigate }) {
         <div className="card-header">
           <div>
             <div className="card-title">Tarefas x Semanas</div>
-            <div className="page-subtitle">Empilhado por logística: entregues x aguardando logística · Semana 1: 08/03/2026 a 14/03/2026</div>
+            <div className="page-subtitle">Base: tabela tarefas, campo data_inicio · Semana 1: 08/03/2026 a 14/03/2026 · empilhado por logística</div>
           </div>
           <div style={{display:'flex',gap:10,fontSize:12,color:'var(--text-muted)'}}>
             <span><span style={{display:'inline-block',width:10,height:10,background:'var(--success)',borderRadius:2,marginRight:4}}></span>Entregues</span>
@@ -788,30 +901,33 @@ function DashboardPage({ onNavigate }) {
           </div>
         </div>
         {weekData.length === 0 ? <div className="empty-state"><div className="empty-text">Sem dados semanais</div></div> : (
-          <div style={{display:'flex',alignItems:'flex-end',gap:10,height:260,overflowX:'auto',paddingTop:20,paddingBottom:8}}>
+          <div style={{width:'100%',maxWidth:'100%',overflowX:'auto',overflowY:'hidden',paddingTop:20,paddingBottom:14}}>
+            <div style={{display:'flex',alignItems:'flex-end',gap:18,height:310,width:'max-content',minWidth: Math.max(weekData.length * 92, 900)}}>
             {weekData.map(w => {
-              const totalH = Math.max(10, Math.round((w.total / maxTarefas) * 175));
+              const totalH = Math.max(10, Math.round((w.total / maxTarefas) * 220));
               const entregueH = w.total > 0 ? Math.round((w.entregues / w.total) * totalH) : 0;
               const pendenteH = Math.max(0, totalH - entregueH);
               const pct = w.total > 0 ? Math.round((w.entregues / w.total) * 100) : 0;
               return (
-                <div key={w.semana} onClick={() => setWeekModal(w)} style={{minWidth:64,display:'flex',flexDirection:'column',alignItems:'center',gap:6,cursor:'pointer'}} title={`Semana ${w.semana}: ${w.total} tarefas · ${w.entregues} entregues · ${w.pendentes} ag. logística`}>
+                <div key={w.semana} onClick={() => setWeekModal(w)} style={{width:74,minWidth:74,display:'flex',flexDirection:'column',alignItems:'center',gap:6,cursor:'pointer'}} title={`Semana ${w.semana}: ${w.total} tarefas · ${w.entregues} entregues · ${w.pendentes} ag. logística`}>
                   <div style={{fontSize:11,color:'var(--text-secondary)',fontFamily:'JetBrains Mono'}}>{w.total}</div>
                   <div style={{width:38,height:totalH,display:'flex',flexDirection:'column-reverse',overflow:'hidden',borderRadius:'6px 6px 2px 2px',background:'var(--border)'}}>
                     <div style={{height:entregueH,background:'var(--success)'}}></div>
                     <div style={{height:pendenteH,background:'var(--accent)'}}></div>
                   </div>
                   <div style={{fontSize:11,color:'var(--text-muted)'}}>S{w.semana}</div>
+                  <div style={{fontSize:9,color:'var(--text-muted)',whiteSpace:'nowrap'}}>{intervaloSemana(w.semana)}</div>
                   <div style={{fontSize:10,color:'var(--success)'}}>{pct}%</div>
                 </div>
               );
             })}
+            </div>
           </div>
         )}
       </div>
 
       {weekModal && (
-        <Modal title={`Semana ${weekModal.semana} — tarefas por dia`} onClose={() => setWeekModal(null)} large>
+        <Modal title={`Semana ${weekModal.semana} (${intervaloSemana(weekModal.semana)}) — tarefas por dia`} onClose={() => setWeekModal(null)} large>
           <div style={{display:'flex',gap:10,marginBottom:14,flexWrap:'wrap'}}>
             <span className="badge badge-blue">Total: {weekModal.total}</span>
             <span className="badge badge-green">Entregues: {weekModal.entregues}</span>
@@ -842,9 +958,19 @@ function DashboardPage({ onNavigate }) {
       )}
 
       {modal && (
-        <Modal title={modal === 'bases' ? 'Doses por Base' : modal === 'vacinas' ? 'Lista de Vacinas' : 'Doses por Aplicador'} onClose={() => setModal(null)} large>
+        <Modal title={modal === 'doses' ? 'Resumo de Doses' : modal === 'bases' ? 'Doses por Base' : modal === 'vacinas' ? 'Lista de Vacinas' : 'Doses por Aplicador'} onClose={() => setModal(null)} large>
           {modalLoading ? <div className="empty-state"><div className="empty-text">Carregando...</div></div> : (
             <>
+              {modal === 'doses' && <>
+                <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(160px,1fr))',gap:12,marginBottom:16}}>
+                  <div className="stat-card"><div className="stat-label">Total de Doses</div><div className="stat-value" style={{fontSize:24}}>{stats.doses}</div></div>
+                  <div className="stat-card"><div className="stat-label">Bases</div><div className="stat-value" style={{fontSize:24,color:'var(--accent)'}}>{stats.dosesBase}</div></div>
+                  <div className="stat-card"><div className="stat-label">Clínicas</div><div className="stat-value" style={{fontSize:24,color:'var(--info)'}}>{stats.dosesClinica}</div></div>
+                  <div className="stat-card"><div className="stat-label">Aplicadores</div><div className="stat-value" style={{fontSize:24,color:'var(--warning)'}}>{stats.dosesAplicador}</div></div>
+                  <div className="stat-card"><div className="stat-label">Em Trânsito</div><div className="stat-value" style={{fontSize:24,color:'var(--success)'}}>{stats.dosesTransito}</div></div>
+                </div>
+                <div className="table-wrap"><table><thead><tr><th>Local</th><th>Doses</th><th>Observação</th></tr></thead><tbody>{modalData.map((r,i)=><tr key={i}><td style={{color:'var(--text-primary)',fontWeight:600}}>{r.local}</td><td className="mono">{r.doses}</td><td>{r.obs}</td></tr>)}</tbody></table></div>
+              </>}
               {modal === 'bases' && <div className="table-wrap"><table><thead><tr><th>Base</th><th>Cidade</th><th>UF</th><th>Vacina</th><th>Doses</th></tr></thead><tbody>{modalData.map((r,i)=><tr key={i}><td>{r.base}</td><td>{r.cidade}</td><td>{r.uf}</td><td>{r.vacina}</td><td className="mono">{r.doses}</td></tr>)}</tbody></table></div>}
               {modal === 'vacinas' && <div className="table-wrap"><table><thead><tr><th>Vacina</th><th>Fabricante</th><th>Lote</th><th>Validade</th><th>Doses/Frasco</th></tr></thead><tbody>{modalData.map(v=><tr key={v.id}><td>{v.nome}</td><td>{v.fabricante || '—'}</td><td>{v.lote || '—'}</td><td>{v.validade ? new Date(v.validade+'T12:00:00').toLocaleDateString('pt-BR') : '—'}</td><td className="mono">{v.doses_por_frasco || 1}</td></tr>)}</tbody></table></div>}
               {modal === 'aplicadores' && <>
@@ -1495,10 +1621,12 @@ function ImportacaoPage() {
       <div className="tabs">
         <button className={`tab ${tab==='consulta'?'active':''}`} onClick={()=>setTab('consulta')}>📋 Consulta (Tarefas)</button>
         <button className={`tab ${tab==='tutores'?'active':''}`} onClick={()=>setTab('tutores')}>👩‍⚕️ Tutores (Escalas)</button>
+        <button className={`tab ${tab==='estoque'?'active':''}`} onClick={()=>setTab('estoque')}>📦 Estoque</button>
         <button className={`tab ${tab==='historico'?'active':''}`} onClick={()=>setTab('historico')}>📜 Histórico</button>
       </div>
       {tab === 'consulta' && <ImportConsulta />}
       {tab === 'tutores' && <ImportTutores />}
+      {tab === 'estoque' && <ImportEstoque />}
       {tab === 'historico' && <ImportHistorico />}
     </div>
   );
@@ -1949,6 +2077,122 @@ function ImportTutores() {
   );
 }
 
+
+function ImportEstoque() {
+  const [file, setFile] = useState(null);
+  const [preview, setPreview] = useState(null);
+  const [importing, setImporting] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [result, setResult] = useState(null);
+  const toast = useContext(ToastContext);
+  const fileRef = useRef();
+
+  const norm = (v) => String(v || '').trim();
+  const key = (v) => norm(v).toLowerCase();
+  const parseQtd = (v) => Math.round(parseFloat(String(v || '0').replace(',', '.'))) || 0;
+
+  const handleFile = (f) => {
+    if (!f) return;
+    setFile(f); setResult(null);
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const wb = XLSX.read(e.target.result, { type: 'array', raw: true });
+      const sheet = wb.Sheets[wb.SheetNames[0]];
+      const data = XLSX.utils.sheet_to_json(sheet, { raw: true, defval: '' });
+      const valid = data.filter(r => parseQtd(r['Quantidade']) > 0 && norm(r['Vacina']) && norm(r['Tipo Estoque']));
+      const bases = valid.filter(r => key(r['Tipo Estoque']).includes('base'));
+      const aplicadores = valid.filter(r => key(r['Tipo Estoque']).includes('aplicador'));
+      setPreview({ total: data.length, valid: valid.length, bases: bases.length, aplicadores: aplicadores.length, data: valid });
+    };
+    reader.readAsArrayBuffer(f);
+  };
+
+  const doImport = async () => {
+    if (!preview) return;
+    setImporting(true); setProgress(0);
+    try {
+      const [{ data: bases }, { data: aplicadores }, { data: vacinas }] = await Promise.all([
+        sb.from('bases').select('id,nome,cidade,uf'),
+        sb.from('aplicadores').select('id,nome,cpf'),
+        sb.from('vacinas').select('id,nome')
+      ]);
+      const baseMap = {}; (bases || []).forEach(b => { baseMap[key(b.nome)] = b.id; });
+      const apCpfMap = {}; const apNomeMap = {}; (aplicadores || []).forEach(a => { apCpfMap[norm(a.cpf)] = a.id; apNomeMap[key(a.nome)] = a.id; });
+      const vacinaMap = {}; (vacinas || []).forEach(v => { vacinaMap[key(v.nome)] = v.id; });
+
+      const { data: imp } = await sb.from('importacoes').insert({
+        tipo: 'estoque', nome_arquivo: file.name, registros_total: preview.valid,
+        usuario_id: (await sb.auth.getUser()).data.user.id
+      }).select().single();
+
+      let imported = 0, ignored = 0;
+      const rows = preview.data;
+      const batchSize = 50;
+      for (let i = 0; i < rows.length; i += batchSize) {
+        const batch = [];
+        for (const r of rows.slice(i, i + batchSize)) {
+          const tipoRaw = key(r['Tipo Estoque']);
+          const isBase = tipoRaw.includes('base');
+          const isAplicador = tipoRaw.includes('aplicador');
+          const vacinaId = vacinaMap[key(r['Vacina'])];
+          const quantidade = parseQtd(r['Quantidade']);
+          let baseId = null, aplicadorId = null;
+          if (isBase) baseId = baseMap[key(r['Base']) || key(r['Local'])];
+          if (isAplicador) aplicadorId = apCpfMap[norm(r['CPF Aplicador'])] || apNomeMap[key(r['Aplicador']) || key(r['Local'])];
+          if (!vacinaId || quantidade <= 0 || (!baseId && !aplicadorId)) { ignored++; continue; }
+          batch.push({
+            vacina_id: vacinaId,
+            localizacao_tipo: isBase ? 'base' : 'aplicador',
+            base_id: baseId,
+            aplicador_id: aplicadorId,
+            quantidade
+          });
+        }
+        if (batch.length > 0) {
+          const { error } = await sb.from('estoque').upsert(batch, { onConflict: 'vacina_id,localizacao_tipo,base_id,aplicador_id' });
+          if (error) { ignored += batch.length; toast('Erro em lote de estoque: ' + error.message, 'error'); }
+          else imported += batch.length;
+        }
+        setProgress(Math.round(((i + batchSize) / rows.length) * 100));
+      }
+      if (imp?.id) await sb.from('importacoes').update({ registros_importados: imported, registros_ignorados: ignored }).eq('id', imp.id);
+      setResult({ imported, ignored, total: rows.length });
+      toast(`Estoque importado: ${imported} registros.`, 'success');
+    } catch (err) { toast('Erro na importação de estoque: ' + err.message, 'error'); }
+    finally { setImporting(false); }
+  };
+
+  return (
+    <div className="card">
+      <div className="card-title" style={{marginBottom:16}}>Importar Estoque Inicial</div>
+      <p style={{fontSize:13,color:'var(--text-secondary)',marginBottom:12}}>
+        Use para migrar seu estoque antigo. Colunas esperadas: Tipo Estoque, Local, Base, Aplicador, CPF Aplicador, Vacina e Quantidade.
+      </p>
+      <a className="btn btn-secondary btn-sm" href="./modelo_importacao_estoque.xlsx" download style={{marginBottom:14}}>⬇️ Baixar modelo Excel</a>
+      <div className="upload-area" onClick={() => fileRef.current?.click()}
+        onDragOver={e=>{e.preventDefault();e.currentTarget.classList.add('drag-over')}}
+        onDragLeave={e=>e.currentTarget.classList.remove('drag-over')}
+        onDrop={e=>{e.preventDefault();e.currentTarget.classList.remove('drag-over');handleFile(e.dataTransfer.files[0])}}>
+        <div className="upload-icon">📦</div>
+        <div className="upload-text">{file ? file.name : 'Clique ou arraste o arquivo Excel de estoque'}</div>
+        <div className="upload-hint">Para base, preencha Base/Local. Para aplicador, preencha CPF Aplicador ou Aplicador.</div>
+        <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv" style={{display:'none'}} onChange={e=>handleFile(e.target.files[0])} />
+      </div>
+      {preview && <div style={{marginTop:16}}>
+        <div style={{display:'flex',gap:12,marginBottom:12,flexWrap:'wrap'}}>
+          <div className="stat-card" style={{flex:1,minWidth:120}}><div className="stat-label">Linhas</div><div className="stat-value" style={{fontSize:22}}>{preview.total}</div></div>
+          <div className="stat-card" style={{flex:1,minWidth:120}}><div className="stat-label">Válidas</div><div className="stat-value" style={{fontSize:22,color:'var(--success)'}}>{preview.valid}</div></div>
+          <div className="stat-card" style={{flex:1,minWidth:120}}><div className="stat-label">Bases</div><div className="stat-value" style={{fontSize:22}}>{preview.bases}</div></div>
+          <div className="stat-card" style={{flex:1,minWidth:120}}><div className="stat-label">Aplicadores</div><div className="stat-value" style={{fontSize:22}}>{preview.aplicadores}</div></div>
+        </div>
+        {importing && <div style={{marginBottom:12}}><div style={{fontSize:13,color:'var(--text-secondary)',marginBottom:6}}>Importando... {progress}%</div><div className="progress-bar"><div className="progress-fill" style={{width:progress+'%'}} /></div></div>}
+        {result && <div style={{padding:14,background:'var(--success-bg)',borderRadius:'var(--radius-sm)',border:'1px solid rgba(16,185,129,0.2)',marginBottom:12}}><div style={{fontSize:14,fontWeight:600,color:'var(--success)'}}>✓ Importação concluída</div><div style={{fontSize:13,color:'var(--text-secondary)',marginTop:4}}>{result.imported} importados · {result.ignored} ignorados · {result.total} total</div></div>}
+        <button className="btn btn-primary" onClick={doImport} disabled={importing || preview.valid === 0}>{importing ? 'Importando...' : `Importar ${preview.valid} registros de estoque`}</button>
+      </div>}
+    </div>
+  );
+}
+
 function ImportHistorico() {
   const [items, setItems] = useState([]);
   const toast = useContext(ToastContext);
@@ -1998,6 +2242,8 @@ function TarefasPage({ profile }) {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
+  const [dataInicioFilter, setDataInicioFilter] = useState('');
+  const [dataFimFilter, setDataFimFilter] = useState('');
   const [page, setPage] = useState(0);
   const PAGE_SIZE = 50;
   const toast = useContext(ToastContext);
@@ -2037,6 +2283,8 @@ function TarefasPage({ profile }) {
       .range(page * PAGE_SIZE, (page + 1) * PAGE_SIZE - 1);
     if (search) q = q.or(`codigo.ilike.%${search}%,cliente.ilike.%${search}%,cidade_campanha.ilike.%${search}%`);
     if (statusFilter) q = q.eq('status', statusFilter);
+    if (dataInicioFilter) q = q.gte('data_inicio', dataInicioFilter);
+    if (dataFimFilter) q = q.lte('data_inicio', dataFimFilter);
     const { data, error, count } = await q;
     if (error) { toast(error.message, 'error'); setLoading(false); return; }
 
@@ -2062,7 +2310,7 @@ function TarefasPage({ profile }) {
     setItems({ data: enriched, count: count || 0 });
     setLoading(false);
   };
-  useEffect(() => { load(); }, [page, statusFilter]);
+  useEffect(() => { load(); }, [page, statusFilter, dataInicioFilter, dataFimFilter]);
 
   const isAdmin = profile?.role === 'admin';
 
@@ -2100,12 +2348,21 @@ function TarefasPage({ profile }) {
             <input className="form-input sm" value={search} onChange={e=>setSearch(e.target.value)} placeholder="Código, cliente ou cidade..." />
           </div>
           <div className="form-group">
+            <label className="form-label">Data inicial</label>
+            <input className="form-input sm" type="date" value={dataInicioFilter} onChange={e=>{setDataInicioFilter(e.target.value);setPage(0);}} />
+          </div>
+          <div className="form-group">
+            <label className="form-label">Data final</label>
+            <input className="form-input sm" type="date" value={dataFimFilter} onChange={e=>{setDataFimFilter(e.target.value);setPage(0);}} />
+          </div>
+          <div className="form-group">
             <label className="form-label">Status</label>
             <select className="form-select" style={{padding:'7px 10px',fontSize:13}} value={statusFilter} onChange={e=>{setStatusFilter(e.target.value);setPage(0);}}>
               <option value="">Todos</option>
               {Object.entries(STATUS_LABELS).map(([k,v]) => <option key={k} value={k}>{v}</option>)}
             </select>
           </div>
+          <button className="btn btn-secondary btn-sm" type="button" onClick={()=>{setDataInicioFilter('');setDataFimFilter('');setPage(0);}}>Limpar datas</button>
           <button className="btn btn-primary btn-sm" type="submit">Buscar</button>
         </form>
       </div>
@@ -2160,6 +2417,8 @@ function TarefasPage({ profile }) {
 function EscalasPage() {
   const [items, setItems] = useState({ data: [], count: 0 });
   const [search, setSearch] = useState('');
+  const [dataInicioFilter, setDataInicioFilter] = useState('');
+  const [dataFimFilter, setDataFimFilter] = useState('');
   const [page, setPage] = useState(0);
   const PAGE_SIZE = 50;
   const toast = useContext(ToastContext);
@@ -2169,11 +2428,13 @@ function EscalasPage() {
       .order('data_inicio', { ascending: true })
       .range(page * PAGE_SIZE, (page + 1) * PAGE_SIZE - 1);
     if (search) q = q.or(`tutor_nome.ilike.%${search}%,tutor_cpf.ilike.%${search}%,codigo_tarefa.ilike.%${search}%`);
+    if (dataInicioFilter) q = q.gte('data_inicio', dataInicioFilter);
+    if (dataFimFilter) q = q.lte('data_inicio', dataFimFilter);
     const { data, error, count } = await q;
     if (error) toast(error.message, 'error');
     else setItems({ data: data || [], count: count || 0 });
   };
-  useEffect(() => { load(); }, [page]);
+  useEffect(() => { load(); }, [page, dataInicioFilter, dataFimFilter]);
 
   return (
     <div>
@@ -2185,11 +2446,20 @@ function EscalasPage() {
       </div>
 
       <div className="card" style={{marginBottom:16}}>
-        <form onSubmit={e=>{e.preventDefault();setPage(0);load();}} style={{display:'flex',gap:10,alignItems:'flex-end'}}>
-          <div className="form-group" style={{flex:1}}>
+        <form onSubmit={e=>{e.preventDefault();setPage(0);load();}} style={{display:'flex',gap:10,flexWrap:'wrap',alignItems:'flex-end'}}>
+          <div className="form-group" style={{flex:1,minWidth:220}}>
             <label className="form-label">Buscar por tutor, CPF ou código</label>
             <input className="form-input sm" value={search} onChange={e=>setSearch(e.target.value)} placeholder="Nome, CPF ou código..." />
           </div>
+          <div className="form-group">
+            <label className="form-label">Data inicial</label>
+            <input className="form-input sm" type="date" value={dataInicioFilter} onChange={e=>{setDataInicioFilter(e.target.value);setPage(0);}} />
+          </div>
+          <div className="form-group">
+            <label className="form-label">Data final</label>
+            <input className="form-input sm" type="date" value={dataFimFilter} onChange={e=>{setDataFimFilter(e.target.value);setPage(0);}} />
+          </div>
+          <button className="btn btn-secondary btn-sm" type="button" onClick={()=>{setDataInicioFilter('');setDataFimFilter('');setPage(0);}}>Limpar datas</button>
           <button className="btn btn-primary btn-sm" type="submit">Buscar</button>
         </form>
       </div>
@@ -2381,20 +2651,240 @@ function EntradaEstoqueModal({ onClose }) {
 }
 
 // ═══════════════════════════════════════════════
-// DEMANDA vs OFERTA
+// DEMANDA vs OFERTA — CENTRAL DE DECISÃO LOGÍSTICA
 // ═══════════════════════════════════════════════
-function DemandaOfertaPage() {
+function DemandaOfertaPage({ profile }) {
   const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
-  const [filter, setFilter] = useState('gap_positivo');
+  const [filter, setFilter] = useState('precisa_enviar');
+  const [semana, setSemana] = useState(getCurrentOperationalWeek());
+  const [pontoPartida, setPontoPartida] = useState('');
+  const [vacinaFiltro, setVacinaFiltro] = useState('');
+  const [planejamentos, setPlanejamentos] = useState({});
   const toast = useContext(ToastContext);
+  const isAdmin = profile?.role === 'admin';
+
+  const WEEK1_START = new Date('2026-03-08T00:00:00');
+  function getCurrentOperationalWeek() {
+    const today = new Date();
+    const diff = Math.floor((new Date(today.getFullYear(), today.getMonth(), today.getDate()) - WEEK1_START) / 86400000);
+    return Math.max(1, Math.floor(diff / 7) + 1);
+  }
+  function weekRange(w) {
+    const ini = new Date(WEEK1_START);
+    ini.setDate(ini.getDate() + ((Number(w) || 1) - 1) * 7);
+    const fim = new Date(ini);
+    fim.setDate(fim.getDate() + 6);
+    const iso = d => d.toISOString().split('T')[0];
+    return { inicio: iso(ini), fim: iso(fim), label: `${ini.toLocaleDateString('pt-BR')} até ${fim.toLocaleDateString('pt-BR')}` };
+  }
+  async function fetchAll(table, select, build) {
+    let all = [], from = 0, step = 1000;
+    while (true) {
+      let q = sb.from(table).select(select).range(from, from + step - 1);
+      if (build) q = build(q);
+      const { data, error } = await q;
+      if (error) throw error;
+      all = all.concat(data || []);
+      if (!data || data.length < step) break;
+      from += step;
+    }
+    return all;
+  }
+  function statusPlanejamento(item) {
+    const p = planejamentos[item.key];
+    if (p?.status) return p.status;
+    if ((item.necessidade || 0) <= 0) return 'nao_enviar_estoque_suficiente';
+    return 'envio_sugerido';
+  }
+  function labelStatus(status) {
+    return {
+      pendente_analise: 'Pendente análise',
+      nao_enviar_estoque_suficiente: 'Não enviar',
+      envio_sugerido: 'Envio sugerido',
+      envio_aprovado: 'Envio aprovado',
+      em_montagem: 'Em montagem',
+      montado: 'Montado',
+      carregado: 'Carregado',
+      em_rota: 'Em rota',
+      entregue: 'Entregue',
+      cancelado: 'Cancelado'
+    }[status] || status || 'Pendente';
+  }
+  function badgeStatus(status) {
+    if (status === 'nao_enviar_estoque_suficiente' || status === 'entregue') return 'badge-green';
+    if (['envio_aprovado','em_montagem','montado','carregado','em_rota'].includes(status)) return 'badge-blue';
+    if (status === 'cancelado') return 'badge-red';
+    if (status === 'envio_sugerido') return 'badge-yellow';
+    return 'badge-gray';
+  }
 
   const load = async () => {
-    const { data, error } = await sb.from('vw_demanda_oferta').select('*');
-    if (error) { toast(error.message, 'error'); return; }
-    setItems(data || []);
+    setLoading(true);
+    try {
+      const range = weekRange(semana);
+      const [escalas, estoque, vacinas, bases, planning] = await Promise.all([
+        fetchAll('escalas', 'id,tarefa_id,codigo_tarefa,aplicador_id,tutor_nome,tutor_cpf,ponto_partida,doses_necessarias,doses_aplicadas,vacina_id,tipo_vacina,data_inicio,semanas,status,base_id,base_nome,tarefas(id,codigo,cliente,cidade_campanha,uf_campanha,data_inicio,doses_previstas,status_logistica,semanas,vacina_id,vacina,ponto_partida)'),
+        fetchAll('estoque', 'vacina_id,aplicador_id,base_id,localizacao_tipo,quantidade,aplicadores(id,nome,cpf,cidade,uf,base_vinculada_id),vacinas(id,nome)', q => q.eq('localizacao_tipo','aplicador')),
+        fetchAll('vacinas', 'id,nome'),
+        fetchAll('bases', 'id,nome,cidade,uf,ponto_partida'),
+        fetchAll('planejamento_logistico', '*', q => q.eq('semana', Number(semana))).catch(() => [])
+      ]);
+
+      const vacinaMap = {}; (vacinas || []).forEach(v => vacinaMap[v.id] = v.nome);
+      const baseMap = {}; (bases || []).forEach(b => baseMap[b.id] = b);
+      const estoqueMap = {};
+      (estoque || []).forEach(e => {
+        if (!e.aplicador_id || !e.vacina_id) return;
+        const k = `${e.aplicador_id}|${e.vacina_id}`;
+        if (!estoqueMap[k]) {
+          const ap = e.aplicadores || {};
+          estoqueMap[k] = {
+            aplicador_id: e.aplicador_id,
+            aplicador_nome: ap.nome || 'Aplicador',
+            cpf: ap.cpf || '',
+            cidade: ap.cidade || '',
+            uf: ap.uf || '',
+            base_id: ap.base_vinculada_id || null,
+            vacina_id: e.vacina_id,
+            vacina_nome: e.vacinas?.nome || vacinaMap[e.vacina_id] || 'Vacina',
+            estoque_atual: 0
+          };
+        }
+        estoqueMap[k].estoque_atual += Number(e.quantidade || 0);
+      });
+
+      const grouped = {};
+      const start = range.inicio, end = range.fim;
+      (escalas || []).forEach(e => {
+        const t = e.tarefas || {};
+        const data = (t.data_inicio || e.data_inicio || '').slice(0,10);
+        if (!data || data < start || data > end) return;
+        const statusLog = t.status_logistica || 'nao_roteirizado';
+        if (statusLog === 'concluido') return;
+        if (!e.aplicador_id) return;
+        const vacinaId = e.vacina_id || t.vacina_id;
+        if (!vacinaId) return;
+        const k = `${e.aplicador_id}|${vacinaId}`;
+        const est = estoqueMap[k] || {};
+        if (!grouped[k]) {
+          const baseId = e.base_id || est.base_id || null;
+          const base = baseMap[baseId] || {};
+          grouped[k] = {
+            key: k,
+            aplicador_id: e.aplicador_id,
+            aplicador_nome: est.aplicador_nome || e.tutor_nome || 'Aplicador',
+            cpf: est.cpf || e.tutor_cpf || '',
+            cidade: est.cidade || '',
+            uf: est.uf || '',
+            ponto_partida: e.ponto_partida || t.ponto_partida || base.ponto_partida || base.nome || '',
+            base_origem_id: baseId,
+            base_origem_nome: base.nome || e.base_nome || '—',
+            vacina_id: vacinaId,
+            vacina_nome: vacinaMap[vacinaId] || e.tipo_vacina || t.vacina || 'Vacina',
+            estoque_atual: est.estoque_atual || 0,
+            demanda_futura: 0,
+            tarefas: []
+          };
+        }
+        const doses = Number(e.doses_necessarias || t.doses_previstas || 0);
+        grouped[k].demanda_futura += doses;
+        grouped[k].tarefas.push({
+          escala_id: e.id,
+          tarefa_id: e.tarefa_id || t.id,
+          codigo: e.codigo_tarefa || t.codigo || '',
+          cliente: t.cliente || '',
+          data_inicio: data,
+          doses,
+          status_logistica: statusLog
+        });
+      });
+
+      // Inclui aplicadores com estoque, mesmo sem demanda na semana, para análise completa.
+      Object.entries(estoqueMap).forEach(([k, e]) => {
+        if (!grouped[k]) {
+          const base = baseMap[e.base_id] || {};
+          grouped[k] = {
+            key: k,
+            ...e,
+            ponto_partida: base.ponto_partida || base.nome || '',
+            base_origem_id: e.base_id || null,
+            base_origem_nome: base.nome || '—',
+            demanda_futura: 0,
+            tarefas: []
+          };
+        }
+      });
+
+      const planMap = {};
+      (planning || []).forEach(p => { planMap[`${p.aplicador_id}|${p.vacina_id}`] = p; });
+      setPlanejamentos(planMap);
+
+      const rows = Object.values(grouped).map(i => {
+        const saldo = Number(i.estoque_atual || 0) - Number(i.demanda_futura || 0);
+        const necessidade = Math.max(0, Number(i.demanda_futura || 0) - Number(i.estoque_atual || 0));
+        return { ...i, saldo_projetado: saldo, necessidade, sugestao: necessidade > 0 ? `Enviar ${necessidade}` : 'Não enviar' };
+      }).sort((a,b) => (b.necessidade - a.necessidade) || (b.demanda_futura - a.demanda_futura));
+      setItems(rows);
+    } catch (err) {
+      toast('Erro ao carregar Demanda vs Oferta: ' + err.message, 'error');
+    } finally { setLoading(false); }
   };
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); }, [semana]);
+
+  const savePlanning = async (item, status, extra = {}) => {
+    if (!isAdmin) { toast('Somente ADM pode alterar decisões logísticas.', 'error'); return; }
+    const payload = {
+      aplicador_id: item.aplicador_id,
+      vacina_id: item.vacina_id,
+      base_origem_id: item.base_origem_id || null,
+      semana: Number(semana),
+      estoque_atual: Number(item.estoque_atual || 0),
+      demanda_futura: Number(item.demanda_futura || 0),
+      saldo_projetado: Number(item.saldo_projetado || 0),
+      quantidade_sugerida: Number(item.necessidade || 0),
+      status,
+      observacao: extra.observacao || null,
+      atualizado_em: new Date().toISOString()
+    };
+    const existing = planejamentos[item.key];
+    const res = existing?.id
+      ? await sb.from('planejamento_logistico').update(payload).eq('id', existing.id).select().single()
+      : await sb.from('planejamento_logistico').insert(payload).select().single();
+    if (res.error) {
+      toast('Erro ao salvar decisão. Rode o SQL do planejamento_logistico uma vez. Detalhe: ' + res.error.message, 'error');
+      return;
+    }
+    setPlanejamentos(p => ({ ...p, [item.key]: res.data }));
+    toast('Decisão logística salva.', 'success');
+  };
+
+  const updateStatus = async (item, status) => savePlanning(item, status);
+
+  const confirmarEntrega = async (item) => {
+    if (!isAdmin) { toast('Somente ADM pode confirmar entrega.', 'error'); return; }
+    if (!item.necessidade || item.necessidade <= 0) { toast('Este aplicador não precisa de envio.', 'info'); return; }
+    if (!confirm(`Confirmar entrega de ${item.necessidade} doses para ${item.aplicador_nome}?`)) return;
+    try {
+      // Preferência: usa a função do banco, se existir.
+      const { error } = await sb.rpc('transferir_estoque', {
+        p_vacina_id: item.vacina_id,
+        p_quantidade: item.necessidade,
+        p_origem_tipo: 'base',
+        p_origem_id: item.base_origem_id,
+        p_destino_tipo: 'aplicador',
+        p_destino_id: item.aplicador_id,
+        p_remessa_id: null,
+        p_observacao: `Demanda vs Oferta - Semana ${semana}`
+      });
+      if (error) throw error;
+      await savePlanning(item, 'entregue', { observacao: `Entrega confirmada pela tela Demanda vs Oferta - Semana ${semana}` });
+      await load();
+    } catch (err) {
+      toast('Erro ao confirmar entrega: ' + err.message, 'error');
+    }
+  };
 
   let filtered = items;
   if (search) {
@@ -2402,82 +2892,97 @@ function DemandaOfertaPage() {
     filtered = filtered.filter(i =>
       (i.aplicador_nome||'').toLowerCase().includes(s) ||
       (i.cpf||'').includes(s) ||
-      (i.cidade||'').toLowerCase().includes(s)
+      (i.cidade||'').toLowerCase().includes(s) ||
+      (i.ponto_partida||'').toLowerCase().includes(s)
     );
   }
-  if (filter === 'gap_positivo') filtered = filtered.filter(i => i.gap_envio > 0);
-  else if (filter === 'gap_negativo') filtered = filtered.filter(i => i.gap_envio <= 0);
-  else if (filter === 'sem_estoque') filtered = filtered.filter(i => i.estoque_atual <= 0 && i.total_demanda > 0);
+  if (pontoPartida) filtered = filtered.filter(i => (i.ponto_partida || '') === pontoPartida);
+  if (vacinaFiltro) filtered = filtered.filter(i => i.vacina_id === vacinaFiltro);
+  if (filter === 'precisa_enviar') filtered = filtered.filter(i => i.necessidade > 0);
+  else if (filter === 'nao_enviar') filtered = filtered.filter(i => i.necessidade <= 0 && i.demanda_futura > 0);
+  else if (filter === 'sem_demanda') filtered = filtered.filter(i => i.demanda_futura <= 0);
+  else if (filter === 'risco') filtered = filtered.filter(i => i.necessidade > 0 && i.estoque_atual <= 0);
 
-  filtered.sort((a, b) => (b.gap_envio || 0) - (a.gap_envio || 0));
-
-  const totalGap = filtered.reduce((s, i) => s + Math.max(0, i.gap_envio || 0), 0);
+  const pontos = [...new Set(items.map(i => i.ponto_partida).filter(Boolean))].sort();
+  const vacinasLista = [...new Map(items.map(i => [i.vacina_id, i.vacina_nome]).filter(x=>x[0])).entries()].sort((a,b)=>String(a[1]).localeCompare(String(b[1])));
+  const totalEnviar = filtered.reduce((s,i)=>s + Number(i.necessidade||0),0);
+  const totalEstoque = filtered.reduce((s,i)=>s + Number(i.estoque_atual||0),0);
+  const totalDemanda = filtered.reduce((s,i)=>s + Number(i.demanda_futura||0),0);
+  const semEnvio = filtered.filter(i => i.demanda_futura > 0 && i.necessidade <= 0).length;
+  const range = weekRange(semana);
 
   return (
     <div>
       <div className="page-header">
         <div>
           <div className="page-title">Demanda vs Oferta</div>
-          <div className="page-subtitle">Gap de envio por aplicador</div>
+          <div className="page-subtitle">Decisão de envio por aplicador · Semana {semana}: {range.label}</div>
         </div>
+        <button className="btn btn-secondary" onClick={load}>↻ Atualizar</button>
       </div>
 
       <div className="stats-grid">
-        <div className="stat-card">
-          <div className="stat-icon" style={{background:'var(--danger-bg)',color:'var(--danger)'}}>⚠️</div>
-          <div className="stat-value">{totalGap.toLocaleString('pt-BR')}</div>
-          <div className="stat-label">Total doses a enviar</div>
-        </div>
-        <div className="stat-card">
-          <div className="stat-icon" style={{background:'var(--warning-bg)',color:'var(--warning)'}}>👤</div>
-          <div className="stat-value">{filtered.length}</div>
-          <div className="stat-label">Aplicadores</div>
-        </div>
+        <div className="stat-card"><div className="stat-icon" style={{background:'var(--danger-bg)',color:'var(--danger)'}}>🚚</div><div className="stat-value">{totalEnviar.toLocaleString('pt-BR')}</div><div className="stat-label">Doses sugeridas p/ envio</div></div>
+        <div className="stat-card"><div className="stat-icon" style={{background:'var(--success-bg)',color:'var(--success)'}}>✅</div><div className="stat-value">{semEnvio}</div><div className="stat-label">Aplicadores sem envio</div></div>
+        <div className="stat-card"><div className="stat-icon" style={{background:'var(--accent-subtle)',color:'var(--accent)'}}>📦</div><div className="stat-value">{totalEstoque.toLocaleString('pt-BR')}</div><div className="stat-label">Estoque dos aplicadores</div></div>
+        <div className="stat-card"><div className="stat-icon" style={{background:'var(--warning-bg)',color:'var(--warning)'}}>📋</div><div className="stat-value">{totalDemanda.toLocaleString('pt-BR')}</div><div className="stat-label">Demanda futura</div></div>
       </div>
 
       <div className="card" style={{marginBottom:16}}>
-        <div style={{display:'flex',gap:10,flexWrap:'wrap',alignItems:'flex-end'}}>
-          <div className="form-group" style={{flex:1,minWidth:200}}>
-            <label className="form-label">Buscar</label>
-            <input className="form-input sm" value={search} onChange={e=>setSearch(e.target.value)} placeholder="Nome, CPF ou cidade..." />
-          </div>
-          <div className="form-group">
-            <label className="form-label">Filtro</label>
-            <select className="form-select" style={{padding:'7px 10px',fontSize:13}} value={filter} onChange={e=>setFilter(e.target.value)}>
-              <option value="gap_positivo">Precisa enviar (gap &gt; 0)</option>
-              <option value="sem_estoque">Sem estoque</option>
-              <option value="gap_negativo">OK (gap ≤ 0)</option>
-              <option value="todos">Todos</option>
-            </select>
-          </div>
+        <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(170px,1fr))',gap:10,alignItems:'end'}}>
+          <div className="form-group"><label className="form-label">Semana operacional</label><input className="form-input sm" type="number" min="1" value={semana} onChange={e=>setSemana(e.target.value)} /></div>
+          <div className="form-group"><label className="form-label">Buscar</label><input className="form-input sm" value={search} onChange={e=>setSearch(e.target.value)} placeholder="Aplicador, CPF, cidade ou ponto..." /></div>
+          <div className="form-group"><label className="form-label">Ponto de partida</label><select className="form-select" style={{padding:'7px 10px',fontSize:13}} value={pontoPartida} onChange={e=>setPontoPartida(e.target.value)}><option value="">Todos</option>{pontos.map(p=><option key={p} value={p}>{p}</option>)}</select></div>
+          <div className="form-group"><label className="form-label">Vacina</label><select className="form-select" style={{padding:'7px 10px',fontSize:13}} value={vacinaFiltro} onChange={e=>setVacinaFiltro(e.target.value)}><option value="">Todas</option>{vacinasLista.map(([id,n])=><option key={id} value={id}>{n}</option>)}</select></div>
+          <div className="form-group"><label className="form-label">Filtro</label><select className="form-select" style={{padding:'7px 10px',fontSize:13}} value={filter} onChange={e=>setFilter(e.target.value)}><option value="precisa_enviar">Precisa enviar</option><option value="nao_enviar">Não enviar</option><option value="risco">Risco: sem estoque</option><option value="sem_demanda">Sem demanda na semana</option><option value="todos">Todos</option></select></div>
         </div>
       </div>
 
       <div className="card">
+        <div className="card-header"><div className="card-title">Central de decisão</div><div style={{fontSize:12,color:'var(--text-muted)'}}>{filtered.length} registros</div></div>
         <div className="table-wrap">
           <table>
             <thead>
-              <tr><th>Aplicador</th><th>CPF</th><th>Cidade/UF</th><th>Vacina</th><th>Estoque</th><th>Demanda</th><th>Aplicadas</th><th>Restante</th><th>GAP</th></tr>
+              <tr><th>Aplicador</th><th>Ponto</th><th>Vacina</th><th>Estoque</th><th>Demanda</th><th>Saldo</th><th>Sugestão</th><th>Status</th><th>Ação ADM</th></tr>
             </thead>
             <tbody>
-              {filtered.length === 0 && (
-                <tr><td colSpan={9}><div className="empty-state"><div className="empty-text">Nenhum registro encontrado. Importe tarefas e escalas primeiro.</div></div></td></tr>
-              )}
-              {filtered.slice(0, 100).map((i, idx) => (
-                <tr key={idx}>
-                  <td style={{color:'var(--text-primary)',fontWeight:500,maxWidth:160,overflow:'hidden',textOverflow:'ellipsis'}}>{i.aplicador_nome}</td>
-                  <td className="mono" style={{fontSize:11}}>{i.cpf}</td>
-                  <td>{i.cidade} / {i.uf}</td>
-                  <td>{i.vacina_nome}</td>
-                  <td className="mono">{i.estoque_atual}</td>
-                  <td className="mono">{i.total_demanda}</td>
-                  <td className="mono" style={{color:'var(--success)'}}>{i.total_aplicado}</td>
-                  <td className="mono">{i.demanda_restante}</td>
-                  <td className="mono" style={{fontWeight:700,fontSize:15,color:i.gap_envio>0?'var(--danger)':i.gap_envio<0?'var(--success)':'var(--text-muted)'}}>
-                    {i.gap_envio > 0 ? `+${i.gap_envio}` : i.gap_envio}
-                  </td>
-                </tr>
-              ))}
+              {loading && <tr><td colSpan={9}><div className="empty-state"><div className="empty-text">Carregando...</div></div></td></tr>}
+              {!loading && filtered.length === 0 && <tr><td colSpan={9}><div className="empty-state"><div className="empty-text">Nenhum registro encontrado para os filtros.</div></div></td></tr>}
+              {!loading && filtered.slice(0,300).map(i => {
+                const st = statusPlanejamento(i);
+                return (
+                  <tr key={i.key}>
+                    <td style={{color:'var(--text-primary)',fontWeight:500,maxWidth:180,overflow:'hidden',textOverflow:'ellipsis'}} title={i.aplicador_nome}>{i.aplicador_nome}<div style={{fontSize:11,color:'var(--text-muted)'}}>{i.cpf || '—'} · {i.cidade || '—'}/{i.uf || '—'}</div></td>
+                    <td>{i.ponto_partida || '—'}<div style={{fontSize:11,color:'var(--text-muted)'}}>Base: {i.base_origem_nome}</div></td>
+                    <td>{i.vacina_nome}</td>
+                    <td className="mono" style={{color:'var(--accent)',fontWeight:700}}>{Number(i.estoque_atual||0).toLocaleString('pt-BR')}</td>
+                    <td className="mono" style={{fontWeight:700}}>{Number(i.demanda_futura||0).toLocaleString('pt-BR')}<div style={{fontSize:10,color:'var(--text-muted)'}}>{i.tarefas.length} tarefa(s)</div></td>
+                    <td className="mono" style={{fontWeight:700,color:i.saldo_projetado>=0?'var(--success)':'var(--danger)'}}>{i.saldo_projetado>=0?'+':''}{Number(i.saldo_projetado||0).toLocaleString('pt-BR')}</td>
+                    <td><span className={`badge ${i.necessidade>0?'badge-yellow':'badge-green'}`}>{i.sugestao}</span></td>
+                    <td><span className={`badge ${badgeStatus(st)}`}>{labelStatus(st)}</span></td>
+                    <td>
+                      {isAdmin ? (
+                        <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+                          <select className="form-select" style={{padding:'6px 8px',fontSize:12,minWidth:150}} value={st} onChange={e=>updateStatus(i,e.target.value)}>
+                            <option value="pendente_analise">Pendente análise</option>
+                            <option value="nao_enviar_estoque_suficiente">Não enviar</option>
+                            <option value="envio_sugerido">Envio sugerido</option>
+                            <option value="envio_aprovado">Envio aprovado</option>
+                            <option value="em_montagem">Em montagem</option>
+                            <option value="montado">Montado</option>
+                            <option value="carregado">Carregado</option>
+                            <option value="em_rota">Em rota</option>
+                            <option value="entregue">Entregue</option>
+                            <option value="cancelado">Cancelado</option>
+                          </select>
+                          {i.necessidade > 0 && <button className="btn btn-success btn-sm" onClick={()=>confirmarEntrega(i)}>Confirmar entrega</button>}
+                          {i.necessidade <= 0 && i.demanda_futura > 0 && <button className="btn btn-secondary btn-sm" onClick={()=>savePlanning(i,'nao_enviar_estoque_suficiente',{observacao:'Estoque atual cobre a demanda futura.'})}>Confirmar não envio</button>}
+                        </div>
+                      ) : <span style={{fontSize:12,color:'var(--text-muted)'}}>Somente ADM</span>}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -5075,7 +5580,7 @@ function App() {
       case 'tarefas': return <TarefasPage profile={profile} />;
       case 'escalas': return <EscalasPage />;
       case 'estoque': return <EstoquePage />;
-      case 'demanda': return <DemandaOfertaPage />;
+      case 'demanda': return <DemandaOfertaPage profile={profile} />;
       case 'movimentacoes': return <MovimentacoesPage />;
       case 'rotas': return <RotasPage />;
       case 'veiculos': return <VeiculosPage />;
