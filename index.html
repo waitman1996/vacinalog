@@ -55,8 +55,20 @@ body {
 .sidebar {
   width: 260px; background: var(--bg-card); border-right: 1px solid var(--border);
   display: flex; flex-direction: column; position: fixed; top: 0; left: 0; bottom: 0;
-  z-index: 50; transition: transform 0.25s ease;
+  z-index: 50; transition: width 0.25s ease, transform 0.25s ease; overflow: hidden;
 }
+.sidebar.collapsed { width: 56px; }
+.sidebar.collapsed .sidebar-role,
+.sidebar.collapsed .nav-label,
+.sidebar.collapsed .nav-section,
+.sidebar.collapsed .user-details,
+.sidebar.collapsed .btn-logout { display: none; }
+.sidebar.collapsed .sidebar-logo { font-size: 16px; }
+.sidebar.collapsed .nav-item { justify-content: center; padding: 10px 0; }
+.sidebar.collapsed .nav-icon { margin: 0; font-size: 19px; }
+.sidebar.collapsed .sidebar-header { padding: 14px 8px; align-items: center; justify-content: center; flex-direction: column; gap: 8px; }
+.sidebar.collapsed .sidebar-footer { padding: 10px 8px; }
+.sidebar.collapsed .user-info { justify-content: center; }
 .sidebar-header {
   padding: 20px 20px 16px; border-bottom: 1px solid var(--border);
 }
@@ -105,7 +117,8 @@ body {
 }
 .btn-logout:hover { background: rgba(239,68,68,0.2); }
 
-.main-content { flex: 1; margin-left: 260px; padding: 24px 28px; min-height: 100vh; }
+.main-content { flex: 1; margin-left: 260px; padding: 24px 28px; min-height: 100vh; transition: margin-left 0.25s ease; }
+.main-content.collapsed { margin-left: 56px; }
 .page-header {
   display: flex; align-items: center; justify-content: space-between;
   margin-bottom: 24px; gap: 16px; flex-wrap: wrap;
@@ -468,7 +481,7 @@ function LoginScreen({ onLogin }) {
 // ═══════════════════════════════════════════════
 // SIDEBAR
 // ═══════════════════════════════════════════════
-function Sidebar({ profile, currentPage, onNavigate, open, onClose }) {
+function Sidebar({ profile, currentPage, onNavigate, open, onClose, collapsed, onToggleCollapse }) {
   const role = profile?.role || 'aplicador';
   const menuItems = [];
 
@@ -527,35 +540,48 @@ function Sidebar({ profile, currentPage, onNavigate, open, onClose }) {
   }
 
   return (
-    <div className={`sidebar ${open ? 'open' : ''}`}>
-      <div className="sidebar-header">
-        <div className="sidebar-logo">VacinaLog</div>
-        <div className="sidebar-role">{ROLE_LABELS[role]}</div>
+    <div className={`sidebar ${open ? 'open' : ''} ${collapsed ? 'collapsed' : ''}`}>
+      <div className="sidebar-header" style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding: collapsed ? '14px 8px' : '16px 16px 12px'}}>
+        {!collapsed && <div className="sidebar-logo">VacinaLog</div>}
+        {collapsed && <div style={{fontSize:20,fontWeight:900,background:'linear-gradient(135deg,#2563eb,#06b6d4)',WebkitBackgroundClip:'text',WebkitTextFillColor:'transparent'}}>V</div>}
+        <button onClick={onToggleCollapse} title={collapsed ? 'Expandir menu' : 'Recolher menu'}
+          style={{background:'none',border:'1px solid var(--border)',borderRadius:6,color:'var(--text-muted)',cursor:'pointer',padding:'4px 7px',fontSize:13,lineHeight:1,flexShrink:0}}>
+          {collapsed ? '»' : '«'}
+        </button>
       </div>
+      {!collapsed && <div className="sidebar-role" style={{padding:'0 16px 8px',fontSize:10,color:'var(--text-muted)',textTransform:'uppercase',letterSpacing:1.5}}>{ROLE_LABELS[role]}</div>}
       <div className="sidebar-nav">
         {menuItems.map((item, i) =>
           item.section ? (
-            <div key={i} className="nav-section">{item.section}</div>
+            !collapsed && <div key={i} className="nav-section">{item.section}</div>
           ) : (
             <div key={item.id} className={`nav-item ${currentPage === item.id ? 'active' : ''}`}
-              onClick={() => { onNavigate(item.id); onClose(); }}>
+              title={collapsed ? item.label : ''}
+              onClick={() => { onNavigate(item.id); onClose(); }}
+              style={collapsed ? {justifyContent:'center',padding:'10px 0'} : {}}>
               <span className="nav-icon">{item.icon}</span>
-              {item.label}
+              {!collapsed && <span className="nav-label">{item.label}</span>}
             </div>
           )
         )}
       </div>
       <div className="sidebar-footer">
         <div className="user-info">
-          <div className="user-avatar">{(profile?.nome || '?')[0].toUpperCase()}</div>
-          <div>
-            <div className="user-name">{profile?.nome || 'Usuário'}</div>
-            <div className="user-email">{profile?.email || ''}</div>
-          </div>
+          <div className="user-avatar" title={collapsed ? profile?.nome : ''}>{(profile?.nome || '?')[0].toUpperCase()}</div>
+          {!collapsed && (
+            <div className="user-details">
+              <div className="user-name">{profile?.nome || 'Usuário'}</div>
+              <div className="user-email">{profile?.email || ''}</div>
+            </div>
+          )}
         </div>
-        <button className="btn-logout" onClick={async () => { await sb.auth.signOut(); window.location.reload(); }}>
-          Sair
-        </button>
+        {!collapsed && (
+          <button className="btn-logout" onClick={async () => { await sb.auth.signOut(); window.location.reload(); }}>Sair</button>
+        )}
+        {collapsed && (
+          <button title="Sair" onClick={async () => { await sb.auth.signOut(); window.location.reload(); }}
+            style={{background:'none',border:'none',color:'var(--danger)',cursor:'pointer',fontSize:18,marginTop:8,width:'100%',textAlign:'center'}}>⏻</button>
+        )}
       </div>
     </div>
   );
@@ -2256,25 +2282,43 @@ function RoteirizacaoPage({ onBack }) {
     setSaving(true);
     const userId = (await sb.auth.getUser()).data.user.id;
     const veiculo = veiculos.find(v => v.id === veiculoId);
+
+    // Criar rota
     const { data: rota, error: re } = await sb.from('rotas').insert({
       base_origem_id: baseOrigem, data_prevista: rotaData, tipo: rotaTipo,
       motorista_id: motoristaId, veiculo: veiculo ? veiculo.modelo+' - '+veiculo.placa : null,
       veiculo_id: veiculoId||null, criado_por: userId, codigo: ''
     }).select().single();
     if (re) { toast(re.message, 'error'); setSaving(false); return; }
+
+    // Buscar aplicadores por CPF para resolver os IDs
+    const cpfs = paradas.map(p => p.cpf).filter(Boolean);
+    let apMap = {};
+    if (cpfs.length > 0) {
+      const { data: aps } = await sb.from('aplicadores').select('id, cpf').in('cpf', cpfs);
+      (aps || []).forEach(a => { apMap[a.cpf] = a.id; });
+    }
+
     let errs = 0;
     for (const p of paradas) {
-      const obs = p.tarefas.map(t => t.codigo_tarefa).join(', ');
+      const aplicadorId = apMap[p.cpf] || null;
+      const obs = p.nome+' ('+p.cpf+') | '+p.doses+' doses | '+p.tarefas.map(t => t.codigo_tarefa).join(', ');
       const { error } = await sb.from('remessas').insert({
-        rota_id: rota.id, tipo: rotaTipo==='coleta'?'coleta':'entrega',
-        destino_tipo: 'base', destino_base_id: baseOrigem,
-        ordem_entrega: p.ordem, observacao: p.nome+' ('+p.cpf+') | '+p.doses+' doses | '+obs,
+        rota_id: rota.id,
+        tipo: rotaTipo === 'coleta' ? 'coleta' : 'entrega',
+        // Se tiver aplicador vinculado, destino é o aplicador; senão usa base
+        destino_tipo: aplicadorId ? 'aplicador' : 'base',
+        destino_aplicador_id: aplicadorId || null,
+        destino_base_id: aplicadorId ? null : baseOrigem,
+        ordem_entrega: p.ordem,
+        observacao: obs,
         codigo_rastreio: ''
       });
       if (error) errs++;
     }
     setSaving(false);
-    toast('Rota '+rota.codigo+' criada com '+paradas.length+' paradas!', 'success');
+    if (errs > 0) toast('Rota '+rota.codigo+' criada com '+errs+' erros em remessas', 'error');
+    else toast('Rota '+rota.codigo+' criada com '+paradas.length+' paradas!', 'success');
     onBack();
   };
 
@@ -3787,6 +3831,292 @@ function CheckoutModal({ rota, entregues, total, onClose, onConfirm }) {
   );
 }
 
+// ═══════════════════════════════════════════════
+// MÓDULO APLICADOR
+// ═══════════════════════════════════════════════
+function MinhasDosesPage() {
+  const [aplicador, setAplicador] = useState(null);
+  const [estoque, setEstoque] = useState([]);
+  const [escalas, setEscalas] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const toast = useContext(ToastContext);
+
+  useEffect(() => {
+    const init = async () => {
+      const { data: { user } } = await sb.auth.getUser();
+      if (!user) return;
+      const { data: profile } = await sb.from('profiles').select('cpf').eq('id', user.id).single();
+      if (!profile?.cpf) { setLoading(false); return; }
+      const { data: ap } = await sb.from('aplicadores').select('*').eq('cpf', profile.cpf).single();
+      if (!ap) { setLoading(false); return; }
+      setAplicador(ap);
+
+      const [estoqueRes, escalasRes] = await Promise.all([
+        sb.from('estoque').select('*, vacinas(nome, lote, validade)')
+          .eq('aplicador_id', ap.id).eq('localizacao_tipo', 'aplicador'),
+        sb.from('escalas').select('*, tarefas(codigo, cliente, cidade_campanha, uf_campanha)')
+          .eq('aplicador_id', ap.id)
+          .in('status', ['aprovada','em_validacao','em_execucao','pronta_faturamento'])
+          .order('data_inicio', { ascending: true })
+      ]);
+      setEstoque(estoqueRes.data || []);
+      setEscalas(escalasRes.data || []);
+      setLoading(false);
+    };
+    init();
+  }, []);
+
+  const totalDoses = estoque.reduce((s,e) => s + (e.quantidade||0), 0);
+  const dosesNecessarias = escalas.reduce((s,e) => s + (e.doses_necessarias||0), 0);
+  const dosesAplicadas = escalas.reduce((s,e) => s + (e.doses_aplicadas||0), 0);
+  const gap = dosesNecessarias - dosesAplicadas - totalDoses;
+
+  if (loading) return <div style={{textAlign:'center',padding:60,color:'var(--text-muted)'}}>Carregando...</div>;
+
+  if (!aplicador) return (
+    <div className="card">
+      <div className="empty-state">
+        <div className="empty-icon">👤</div>
+        <div className="empty-text">Seu perfil não está vinculado a um aplicador.<br/>Verifique se seu CPF está cadastrado no sistema.</div>
+      </div>
+    </div>
+  );
+
+  return (
+    <div>
+      <div className="page-header">
+        <div><div className="page-title">Minhas Doses</div><div className="page-subtitle">{aplicador.nome} · CPF: {aplicador.cpf}</div></div>
+      </div>
+
+      <div className="stats-grid" style={{marginBottom:20}}>
+        <div className="stat-card">
+          <div className="stat-icon" style={{background:'var(--accent-subtle)',color:'var(--accent)'}}>💉</div>
+          <div className="stat-value">{totalDoses.toLocaleString('pt-BR')}</div>
+          <div className="stat-label">Doses em Custódia</div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-icon" style={{background:'var(--warning-bg)',color:'var(--warning)'}}>📋</div>
+          <div className="stat-value">{dosesNecessarias.toLocaleString('pt-BR')}</div>
+          <div className="stat-label">Doses Necessárias</div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-icon" style={{background:'var(--success-bg)',color:'var(--success)'}}>✓</div>
+          <div className="stat-value">{dosesAplicadas.toLocaleString('pt-BR')}</div>
+          <div className="stat-label">Doses Aplicadas</div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-icon" style={{background: gap > 0 ? 'var(--danger-bg)' : 'var(--success-bg)', color: gap > 0 ? 'var(--danger)' : 'var(--success)'}}>⚖️</div>
+          <div className="stat-value" style={{color: gap > 0 ? 'var(--danger)' : 'var(--success)'}}>{gap > 0 ? '+'+gap : gap}</div>
+          <div className="stat-label">{gap > 0 ? 'Aguardando Envio' : 'OK'}</div>
+        </div>
+      </div>
+
+      {/* Estoque atual */}
+      <div className="card" style={{marginBottom:16}}>
+        <div className="card-header"><div className="card-title">💊 Estoque em Mãos</div></div>
+        {estoque.length === 0
+          ? <div style={{color:'var(--text-muted)',fontSize:13,fontStyle:'italic'}}>Nenhuma dose em custódia no momento.</div>
+          : <div className="table-wrap"><table><thead>
+              <tr><th>Vacina</th><th>Lote</th><th>Validade</th><th>Quantidade</th></tr>
+            </thead><tbody>
+              {estoque.map(e => (
+                <tr key={e.id}>
+                  <td style={{fontWeight:500,color:'var(--text-primary)'}}>{e.vacinas?.nome}</td>
+                  <td className="mono">{e.vacinas?.lote || '—'}</td>
+                  <td>{e.vacinas?.validade ? new Date(e.vacinas.validade+'T12:00:00').toLocaleDateString('pt-BR') : '—'}</td>
+                  <td className="mono" style={{fontWeight:700,fontSize:16,color: e.quantidade < 0 ? 'var(--danger)' : 'var(--success)'}}>
+                    {e.quantidade}
+                  </td>
+                </tr>
+              ))}
+            </tbody></table></div>
+        }
+      </div>
+
+      {/* Escalas ativas */}
+      <div className="card">
+        <div className="card-header"><div className="card-title">📅 Minhas Tarefas Ativas</div></div>
+        {escalas.length === 0
+          ? <div style={{color:'var(--text-muted)',fontSize:13,fontStyle:'italic'}}>Nenhuma tarefa ativa no momento.</div>
+          : <div className="table-wrap"><table><thead>
+              <tr><th>Tarefa</th><th>Cliente</th><th>Data</th><th>Necessário</th><th>Aplicado</th><th>Perdido</th><th>Saldo</th></tr>
+            </thead><tbody>
+              {escalas.map(e => {
+                const saldo = e.doses_necessarias - e.doses_aplicadas - e.doses_perdidas - e.doses_danificadas;
+                return (
+                  <tr key={e.id}>
+                    <td className="mono" style={{fontSize:11,maxWidth:180,overflow:'hidden',textOverflow:'ellipsis'}}>{e.codigo_tarefa}</td>
+                    <td style={{maxWidth:160,overflow:'hidden',textOverflow:'ellipsis'}}>{e.tarefas?.cliente || '—'}</td>
+                    <td>{e.data_inicio ? new Date(e.data_inicio+'T12:00:00').toLocaleDateString('pt-BR') : '—'}</td>
+                    <td className="mono">{e.doses_necessarias}</td>
+                    <td className="mono" style={{color:'var(--success)'}}>{e.doses_aplicadas}</td>
+                    <td className="mono" style={{color:e.doses_perdidas>0?'var(--warning)':'inherit'}}>{e.doses_perdidas}</td>
+                    <td className="mono" style={{fontWeight:600,color: saldo > 0 ? 'var(--accent)' : 'var(--success)'}}>{saldo}</td>
+                  </tr>
+                );
+              })}
+            </tbody></table></div>
+        }
+      </div>
+    </div>
+  );
+}
+
+function AbatimentoPage() {
+  const [aplicador, setAplicador] = useState(null);
+  const [escalas, setEscalas] = useState([]);
+  const [vacinas, setVacinas] = useState([]);
+  const [form, setForm] = useState({ escala_id: '', tipo: 'vacinados', quantidade: '', observacao: '' });
+  const [saving, setSaving] = useState(false);
+  const [historico, setHistorico] = useState([]);
+  const toast = useContext(ToastContext);
+
+  useEffect(() => {
+    const init = async () => {
+      const { data: { user } } = await sb.auth.getUser();
+      if (!user) return;
+      const { data: profile } = await sb.from('profiles').select('cpf').eq('id', user.id).single();
+      if (!profile?.cpf) return;
+      const { data: ap } = await sb.from('aplicadores').select('*').eq('cpf', profile.cpf).single();
+      if (!ap) return;
+      setAplicador(ap);
+
+      const [escalasRes, vacinasRes, histRes] = await Promise.all([
+        sb.from('escalas').select('id, codigo_tarefa, doses_necessarias, doses_aplicadas, doses_perdidas, doses_danificadas, vacinas(nome), tarefas(cliente, cidade_campanha)')
+          .eq('aplicador_id', ap.id)
+          .in('status', ['aprovada','em_validacao','em_execucao','pronta_faturamento'])
+          .order('data_inicio'),
+        sb.from('vacinas').select('id, nome').eq('ativa', true).order('nome'),
+        sb.from('abatimentos').select('*, escalas(codigo_tarefa), vacinas(nome)').eq('aplicador_id', ap.id)
+          .order('created_at', { ascending: false }).limit(20)
+      ]);
+      setEscalas(escalasRes.data || []);
+      setVacinas(vacinasRes.data || []);
+      setHistorico(histRes.data || []);
+    };
+    init();
+  }, []);
+
+  const registrar = async () => {
+    if (!form.escala_id || !form.quantidade || parseInt(form.quantidade) <= 0) {
+      toast('Preencha escala e quantidade', 'error'); return;
+    }
+    setSaving(true);
+    const { error } = await sb.rpc('registrar_abatimento', {
+      p_escala_id: form.escala_id,
+      p_tipo: form.tipo,
+      p_quantidade: parseInt(form.quantidade),
+      p_observacao: form.observacao || null
+    });
+    if (error) { toast(error.message, 'error'); setSaving(false); return; }
+    toast('Abatimento registrado com sucesso!', 'success');
+    setForm({ escala_id: '', tipo: 'vacinados', quantidade: '', observacao: '' });
+    setSaving(false);
+    // Recarregar histórico
+    if (aplicador) {
+      const { data } = await sb.from('abatimentos').select('*, escalas(codigo_tarefa), vacinas(nome)')
+        .eq('aplicador_id', aplicador.id).order('created_at', { ascending: false }).limit(20);
+      setHistorico(data || []);
+    }
+  };
+
+  const TIPO_LABELS = { vacinados: '💉 Vacinados', perdidas: '⚠️ Perdidas', danificadas: '🚫 Danificadas' };
+  const TIPO_COLORS = { vacinados: 'var(--success)', perdidas: 'var(--warning)', danificadas: 'var(--danger)' };
+
+  const escSel = escalas.find(e => e.id === form.escala_id);
+  const saldoDisp = escSel ? (escSel.doses_necessarias - escSel.doses_aplicadas - escSel.doses_perdidas - escSel.doses_danificadas) : null;
+
+  return (
+    <div>
+      <div className="page-header">
+        <div><div className="page-title">Registrar Abatimento</div><div className="page-subtitle">Vacinados, perdas e danos</div></div>
+      </div>
+
+      {/* Formulário */}
+      <div className="card" style={{marginBottom:16}}>
+        <div className="card-title" style={{marginBottom:14}}>Novo Registro</div>
+        <div className="form-grid">
+          <div className="form-group" style={{gridColumn:'1/-1'}}>
+            <label className="form-label">Escala / Tarefa *</label>
+            <select className="form-select" value={form.escala_id} onChange={e=>setForm(f=>({...f,escala_id:e.target.value}))}>
+              <option value="">Selecione uma tarefa...</option>
+              {escalas.map(e => {
+                const saldo = e.doses_necessarias - e.doses_aplicadas - e.doses_perdidas - e.doses_danificadas;
+                return (
+                  <option key={e.id} value={e.id}>
+                    {e.tarefas?.cliente || e.codigo_tarefa} — {e.vacinas?.nome} — Saldo: {saldo}
+                  </option>
+                );
+              })}
+            </select>
+            {escSel && (
+              <div style={{marginTop:6,display:'flex',gap:10,flexWrap:'wrap',fontSize:12}}>
+                <span style={{color:'var(--text-muted)'}}>Necessário: <strong>{escSel.doses_necessarias}</strong></span>
+                <span style={{color:'var(--success)'}}>Aplicado: <strong>{escSel.doses_aplicadas}</strong></span>
+                <span style={{color:'var(--warning)'}}>Perdido: <strong>{escSel.doses_perdidas}</strong></span>
+                <span style={{color:'var(--accent)'}}>Saldo disponível: <strong>{saldoDisp}</strong></span>
+              </div>
+            )}
+          </div>
+          <div className="form-group">
+            <label className="form-label">Tipo *</label>
+            <div style={{display:'flex',gap:8}}>
+              {['vacinados','perdidas','danificadas'].map(t => (
+                <button key={t} className={`btn btn-sm ${form.tipo===t ? 'btn-primary' : 'btn-secondary'}`}
+                  style={{flex:1,fontSize:11}} onClick={() => setForm(f=>({...f,tipo:t}))}>
+                  {TIPO_LABELS[t]}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="form-group">
+            <label className="form-label">Quantidade *</label>
+            <input className="form-input" type="number" min="1"
+              max={saldoDisp || undefined}
+              value={form.quantidade} onChange={e=>setForm(f=>({...f,quantidade:e.target.value}))}
+              style={{borderColor: form.quantidade && saldoDisp !== null && parseInt(form.quantidade) > saldoDisp ? 'var(--danger)' : undefined}} />
+            {form.quantidade && saldoDisp !== null && parseInt(form.quantidade) > saldoDisp && (
+              <div style={{fontSize:11,color:'var(--danger)',marginTop:3}}>⚠ Quantidade maior que o saldo disponível ({saldoDisp})</div>
+            )}
+          </div>
+          <div className="form-group" style={{gridColumn:'1/-1'}}>
+            <label className="form-label">Observação</label>
+            <input className="form-input" value={form.observacao} onChange={e=>setForm(f=>({...f,observacao:e.target.value}))} placeholder="Motivo da perda, número do lote, etc." />
+          </div>
+        </div>
+        <div style={{marginTop:14,display:'flex',gap:10,alignItems:'center'}}>
+          <button className="btn btn-primary" onClick={registrar} disabled={saving || !form.escala_id || !form.quantidade}>
+            {saving ? 'Registrando...' : '✓ Registrar ' + TIPO_LABELS[form.tipo]}
+          </button>
+          {form.tipo !== 'vacinados' && (
+            <span style={{fontSize:12,color:'var(--warning)'}}>⚠ Perdas e danos debitam do seu saldo</span>
+          )}
+        </div>
+      </div>
+
+      {/* Histórico */}
+      <div className="card">
+        <div className="card-title" style={{marginBottom:12}}>Histórico Recente</div>
+        {historico.length === 0
+          ? <div style={{color:'var(--text-muted)',fontSize:13,fontStyle:'italic'}}>Nenhum registro ainda.</div>
+          : <div className="table-wrap"><table><thead>
+              <tr><th>Data</th><th>Tarefa</th><th>Tipo</th><th>Qtd</th></tr>
+            </thead><tbody>
+              {historico.map(h => (
+                <tr key={h.id}>
+                  <td style={{fontSize:12}}>{new Date(h.created_at).toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'})}</td>
+                  <td className="mono" style={{fontSize:11}}>{h.escalas?.codigo_tarefa}</td>
+                  <td><span style={{fontSize:11,fontWeight:600,color:TIPO_COLORS[h.tipo]}}>{TIPO_LABELS[h.tipo]}</span></td>
+                  <td className="mono" style={{fontWeight:700}}>{h.quantidade}</td>
+                </tr>
+              ))}
+            </tbody></table></div>
+        }
+      </div>
+    </div>
+  );
+}
+
 function PlaceholderPage({ title, icon, description }) {
   return (
     <div>
@@ -3995,6 +4325,7 @@ function App() {
   const [profile, setProfile] = useState(null);
   const [currentPage, setCurrentPage] = useState('dashboard');
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [conferirDados, setConferirDados] = useState(null);
   const [viewAs, setViewAs] = useState(null); // null = perfil real, ou 'admin'|'planejador'|'motorista' etc
 
@@ -4058,8 +4389,8 @@ function App() {
       case 'montagem': return <MontagemPage />;
       case 'etiquetas': return <EtiquetasPage />;
       case 'minhas-rotas': return <MotoristaPage />;
-      case 'minhas-doses': return <PlaceholderPage title="Minhas Doses" icon="💉" description="Saldo de doses sob sua custódia" />;
-      case 'abatimento': return <PlaceholderPage title="Registrar Abatimento" icon="✏️" description="Registrar vacinados, perdas e danos" />;
+      case 'minhas-doses': return <MinhasDosesPage />;
+      case 'abatimento': return <AbatimentoPage />;
       case 'usuarios': return <UsuariosPage />;
       default: return <DashboardPage />;
     }
@@ -4075,8 +4406,9 @@ function App() {
       <div className="mobile-toggle" onClick={() => setSidebarOpen(!sidebarOpen)}>☰</div>
       <Sidebar profile={effectiveProfile} currentPage={currentPage}
         onNavigate={(page) => { setCurrentPage(page); setSidebarOpen(false); }}
-        open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
-      <div className="main-content">
+        open={sidebarOpen} onClose={() => setSidebarOpen(false)}
+        collapsed={sidebarCollapsed} onToggleCollapse={() => setSidebarCollapsed(c => !c)} />
+      <div className={`main-content ${sidebarCollapsed ? 'collapsed' : ''}`}>
         {/* Seletor de visão — só aparece para admin */}
         {isAdmin && (
           <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:16,padding:'8px 14px',background:'var(--bg-card)',borderRadius:'var(--radius-sm)',border:'1px solid var(--border)',flexWrap:'wrap'}}>
