@@ -2731,7 +2731,7 @@ function DemandaOfertaPage({ profile }) {
     try {
       const range = weekRange(semana);
       const [escalas, tarefasFallback, estoque, vacinas, bases, aplicadores, planning] = await Promise.all([
-        fetchAll('escalas', 'id,tarefa_id,codigo_tarefa,aplicador_id,tutor_nome,tutor_cpf,ponto_partida,doses_necessarias,doses_aplicadas,vacina_id,tipo_vacina,data_inicio,data_termino,semanas,status,base_id,base_nome,tarefas(id,codigo,cliente,cidade_campanha,uf_campanha,data_inicio,doses_previstas,status_logistica,semanas,vacina_id,vacina,ponto_partida,base_id,base_nome)'),
+        fetchAll('escalas', 'id,tarefa_id,codigo_tarefa,aplicador_id,tutor_nome,tutor_cpf,ponto_partida,doses_necessarias,doses_aplicadas,vacina_id,tipo_vacina,data_inicio,data_termino,semanas,status,base_id,base_nome'),
         fetchAll('tarefas', 'id,codigo,cliente,cidade_campanha,uf_campanha,data_inicio,doses_previstas,status,status_logistica,semanas,vacina_id,vacina,ponto_partida,base_id,base_nome'),
         fetchAll('estoque', 'vacina_id,aplicador_id,base_id,localizacao_tipo,quantidade,aplicadores(id,nome,cpf,cidade,uf,base_vinculada_id),vacinas(id,nome)', q => q.eq('localizacao_tipo','aplicador')),
         fetchAll('vacinas', 'id,nome'),
@@ -2746,6 +2746,13 @@ function DemandaOfertaPage({ profile }) {
       (vacinas || []).forEach(v => { vacinaMap[v.id] = v.nome; vacinaNomeMap[norm(v.nome)] = v.id; });
       const baseMap = {}; (bases || []).forEach(b => baseMap[b.id] = b);
       const apMap = {}; (aplicadores || []).forEach(a => apMap[a.id] = a);
+      const tarefaById = {};
+      const tarefaByCodigo = {};
+      (tarefasFallback || []).forEach(t => {
+        if (t.id) tarefaById[t.id] = t;
+        const c = String(t.codigo || '').trim();
+        if (c) tarefaByCodigo[c] = t;
+      });
 
       const resolveVacinaId = (e, t={}) => {
         if (e?.vacina_id) return e.vacina_id;
@@ -2782,7 +2789,8 @@ function DemandaOfertaPage({ profile }) {
 
       // Principal: todos os aplicadores escalados entram, mesmo com estoque zerado.
       (escalas || []).forEach(e => {
-        const t = e.tarefas || {};
+        const codigoEscala = String(e.codigo_tarefa || '').trim();
+        const t = tarefaById[e.tarefa_id] || tarefaByCodigo[codigoEscala] || {};
         const data = (t.data_inicio || e.data_inicio || '').slice(0,10);
         if (!data || data < start || data > end) return;
         const statusEscala = String(e.status || t.status || '').toLowerCase();
