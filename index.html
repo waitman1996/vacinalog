@@ -3681,202 +3681,229 @@ function RoteirizacaoPage({ onBack }) {
       .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
       .replace(/[^A-Z0-9]/g, '');
 
+    const normalizeStatusKey = (status) => {
+      const raw = String(status || '').trim();
+      if (!raw) return 'aprovada';
+      if (STATUS_MAP[raw]) return STATUS_MAP[raw];
+      const key = raw
+        .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+        .toLowerCase()
+        .replace(/ç/g, 'c')
+        .replace(/[^a-z0-9]+/g, '_')
+        .replace(/^_+|_+$/g, '');
+      const aliases = {
+        'em_validacao': 'em_validacao',
+        'em_execucao': 'em_execucao',
+        'pronta_p_faturamento': 'pronta_faturamento',
+        'pronta_fat': 'pronta_faturamento',
+        'pronta_faturamento': 'pronta_faturamento',
+        'aprovada': 'aprovada',
+        'cancelada': 'cancelada'
+      };
+      return aliases[key] || key || 'aprovada';
+    };
+
     const fetchPaged = async (table, select, queryBuilder) => {
       let all = [];
-      let page = 0;
-      while (true) {
+      for (let page = 0; ; page++) {
         let q = sb.from(table).select(select).range(page * PAGE, (page + 1) * PAGE - 1);
         if (queryBuilder) q = queryBuilder(q);
         const { data, error } = await q;
         if (error) throw error;
-        if (!data || data.length === 0) break;
-        all = all.concat(data);
-        if (data.length < PAGE) break;
-        page++;
+        all = all.concat(data || []);
+        if (!data || data.length < PAGE) break;
       }
       return all;
     };
 
-    let allRows = [];
     try {
-      // Consulta robusta: não depende de relacionamento embedded com aplicadores.
-      // Antes, quando o relacionamento falhava, a tela ficava vazia e mostrava "Importe escalas primeiro".
-      allRows = await fetchPaged(
-        'escalas',
-        'id,tarefa_id,codigo_tarefa,aplicador_id,tutor_nome,tutor_cpf,ponto_partida,doses_necessarias,data_inicio,data_termino,base_nome,base_id,status,endereco_tarefa,vacina_id,tipo_vacina,semanas',
-        q => q.order('tutor_nome')
-      );
-    } catch (err) {
-      console.warn('Falha ao carregar escalas com colunas esperadas. Tentando select *:', err);
+      // Carregamento principal baseado na própria tabela escalas.
+      // Essa é a mesma fonte da aba Escalas, então não depende de relacionamento ou join para aparecer.
+      let allRows = [];
       try {
-        allRows = await fetchPaged('escalas', '*', q => q.order('tutor_nome'));
-      } catch (err2) {
-        console.error('Erro ao carregar escalas:', err2);
-        toast('Erro ao carregar escalas: ' + (err2.message || err2), 'error');
-        allRows = [];
+        allRows = await fetchPaged('escalas', '*', q => q.order('data_inicio', { ascending: true }));
+      } catch (err) {
+        console.warn('Falha no order por data_inicio. Tentando sem order:', err);
+        allRows = await fetchPaged('escalas', '*');
       }
-    }
 
-    // Buscar aplicadores em separado para preencher cidade/UF/endereço, sem travar a consulta de escalas.
-    const apIds = [...new Set(allRows.map(e => e.aplicador_id).filter(Boolean))];
-    const apById = {};
-    for (let i = 0; i < apIds.length; i += 500) {
-      const ids = apIds.slice(i, i + 500);
-      const { data: aps, error: apErr } = await sb.from('aplicadores')
-        .select('id,nome,cpf,cidade,uf,endereco,base_vinculada_id')
-        .in('id', ids);
-      if (!apErr && aps) aps.forEach(a => { apById[a.id] = a; });
-    }
-
-    // Buscar aplicadores que JÁ têm remessas ativas (não concluídas/canceladas)
-    const { data: remessasAtivas } = await sb.from('remessas')
-      .select('destino_aplicador_id')
-      .not('destino_aplicador_id', 'is', null)
-      .not('status', 'in', '("concluida","cancelada")');
-    const apJaRoteirizados = new Set((remessasAtivas || []).map(r => r.destino_aplicador_id));
-
-    // Buscar tarefas para usar status/data/doses corretos e cruzar com escala.
-    let tarefasAll = [];
-    try {
-      tarefasAll = await fetchPaged(
-        'tarefas',
-        'id,codigo,cliente,cidade_campanha,uf_campanha,data_inicio,doses_previstas,status,status_logistica,ponto_partida,base_id,base_nome,vacina_id,semanas',
-        q => q.order('data_inicio', { ascending: true })
-      );
-    } catch (err) {
-      console.warn('Não foi possível carregar tarefas para roteirização:', err);
-      tarefasAll = [];
-    }
-
-    // Buscar estoque atual dos aplicadores para mostrar na roteirização.
-    let estoqueAplicadorAll = [];
-    try {
-      estoqueAplicadorAll = await fetchPaged(
-        'estoque',
-        'aplicador_id,vacina_id,quantidade,localizacao_tipo',
-        q => q.eq('localizacao_tipo', 'aplicador')
-      );
-    } catch (err) {
-      console.warn('Não foi possível carregar estoque dos aplicadores para roteirização:', err);
-      estoqueAplicadorAll = [];
-    }
-
-    const estoqueByAplicador = {};
-    const estoqueByAplicadorVacina = {};
-    estoqueAplicadorAll.forEach(s => {
-      if (!s.aplicador_id) return;
-      const qtd = Number(s.quantidade || 0);
-      estoqueByAplicador[s.aplicador_id] = (estoqueByAplicador[s.aplicador_id] || 0) + qtd;
-      const k = s.aplicador_id + '|' + (s.vacina_id || '');
-      estoqueByAplicadorVacina[k] = (estoqueByAplicadorVacina[k] || 0) + qtd;
-    });
-
-    const tarefaByCodigo = {};
-    const tarefaById = {};
-    tarefasAll.forEach(t => {
-      if (t.id) tarefaById[t.id] = t;
-      const c = normalizeRouteCode(t.codigo);
-      if (c) tarefaByCodigo[c] = t;
-    });
-
-    const activeStatuses = new Set(['aprovada','em_validacao','em_execucao','pronta_faturamento']);
-    let rows = allRows.map(e => {
-      const ap = apById[e.aplicador_id] || {};
-      const t = tarefaById[e.tarefa_id] || tarefaByCodigo[normalizeRouteCode(e.codigo_tarefa)] || {};
-      const statusFinal = t.status || e.status || 'aprovada';
-      return {
-        ...e,
-        aplicadores: ap,
-        _tarefa: t,
-        _data_inicio: String(t.data_inicio || e.data_inicio || '').slice(0,10),
-        _status: statusFinal,
-        _status_logistica: t.status_logistica || 'nao_roteirizado',
-        _doses: Number(t.doses_previstas || e.doses_necessarias || 0),
-        _ponto_partida: t.ponto_partida || e.ponto_partida || '',
-        _base_nome: t.base_nome || e.base_nome || '',
-        _cliente: t.cliente || '',
-        _semana: Number(t.semanas || e.semanas || 0) || null,
-      };
-    });
-
-    // Mantém só o fluxo operacional principal, mas se a base tiver status diferente não zera a tela.
-    const rowsAtivas = rows.filter(e => activeStatuses.has(String(e._status || '').toLowerCase()));
-    if (rowsAtivas.length > 0) rows = rowsAtivas;
-
-    setEscalas(rows);
-
-    // Buscar decisões da Demanda vs Oferta para ajustar quantidade a roteirizar.
-    let planningRows = [];
-    try {
-      const { data: pr, error: prErr } = await sb.from('planejamento_logistico')
-        .select('aplicador_id,vacina_id,semana,quantidade_sugerida,status,saldo_projetado,demanda_futura,estoque_atual')
-        .not('aplicador_id', 'is', null);
-      if (!prErr) planningRows = pr || [];
-    } catch (err) {
-      planningRows = [];
-    }
-
-    const planMap = {};
-    planningRows.forEach(p => {
-      if (!p.aplicador_id) return;
-      if (!planMap[p.aplicador_id]) planMap[p.aplicador_id] = { quantidade_sugerida: 0, status: p.status, items: [] };
-      planMap[p.aplicador_id].items.push(p);
-      if (p.status === 'nao_enviar_estoque_suficiente') {
-        planMap[p.aplicador_id].status = p.status;
-      } else if (['envio_sugerido','envio_aprovado','em_montagem','montado','carregado','em_rota'].includes(p.status)) {
-        planMap[p.aplicador_id].quantidade_sugerida += Number(p.quantidade_sugerida || 0);
-        planMap[p.aplicador_id].status = p.status;
+      if (!allRows.length) {
+        setEscalas([]);
+        setTutores([]);
+        setFilteredTutores([]);
+        setPontosPartida([]);
+        return;
       }
-    });
-    setPlanejamentoByAplicador(planMap);
 
-    // Agrupar por aplicador/CPF.
-    const groups = {};
-    rows.forEach(e => {
-      const ap = e.aplicadores || {};
-      const cpfRaw = String(e.tutor_cpf || ap.cpf || '').trim();
-      const cpfNorm = cpfRaw.replace(/\D/g, '');
-      const key = e.aplicador_id || cpfNorm || e.id;
-      if (!groups[key]) {
-        groups[key] = {
-          cpf: cpfRaw,
-          cpfNorm,
-          nome: (e.tutor_nome || ap.nome || '').trim(),
-          ponto_partida: e._ponto_partida,
-          cidade: ap.cidade || '',
-          uf: ap.uf || '',
-          endereco: ap.endereco || e.endereco_tarefa || '',
-          base_nome: e._base_nome,
-          aplicador_id: e.aplicador_id,
-          tarefas: [],
-          total_doses: 0,
-          statuses: new Set(),
-          jaRoteirizado: apJaRoteirizados.has(e.aplicador_id),
-          estoque_atual: estoqueByAplicador[e.aplicador_id] || 0,
-          estoque_mesma_vacina: 0,
+      // Aplicadores em separado, apenas para enriquecer. Se falhar, a escala continua aparecendo.
+      const apIds = [...new Set(allRows.map(e => e.aplicador_id).filter(Boolean))];
+      const apById = {};
+      for (let i = 0; i < apIds.length; i += 500) {
+        const ids = apIds.slice(i, i + 500);
+        try {
+          const { data: aps } = await sb.from('aplicadores')
+            .select('id,nome,cpf,cidade,uf,endereco,base_vinculada_id')
+            .in('id', ids);
+          (aps || []).forEach(a => { apById[a.id] = a; });
+        } catch (err) { console.warn('Falha ao buscar aplicadores:', err); }
+      }
+
+      // Tarefas em separado, apenas para complementar data/status/doses/cliente.
+      let tarefasAll = [];
+      try {
+        tarefasAll = await fetchPaged(
+          'tarefas',
+          'id,codigo,cliente,cidade_campanha,uf_campanha,data_inicio,doses_previstas,status,status_logistica,ponto_partida,base_id,base_nome,vacina_id,semanas',
+          q => q.order('data_inicio', { ascending: true })
+        );
+      } catch (err) {
+        console.warn('Não foi possível carregar tarefas para complementar rotas:', err);
+      }
+
+      const tarefaByCodigo = {};
+      const tarefaById = {};
+      tarefasAll.forEach(t => {
+        if (t.id) tarefaById[t.id] = t;
+        const c = normalizeRouteCode(t.codigo);
+        if (c) tarefaByCodigo[c] = t;
+      });
+
+      // Remessas ativas: se falhar, apenas não marca como já roteirizado.
+      const apJaRoteirizados = new Set();
+      try {
+        const { data: remessasAtivas } = await sb.from('remessas')
+          .select('destino_aplicador_id,status')
+          .not('destino_aplicador_id', 'is', null)
+          .limit(20000);
+        (remessasAtivas || []).forEach(r => {
+          const st = String(r.status || '').toLowerCase();
+          if (!['concluida','concluído','concluido','cancelada','entregue'].includes(st)) {
+            apJaRoteirizados.add(r.destino_aplicador_id);
+          }
+        });
+      } catch (err) { console.warn('Falha ao buscar remessas ativas:', err); }
+
+      // Estoque atual do aplicador.
+      let estoqueAplicadorAll = [];
+      try {
+        estoqueAplicadorAll = await fetchPaged(
+          'estoque',
+          'aplicador_id,vacina_id,quantidade,localizacao_tipo',
+          q => q.eq('localizacao_tipo', 'aplicador')
+        );
+      } catch (err) { console.warn('Falha ao buscar estoque do aplicador:', err); }
+
+      const estoqueByAplicador = {};
+      const estoqueByAplicadorVacina = {};
+      estoqueAplicadorAll.forEach(s => {
+        if (!s.aplicador_id) return;
+        const qtd = Number(s.quantidade || 0);
+        estoqueByAplicador[s.aplicador_id] = (estoqueByAplicador[s.aplicador_id] || 0) + qtd;
+        const k = s.aplicador_id + '|' + (s.vacina_id || '');
+        estoqueByAplicadorVacina[k] = (estoqueByAplicadorVacina[k] || 0) + qtd;
+      });
+
+      let rows = allRows.map(e => {
+        const ap = apById[e.aplicador_id] || {};
+        const t = tarefaById[e.tarefa_id] || tarefaByCodigo[normalizeRouteCode(e.codigo_tarefa)] || {};
+        const statusOriginal = t.status || e.status || 'Aprovada';
+        const statusFinal = normalizeStatusKey(statusOriginal);
+        return {
+          ...e,
+          aplicadores: ap,
+          _tarefa: t,
+          _data_inicio: String(t.data_inicio || e.data_inicio || '').slice(0,10),
+          _status: statusFinal,
+          _status_original: statusOriginal,
+          _status_logistica: t.status_logistica || e.status_logistica || 'nao_roteirizado',
+          _doses: Number(t.doses_previstas || e.doses_necessarias || 0),
+          _ponto_partida: t.ponto_partida || e.ponto_partida || e.base_nome || '',
+          _base_nome: t.base_nome || e.base_nome || '',
+          _cliente: t.cliente || '',
+          _semana: Number(t.semanas || e.semanas || 0) || null,
         };
-      }
-      if (!groups[key].nome && (e.tutor_nome || ap.nome)) groups[key].nome = (e.tutor_nome || ap.nome || '').trim();
-      if (!groups[key].ponto_partida && e._ponto_partida) groups[key].ponto_partida = e._ponto_partida;
-      if (!groups[key].base_nome && e._base_nome) groups[key].base_nome = e._base_nome;
-      groups[key].tarefas.push(e);
-      groups[key].total_doses += Number(e._doses || e.doses_necessarias || 0);
-      if (!groups[key]._vacinasEstoqueComputadas) groups[key]._vacinasEstoqueComputadas = new Set();
-      const vacKey = e.vacina_id || e._tarefa?.vacina_id || '';
-      if (e.aplicador_id && vacKey && !groups[key]._vacinasEstoqueComputadas.has(vacKey)) {
-        groups[key].estoque_mesma_vacina += Number(estoqueByAplicadorVacina[e.aplicador_id + '|' + vacKey] || 0);
-        groups[key]._vacinasEstoqueComputadas.add(vacKey);
-      }
-      groups[key].statuses.add(e._status || e.status);
-    });
+      });
 
-    Object.values(groups).forEach(g => { delete g._vacinasEstoqueComputadas; });
-    const tutorList = Object.values(groups).sort((a,b) => b.total_doses - a.total_doses);
-    setTutores(tutorList);
+      setEscalas(rows);
 
-    const pps = {};
-    tutorList.forEach(t => { if (t.ponto_partida) pps[t.ponto_partida] = (pps[t.ponto_partida]||0)+1; });
-    setPontosPartida(Object.entries(pps).sort((a,b)=>b[1]-a[1]));
+      // Decisões da Demanda vs Oferta para ajustar quantidade a roteirizar.
+      let planningRows = [];
+      try {
+        const { data: pr, error: prErr } = await sb.from('planejamento_logistico')
+          .select('aplicador_id,vacina_id,semana,quantidade_sugerida,status,saldo_projetado,demanda_futura,estoque_atual')
+          .not('aplicador_id', 'is', null)
+          .limit(20000);
+        if (!prErr) planningRows = pr || [];
+      } catch (err) { planningRows = []; }
+
+      const planMap = {};
+      planningRows.forEach(p => {
+        if (!p.aplicador_id) return;
+        if (!planMap[p.aplicador_id]) planMap[p.aplicador_id] = { quantidade_sugerida: 0, status: p.status, items: [] };
+        planMap[p.aplicador_id].items.push(p);
+        if (p.status === 'nao_enviar_estoque_suficiente') {
+          planMap[p.aplicador_id].status = p.status;
+        } else if (['envio_sugerido','envio_aprovado','em_montagem','montado','carregado','em_rota'].includes(p.status)) {
+          planMap[p.aplicador_id].quantidade_sugerida += Number(p.quantidade_sugerida || 0);
+          planMap[p.aplicador_id].status = p.status;
+        }
+      });
+      setPlanejamentoByAplicador(planMap);
+
+      // Agrupar por aplicador/CPF. Mesmo sem aplicador_id, a escala aparece pelo CPF/nome.
+      const groups = {};
+      rows.forEach(e => {
+        const ap = e.aplicadores || {};
+        const cpfRaw = String(e.tutor_cpf || ap.cpf || '').trim();
+        const cpfNorm = cpfRaw.replace(/\D/g, '');
+        const key = e.aplicador_id || cpfNorm || e.tutor_nome || e.id;
+        if (!groups[key]) {
+          groups[key] = {
+            cpf: cpfRaw,
+            cpfNorm,
+            nome: (e.tutor_nome || ap.nome || 'Sem nome').trim(),
+            ponto_partida: e._ponto_partida,
+            cidade: ap.cidade || '',
+            uf: ap.uf || '',
+            endereco: ap.endereco || e.endereco_tarefa || '',
+            base_nome: e._base_nome,
+            aplicador_id: e.aplicador_id,
+            tarefas: [],
+            total_doses: 0,
+            statuses: new Set(),
+            jaRoteirizado: e.aplicador_id ? apJaRoteirizados.has(e.aplicador_id) : false,
+            estoque_atual: e.aplicador_id ? (estoqueByAplicador[e.aplicador_id] || 0) : 0,
+            estoque_mesma_vacina: 0,
+            _vacinasEstoqueComputadas: new Set(),
+          };
+        }
+        if (!groups[key].ponto_partida && e._ponto_partida) groups[key].ponto_partida = e._ponto_partida;
+        if (!groups[key].base_nome && e._base_nome) groups[key].base_nome = e._base_nome;
+        groups[key].tarefas.push(e);
+        groups[key].total_doses += Number(e._doses || e.doses_necessarias || 0);
+        const vacKey = e.vacina_id || e._tarefa?.vacina_id || '';
+        if (e.aplicador_id && vacKey && !groups[key]._vacinasEstoqueComputadas.has(vacKey)) {
+          groups[key].estoque_mesma_vacina += Number(estoqueByAplicadorVacina[e.aplicador_id + '|' + vacKey] || 0);
+          groups[key]._vacinasEstoqueComputadas.add(vacKey);
+        }
+        groups[key].statuses.add(e._status || e.status || 'aprovada');
+      });
+
+      Object.values(groups).forEach(g => { delete g._vacinasEstoqueComputadas; });
+      const tutorList = Object.values(groups).sort((a,b) => b.total_doses - a.total_doses);
+      setTutores(tutorList);
+
+      const pps = {};
+      tutorList.forEach(t => { if (t.ponto_partida) pps[t.ponto_partida] = (pps[t.ponto_partida]||0)+1; });
+      setPontosPartida(Object.entries(pps).sort((a,b)=>b[1]-a[1]));
+    } catch (err) {
+      console.error('Erro geral ao carregar escalas para rotas:', err);
+      toast('Erro ao carregar escalas para rotas: ' + (err.message || err), 'error');
+      setEscalas([]);
+      setTutores([]);
+      setFilteredTutores([]);
+      setPontosPartida([]);
+    }
   };
 
   useEffect(() => {
@@ -4188,11 +4215,15 @@ function RoteirizacaoPage({ onBack }) {
                   onClick={() => setShowJaRoteirizado(s=>!s)}>
                   {showJaRoteirizado ? '🙈 Ocultar roteirizados' : '👁 Ver roteirizados'}
                 </button>
+                <button className="btn btn-secondary btn-sm" style={{fontSize:9,padding:'2px 6px'}}
+                  onClick={() => { setFilterDateStart(''); setFilterDateEnd(''); setFilterPP(''); setFilterStatus(''); setSearchTarefa(''); }}>
+                  🧹 Limpar filtros
+                </button>
               </div>
             </div>
 
             <div style={{flex:1,overflow:'auto',border:'1px solid var(--border)',borderRadius:'var(--radius)',background:'var(--bg-card)'}}>
-              {filteredTutores.length === 0 && <div style={{padding:20,textAlign:'center',color:'var(--text-muted)',fontSize:12}}>{tutores.length===0?'Nenhuma escala encontrada. Confira filtros, semana/status ou importação de escalas.':'Nenhum resultado para os filtros selecionados'}</div>}
+              {filteredTutores.length === 0 && <div style={{padding:20,textAlign:'center',color:'var(--text-muted)',fontSize:12}}>{tutores.length===0?'Nenhuma escala encontrada. A tela de Escalas tem registros, então clique em Atualizar ou limpe os filtros.':'Nenhum resultado para os filtros selecionados. Use Limpar filtros para voltar a listar as escalas.'}</div>}
               {filteredTutores.slice(0,80).map(t => {
                 const isExpanded = expandedTutor === t.cpf;
                 const statusCounts = t.tarefas.reduce((acc, e) => { const st = e._status || e.status; acc[st] = (acc[st]||0)+1; return acc; }, {});
@@ -4210,7 +4241,7 @@ function RoteirizacaoPage({ onBack }) {
                           {t.jaRoteirizado && <span style={{fontSize:9,color:'var(--warning)',flexShrink:0}}>🚚 em rota</span>}
                         </div>
                         <div style={{color:'var(--text-muted)',fontSize:10,marginLeft:12}}>
-                          {t.ponto_partida||t.cidade} · {filterStatus ? t.tarefas.filter(e=>e.status===filterStatus).length : t.tarefas.length} tar.
+                          {t.ponto_partida||t.cidade} · {filterStatus ? t.tarefas.filter(e=>(e._status || e.status)===filterStatus).length : t.tarefas.length} tar.
                           {statusCounts['aprovada'] && <span style={{color:'var(--success)',marginLeft:4}}>✓{statusCounts['aprovada']}</span>}
                           {statusCounts['pronta_faturamento'] && <span style={{color:'var(--info)',marginLeft:4}}>💰{statusCounts['pronta_faturamento']}</span>}
                           {statusCounts['em_execucao'] && <span style={{color:'var(--accent)',marginLeft:4}}>▶{statusCounts['em_execucao']}</span>}
