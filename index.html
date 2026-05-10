@@ -610,14 +610,17 @@ function DashboardPage({ onNavigate }) {
   const [modalData, setModalData] = useState([]);
   const [modalLoading, setModalLoading] = useState(false);
   const [weekData, setWeekData] = useState([]);
+  const [weekModal, setWeekModal] = useState(null);
   const [apFilters, setApFilters] = useState({ ponto: '', uf: '', cidade: '', nome: '' });
   const toast = useContext(ToastContext);
 
   const semanaCampanha = (dataISO, semanaPlanilha) => {
+    // Prioridade: usar a coluna "Semanas" da planilha de Consulta, quando ela existir.
     if (semanaPlanilha !== null && semanaPlanilha !== undefined && semanaPlanilha !== '') {
-      const n = Number(semanaPlanilha);
+      const n = Number(String(semanaPlanilha).replace(',', '.'));
       if (!Number.isNaN(n) && n > 0) return Math.round(n);
     }
+    // Fallback: calcular a partir da semana 1 informada.
     if (!dataISO) return null;
     const inicio = new Date('2026-03-08T00:00:00');
     const d = new Date(dataISO + 'T00:00:00');
@@ -625,25 +628,59 @@ function DashboardPage({ onNavigate }) {
     return Math.floor((d - inicio) / (7 * 24 * 60 * 60 * 1000)) + 1;
   };
 
+  const isEntregueStatus = (st) => ['concluida','concluído','entregue','finalizada','finalizado'].includes(String(st || '').toLowerCase());
+
+  const codigosEntreguesFromRemessas = (remessas) => {
+    const set = new Set();
+    (remessas || []).forEach(rem => {
+      if (!isEntregueStatus(rem.status)) return;
+      const obs = String(rem.observacao || '');
+      const codigos = obs.match(/[A-Z0-9]+(?:\.[A-Z0-9&]+)+/gi) || [];
+      codigos.forEach(c => set.add(c.trim()));
+    });
+    return set;
+  };
+
+  const nomeDia = (dataISO) => {
+    if (!dataISO) return 'Sem data';
+    const nomes = ['Domingo','Segunda','Terça','Quarta','Quinta','Sexta','Sábado'];
+    const d = new Date(dataISO + 'T12:00:00');
+    return nomes[d.getDay()] || 'Sem data';
+  };
+
+  const formatDate = (d) => d ? new Date(d + 'T12:00:00').toLocaleDateString('pt-BR') : '—';
+
   const load = async () => {
     try {
-      const [b, v, a, t, e, tarefasSemana] = await Promise.all([
+      const [b, v, a, t, e, tarefasSemana, remessasRes] = await Promise.all([
         sb.from('bases').select('id', { count: 'exact', head: true }),
         sb.from('vacinas').select('id', { count: 'exact', head: true }),
         sb.from('aplicadores').select('id', { count: 'exact', head: true }),
         sb.from('tarefas').select('id', { count: 'exact', head: true }),
         sb.from('escalas').select('id', { count: 'exact', head: true }),
-        sb.from('tarefas').select('id, data_inicio, semanas, doses_previstas').order('data_inicio', { ascending: true }).limit(10000),
+        sb.from('tarefas').select('id, codigo, cliente, cidade_campanha, uf_campanha, data_inicio, semanas, doses_previstas, status').order('data_inicio', { ascending: true }).limit(20000),
+        sb.from('remessas').select('status, observacao').limit(20000),
       ]);
       setStats({ bases: b.count || 0, vacinas: v.count || 0, aplicadores: a.count || 0, tarefas: t.count || 0, escalas: e.count || 0 });
 
+      const entregues = codigosEntreguesFromRemessas(remessasRes.data || []);
       const porSemana = {};
       (tarefasSemana.data || []).forEach(t => {
         const sem = semanaCampanha(t.data_inicio, t.semanas);
         if (!sem || sem < 1) return;
-        if (!porSemana[sem]) porSemana[sem] = { semana: sem, tarefas: 0, doses: 0 };
-        porSemana[sem].tarefas += 1;
+        if (!porSemana[sem]) porSemana[sem] = { semana: sem, total: 0, entregues: 0, pendentes: 0, doses: 0, dias: {} };
+        const entregue = entregues.has(String(t.codigo || '').trim());
+        porSemana[sem].total += 1;
         porSemana[sem].doses += Number(t.doses_previstas || 0);
+        if (entregue) porSemana[sem].entregues += 1;
+        else porSemana[sem].pendentes += 1;
+
+        const dia = nomeDia(t.data_inicio);
+        if (!porSemana[sem].dias[dia]) porSemana[sem].dias[dia] = { dia, total: 0, entregues: 0, pendentes: 0, tarefas: [] };
+        porSemana[sem].dias[dia].total += 1;
+        if (entregue) porSemana[sem].dias[dia].entregues += 1;
+        else porSemana[sem].dias[dia].pendentes += 1;
+        porSemana[sem].dias[dia].tarefas.push({ ...t, entregue });
       });
       setWeekData(Object.values(porSemana).sort((x,y) => x.semana - y.semana));
     } catch (err) { toast('Erro ao carregar dashboard: ' + err.message, 'error'); }
@@ -703,7 +740,11 @@ function DashboardPage({ onNavigate }) {
       (!f.ponto || (a.ponto || '').toLowerCase().includes(f.ponto.toLowerCase()));
   }) : [];
 
-  const maxTarefas = Math.max(...weekData.map(w => w.tarefas), 1);
+  const maxTarefas = Math.max(...weekData.map(w => w.total), 1);
+  const semanaSelecionadaDias = weekModal ? Object.values(weekModal.dias || {}).sort((a,b) => {
+    const ordem = ['Domingo','Segunda','Terça','Quarta','Quinta','Sexta','Sábado'];
+    return ordem.indexOf(a.dia) - ordem.indexOf(b.dia);
+  }) : [];
 
   return (
     <div>
@@ -715,52 +756,77 @@ function DashboardPage({ onNavigate }) {
         <button className="btn btn-primary" onClick={() => onNavigate && onNavigate('arvore-distribuicao')}>🌳 Árvore de Distribuição</button>
       </div>
       <div className="stats-grid">
-        <div className="stat-card" onClick={openBasesModal} style={{cursor:'pointer'}} title="Ver doses por base">
-          <div className="stat-icon" style={{background: 'var(--accent-subtle)', color: 'var(--accent)'}}>🏢</div>
-          <div className="stat-value">{stats.bases}</div>
-          <div className="stat-label">Bases</div>
-        </div>
-        <div className="stat-card" onClick={openVacinasModal} style={{cursor:'pointer'}} title="Ver vacinas">
-          <div className="stat-icon" style={{background: 'var(--success-bg)', color: 'var(--success)'}}>💉</div>
-          <div className="stat-value">{stats.vacinas}</div>
-          <div className="stat-label">Vacinas</div>
-        </div>
-        <div className="stat-card" onClick={openAplicadoresModal} style={{cursor:'pointer'}} title="Ver doses por aplicador">
-          <div className="stat-icon" style={{background: 'var(--warning-bg)', color: 'var(--warning)'}}>👤</div>
-          <div className="stat-value">{stats.aplicadores}</div>
-          <div className="stat-label">Aplicadores</div>
-        </div>
-        <div className="stat-card">
-          <div className="stat-icon" style={{background: 'var(--info-bg)', color: 'var(--info)'}}>📋</div>
-          <div className="stat-value">{stats.tarefas}</div>
-          <div className="stat-label">Tarefas</div>
-        </div>
-        <div className="stat-card">
-          <div className="stat-icon" style={{background: 'rgba(168,85,247,0.12)', color: '#a855f7'}}>👩‍⚕️</div>
-          <div className="stat-value">{stats.escalas}</div>
-          <div className="stat-label">Escalas</div>
-        </div>
+        <div className="stat-card" onClick={openBasesModal} style={{cursor:'pointer'}} title="Ver doses por base"><div className="stat-icon" style={{background: 'var(--accent-subtle)', color: 'var(--accent)'}}>🏢</div><div className="stat-value">{stats.bases}</div><div className="stat-label">Bases</div></div>
+        <div className="stat-card" onClick={openVacinasModal} style={{cursor:'pointer'}} title="Ver vacinas"><div className="stat-icon" style={{background: 'var(--success-bg)', color: 'var(--success)'}}>💉</div><div className="stat-value">{stats.vacinas}</div><div className="stat-label">Vacinas</div></div>
+        <div className="stat-card" onClick={openAplicadoresModal} style={{cursor:'pointer'}} title="Ver doses por aplicador"><div className="stat-icon" style={{background: 'var(--warning-bg)', color: 'var(--warning)'}}>👤</div><div className="stat-value">{stats.aplicadores}</div><div className="stat-label">Aplicadores</div></div>
+        <div className="stat-card"><div className="stat-icon" style={{background: 'var(--info-bg)', color: 'var(--info)'}}>📋</div><div className="stat-value">{stats.tarefas}</div><div className="stat-label">Tarefas</div></div>
+        <div className="stat-card"><div className="stat-icon" style={{background: 'rgba(168,85,247,0.12)', color: '#a855f7'}}>👩‍⚕️</div><div className="stat-value">{stats.escalas}</div><div className="stat-label">Escalas</div></div>
       </div>
 
       <div className="card">
         <div className="card-header">
           <div>
             <div className="card-title">Tarefas x Semanas</div>
-            <div className="page-subtitle">Semana 1: 08/03/2026 a 14/03/2026</div>
+            <div className="page-subtitle">Empilhado por logística: entregues x aguardando logística · Semana 1: 08/03/2026 a 14/03/2026</div>
+          </div>
+          <div style={{display:'flex',gap:10,fontSize:12,color:'var(--text-muted)'}}>
+            <span><span style={{display:'inline-block',width:10,height:10,background:'var(--success)',borderRadius:2,marginRight:4}}></span>Entregues</span>
+            <span><span style={{display:'inline-block',width:10,height:10,background:'var(--accent)',borderRadius:2,marginRight:4}}></span>Ag. logística</span>
           </div>
         </div>
         {weekData.length === 0 ? <div className="empty-state"><div className="empty-text">Sem dados semanais</div></div> : (
-          <div style={{display:'flex',alignItems:'flex-end',gap:8,height:240,overflowX:'auto',paddingTop:20,paddingBottom:8}}>
-            {weekData.map(w => (
-              <div key={w.semana} style={{minWidth:58,display:'flex',flexDirection:'column',alignItems:'center',gap:6}} title={`${w.tarefas} tarefas · ${w.doses} doses`}>
-                <div style={{fontSize:11,color:'var(--text-secondary)',fontFamily:'JetBrains Mono'}}>{w.tarefas}</div>
-                <div style={{width:34,height:Math.max(8, Math.round((w.tarefas / maxTarefas) * 170)),background:'var(--accent)',borderRadius:'6px 6px 2px 2px'}}></div>
-                <div style={{fontSize:11,color:'var(--text-muted)'}}>S{w.semana}</div>
-              </div>
-            ))}
+          <div style={{display:'flex',alignItems:'flex-end',gap:10,height:260,overflowX:'auto',paddingTop:20,paddingBottom:8}}>
+            {weekData.map(w => {
+              const totalH = Math.max(10, Math.round((w.total / maxTarefas) * 175));
+              const entregueH = w.total > 0 ? Math.round((w.entregues / w.total) * totalH) : 0;
+              const pendenteH = Math.max(0, totalH - entregueH);
+              const pct = w.total > 0 ? Math.round((w.entregues / w.total) * 100) : 0;
+              return (
+                <div key={w.semana} onClick={() => setWeekModal(w)} style={{minWidth:64,display:'flex',flexDirection:'column',alignItems:'center',gap:6,cursor:'pointer'}} title={`Semana ${w.semana}: ${w.total} tarefas · ${w.entregues} entregues · ${w.pendentes} ag. logística`}>
+                  <div style={{fontSize:11,color:'var(--text-secondary)',fontFamily:'JetBrains Mono'}}>{w.total}</div>
+                  <div style={{width:38,height:totalH,display:'flex',flexDirection:'column-reverse',overflow:'hidden',borderRadius:'6px 6px 2px 2px',background:'var(--border)'}}>
+                    <div style={{height:entregueH,background:'var(--success)'}}></div>
+                    <div style={{height:pendenteH,background:'var(--accent)'}}></div>
+                  </div>
+                  <div style={{fontSize:11,color:'var(--text-muted)'}}>S{w.semana}</div>
+                  <div style={{fontSize:10,color:'var(--success)'}}>{pct}%</div>
+                </div>
+              );
+            })}
           </div>
         )}
       </div>
+
+      {weekModal && (
+        <Modal title={`Semana ${weekModal.semana} — tarefas por dia`} onClose={() => setWeekModal(null)} large>
+          <div style={{display:'flex',gap:10,marginBottom:14,flexWrap:'wrap'}}>
+            <span className="badge badge-blue">Total: {weekModal.total}</span>
+            <span className="badge badge-green">Entregues: {weekModal.entregues}</span>
+            <span className="badge badge-yellow">Ag. logística: {weekModal.pendentes}</span>
+          </div>
+          <div style={{display:'flex',alignItems:'flex-end',gap:12,height:230,overflowX:'auto',padding:'16px 4px 8px',border:'1px solid var(--border)',borderRadius:'var(--radius-sm)',background:'var(--bg-input)',marginBottom:14}}>
+            {semanaSelecionadaDias.map(d => {
+              const maxDia = Math.max(...semanaSelecionadaDias.map(x => x.total), 1);
+              const totalH = Math.max(12, Math.round((d.total / maxDia) * 155));
+              const entregueH = d.total > 0 ? Math.round((d.entregues / d.total) * totalH) : 0;
+              const pendenteH = Math.max(0, totalH - entregueH);
+              const pct = d.total > 0 ? Math.round((d.entregues / d.total) * 100) : 0;
+              return (
+                <div key={d.dia} style={{minWidth:86,display:'flex',flexDirection:'column',alignItems:'center',gap:6}}>
+                  <div style={{fontSize:11,color:'var(--text-secondary)',fontFamily:'JetBrains Mono'}}>{d.total}</div>
+                  <div style={{width:44,height:totalH,display:'flex',flexDirection:'column-reverse',overflow:'hidden',borderRadius:'6px 6px 2px 2px',background:'var(--border)'}}>
+                    <div style={{height:entregueH,background:'var(--success)'}} title={`${d.entregues} entregues`}></div>
+                    <div style={{height:pendenteH,background:'var(--accent)'}} title={`${d.pendentes} aguardando logística`}></div>
+                  </div>
+                  <div style={{fontSize:11,color:'var(--text-muted)',textAlign:'center'}}>{d.dia}</div>
+                  <div style={{fontSize:10,color:'var(--success)'}}>{pct}%</div>
+                </div>
+              );
+            })}
+          </div>
+          <div className="table-wrap"><table><thead><tr><th>Dia</th><th>Total</th><th>Entregues</th><th>Ag. logística</th></tr></thead><tbody>{semanaSelecionadaDias.map(d => <tr key={d.dia}><td style={{color:'var(--text-primary)',fontWeight:600}}>{d.dia}</td><td className="mono">{d.total}</td><td className="mono" style={{color:'var(--success)'}}>{d.entregues}</td><td className="mono" style={{color:'var(--warning)'}}>{d.pendentes}</td></tr>)}</tbody></table></div>
+        </Modal>
+      )}
 
       {modal && (
         <Modal title={modal === 'bases' ? 'Doses por Base' : modal === 'vacinas' ? 'Lista de Vacinas' : 'Doses por Aplicador'} onClose={() => setModal(null)} large>
@@ -790,6 +856,8 @@ function ArvoreDistribuicaoPage() {
   const [report, setReport] = useState([]);
   const [open, setOpen] = useState({});
   const [loading, setLoading] = useState(true);
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
   const toast = useContext(ToastContext);
 
   const toggle = (key) => setOpen(o => ({...o, [key]: !o[key]}));
@@ -846,9 +914,9 @@ function ArvoreDistribuicaoPage() {
         const [basesEst, aplicEst, tarefasRes, tarefasVinculosRes, escalasRes, remessasRes] = await Promise.all([
           sb.from('estoque').select('quantidade, bases(nome, cidade, uf, ponto_partida), vacinas(nome)').eq('localizacao_tipo','base'),
           sb.from('estoque').select('quantidade, aplicadores(nome, cidade, uf), vacinas(nome)').eq('localizacao_tipo','aplicador'),
-          sb.from('tarefas').select('codigo, cliente, ponto_partida, cidade_campanha, uf_campanha, data_inicio, doses_previstas, status').gt('data_inicio', hoje).limit(20000),
+          sb.from('tarefas').select('codigo, cliente, ponto_partida, cidade_campanha, uf_campanha, data_inicio, doses_previstas, status').limit(20000),
           sb.from('tarefas').select('codigo, ponto_partida, cidade_campanha, uf_campanha').not('ponto_partida','is',null).limit(20000),
-          sb.from('escalas').select('codigo_tarefa, tutor_nome, tutor_cpf, ponto_partida, doses_necessarias, data_inicio, status, aplicadores(nome, cidade, uf), tarefas(codigo, cliente, ponto_partida, cidade_campanha, uf_campanha, data_inicio, doses_previstas, status)').gt('data_inicio', hoje).limit(20000),
+          sb.from('escalas').select('codigo_tarefa, tutor_nome, tutor_cpf, ponto_partida, doses_necessarias, data_inicio, status, aplicadores(nome, cidade, uf), tarefas(codigo, cliente, ponto_partida, cidade_campanha, uf_campanha, data_inicio, doses_previstas, status)').limit(20000),
           sb.from('remessas').select('status, observacao').limit(20000),
         ]);
         if (basesEst.error) throw basesEst.error;
@@ -884,11 +952,19 @@ function ArvoreDistribuicaoPage() {
 
         const codigosEntregues = new Set();
         (remessasRes.data || []).forEach(rem => {
-          if (!['concluida','entregue','finalizada'].includes(String(rem.status || '').toLowerCase())) return;
+          if (!['concluida','concluído','entregue','finalizada','finalizado'].includes(String(rem.status || '').toLowerCase())) return;
           const obs = String(rem.observacao || '');
           const codigos = obs.match(/[A-Z0-9]+(?:\.[A-Z0-9&]+)+/gi) || [];
           codigos.forEach(c => codigosEntregues.add(c.trim()));
         });
+
+        const demandInRange = (dataISO) => {
+          if (!dataISO) return false;
+          if (dataISO <= hoje) return false;
+          if (dateFrom && dataISO < dateFrom) return false;
+          if (dateTo && dataISO > dateTo) return false;
+          return true;
+        };
 
         (basesEst.data || []).forEach(r => {
           const b = r.bases || {};
@@ -915,7 +991,9 @@ function ArvoreDistribuicaoPage() {
         const escalasPorCodigo = {};
         (escalasRes.data || []).forEach(e => {
           const codigo = String(e.codigo_tarefa || e.tarefas?.codigo || '').trim();
+          const dataEscala = e.data_inicio || e.tarefas?.data_inicio || '';
           if (!codigo || codigosEntregues.has(codigo)) return;
+          if (!demandInRange(dataEscala)) return;
           if (String(e.status || e.tarefas?.status || '').toLowerCase() === 'cancelada') return;
           if (!escalasPorCodigo[codigo]) escalasPorCodigo[codigo] = [];
           escalasPorCodigo[codigo].push(e);
@@ -924,6 +1002,7 @@ function ArvoreDistribuicaoPage() {
         (tarefasRes.data || []).forEach(t => {
           const codigo = String(t.codigo || '').trim();
           if (codigosEntregues.has(codigo)) return;
+          if (!demandInRange(t.data_inicio)) return;
           if (String(t.status || '').toLowerCase() === 'cancelada') return;
 
           const info = pontoInfo(t.ponto_partida, t.cidade_campanha, t.uf_campanha);
@@ -975,7 +1054,7 @@ function ArvoreDistribuicaoPage() {
       setLoading(false);
     }
     load();
-  }, []);
+  }, [dateFrom, dateTo]);
 
   const formatDate = (d) => d ? new Date(d + 'T12:00:00').toLocaleDateString('pt-BR') : '—';
 
@@ -985,6 +1064,20 @@ function ArvoreDistribuicaoPage() {
         <div>
           <div className="page-title">Árvore de Distribuição</div>
           <div className="page-subtitle">Ponto de partida consolidado → demanda por aplicador ou cliente sem escala</div>
+        </div>
+      </div>
+
+      <div className="card" style={{marginBottom:16}}>
+        <div className="card-header" style={{alignItems:'flex-end',gap:12,flexWrap:'wrap'}}>
+          <div>
+            <div className="card-title">Filtro da Demanda</div>
+            <div className="page-subtitle">Filtra somente a demanda dos aplicadores/clientes. O estoque permanece completo.</div>
+          </div>
+          <div style={{display:'flex',gap:10,alignItems:'flex-end',flexWrap:'wrap'}}>
+            <div className="form-group" style={{minWidth:150}}><label className="form-label">De</label><input className="form-input sm" type="date" value={dateFrom} onChange={e=>setDateFrom(e.target.value)} /></div>
+            <div className="form-group" style={{minWidth:150}}><label className="form-label">Até</label><input className="form-input sm" type="date" value={dateTo} onChange={e=>setDateTo(e.target.value)} /></div>
+            <button className="btn btn-secondary btn-sm" onClick={()=>{setDateFrom('');setDateTo('');}}>Limpar</button>
+          </div>
         </div>
       </div>
 
