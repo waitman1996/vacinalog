@@ -1473,6 +1473,43 @@ function TarefasPage() {
   const PAGE_SIZE = 50;
   const toast = useContext(ToastContext);
 
+  const LOGISTICA_LABELS = {
+    nao_roteirizado: 'Não roteirizado',
+    roteirizado: 'Roteirizado',
+    montado: 'Montado',
+    carregado: 'Carregado',
+    em_rota: 'Em rota',
+    concluido: 'Concluído'
+  };
+  const LOGISTICA_BADGES = {
+    nao_roteirizado: 'badge-gray',
+    roteirizado: 'badge-blue',
+    montado: 'badge-yellow',
+    carregado: 'badge-cyan',
+    em_rota: 'badge-green',
+    concluido: 'badge-gray'
+  };
+  const LOGISTICA_PRIORITY = {
+    nao_roteirizado: 0,
+    roteirizado: 1,
+    montado: 2,
+    carregado: 3,
+    em_rota: 4,
+    concluido: 5
+  };
+
+  const getLogisticaStatus = (remessa) => {
+    if (!remessa) return 'nao_roteirizado';
+    const remStatus = remessa.status;
+    const rotaStatus = remessa.rotas?.status;
+
+    if (remStatus === 'concluida') return 'concluido';
+    if (remStatus === 'em_transito' || rotaStatus === 'em_transito') return 'em_rota';
+    if (remStatus === 'carregada') return 'carregado';
+    if (remStatus === 'pronta') return 'montado';
+    return 'roteirizado';
+  };
+
   const load = async () => {
     setLoading(true);
     let q = sb.from('tarefas').select('*', { count: 'exact' })
@@ -1481,8 +1518,47 @@ function TarefasPage() {
     if (search) q = q.or(`codigo.ilike.%${search}%,cliente.ilike.%${search}%,cidade_campanha.ilike.%${search}%`);
     if (statusFilter) q = q.eq('status', statusFilter);
     const { data, error, count } = await q;
-    if (error) toast(error.message, 'error');
-    else setItems({ data: data || [], count: count || 0 });
+    if (error) {
+      toast(error.message, 'error');
+      setLoading(false);
+      return;
+    }
+
+    let rows = data || [];
+
+    // Status da logística por tarefa:
+    // Roteirizado = entrou em uma rota/remessa
+    // Montado = caixa pronta
+    // Carregado = remessa carregada
+    // Em rota = motorista fez check-in/iniciou rota
+    // Concluído = entrega confirmada
+    if (rows.length > 0) {
+      const filtros = rows
+        .map(t => String(t.codigo || '').trim())
+        .filter(Boolean)
+        .map(codigo => `observacao.ilike.%${codigo}%`);
+
+      if (filtros.length > 0) {
+        const { data: remessas, error: remErr } = await sb.from('remessas')
+          .select('id, status, observacao, rotas(status)')
+          .or(filtros.join(','));
+
+        if (!remErr && remessas) {
+          rows = rows.map(t => {
+            const codigo = String(t.codigo || '').trim();
+            const relacionadas = remessas.filter(r => String(r.observacao || '').includes(codigo));
+            let melhorStatus = 'nao_roteirizado';
+            relacionadas.forEach(r => {
+              const st = getLogisticaStatus(r);
+              if (LOGISTICA_PRIORITY[st] > LOGISTICA_PRIORITY[melhorStatus]) melhorStatus = st;
+            });
+            return { ...t, logistica_status: melhorStatus };
+          });
+        }
+      }
+    }
+
+    setItems({ data: rows, count: count || 0 });
     setLoading(false);
   };
   useEffect(() => { load(); }, [page, statusFilter]);
@@ -1519,7 +1595,7 @@ function TarefasPage() {
         <div className="table-wrap">
           <table>
             <thead>
-              <tr><th>Código</th><th>Cliente</th><th>Cidade</th><th>UF</th><th>Data</th><th>Doses Prev.</th><th>Doses Aplic.</th><th>Status</th><th>Base</th></tr>
+              <tr><th>Código</th><th>Cliente</th><th>Cidade</th><th>UF</th><th>Data</th><th>Doses Prev.</th><th>Doses Aplic.</th><th>Status</th><th>Logística</th><th>Base</th></tr>
             </thead>
             <tbody>
               {(items.data || []).map(t => (
@@ -1532,6 +1608,7 @@ function TarefasPage() {
                   <td className="mono">{t.doses_previstas}</td>
                   <td className="mono">{t.doses_aplicadas}</td>
                   <td><span className={`badge ${STATUS_BADGES[t.status]||'badge-gray'}`}>{STATUS_LABELS[t.status]||t.status}</span></td>
+                  <td><span className={`badge ${LOGISTICA_BADGES[t.logistica_status]||'badge-gray'}`}>{LOGISTICA_LABELS[t.logistica_status]||'Não roteirizado'}</span></td>
                   <td>{t.base_nome || '—'}</td>
                 </tr>
               ))}
@@ -1561,6 +1638,43 @@ function EscalasPage() {
   const [page, setPage] = useState(0);
   const PAGE_SIZE = 50;
   const toast = useContext(ToastContext);
+
+  const LOGISTICA_LABELS = {
+    nao_roteirizado: 'Não roteirizado',
+    roteirizado: 'Roteirizado',
+    montado: 'Montado',
+    carregado: 'Carregado',
+    em_rota: 'Em rota',
+    concluido: 'Concluído'
+  };
+  const LOGISTICA_BADGES = {
+    nao_roteirizado: 'badge-gray',
+    roteirizado: 'badge-blue',
+    montado: 'badge-yellow',
+    carregado: 'badge-cyan',
+    em_rota: 'badge-green',
+    concluido: 'badge-gray'
+  };
+  const LOGISTICA_PRIORITY = {
+    nao_roteirizado: 0,
+    roteirizado: 1,
+    montado: 2,
+    carregado: 3,
+    em_rota: 4,
+    concluido: 5
+  };
+
+  const getLogisticaStatus = (remessa) => {
+    if (!remessa) return 'nao_roteirizado';
+    const remStatus = remessa.status;
+    const rotaStatus = remessa.rotas?.status;
+
+    if (remStatus === 'concluida') return 'concluido';
+    if (remStatus === 'em_transito' || rotaStatus === 'em_transito') return 'em_rota';
+    if (remStatus === 'carregada') return 'carregado';
+    if (remStatus === 'pronta') return 'montado';
+    return 'roteirizado';
+  };
 
   const load = async () => {
     let q = sb.from('escalas').select('*', { count: 'exact' })
@@ -4301,6 +4415,43 @@ function AplicadoresPage() {
   const [page, setPage] = useState(0);
   const PAGE_SIZE = 50;
   const toast = useContext(ToastContext);
+
+  const LOGISTICA_LABELS = {
+    nao_roteirizado: 'Não roteirizado',
+    roteirizado: 'Roteirizado',
+    montado: 'Montado',
+    carregado: 'Carregado',
+    em_rota: 'Em rota',
+    concluido: 'Concluído'
+  };
+  const LOGISTICA_BADGES = {
+    nao_roteirizado: 'badge-gray',
+    roteirizado: 'badge-blue',
+    montado: 'badge-yellow',
+    carregado: 'badge-cyan',
+    em_rota: 'badge-green',
+    concluido: 'badge-gray'
+  };
+  const LOGISTICA_PRIORITY = {
+    nao_roteirizado: 0,
+    roteirizado: 1,
+    montado: 2,
+    carregado: 3,
+    em_rota: 4,
+    concluido: 5
+  };
+
+  const getLogisticaStatus = (remessa) => {
+    if (!remessa) return 'nao_roteirizado';
+    const remStatus = remessa.status;
+    const rotaStatus = remessa.rotas?.status;
+
+    if (remStatus === 'concluida') return 'concluido';
+    if (remStatus === 'em_transito' || rotaStatus === 'em_transito') return 'em_rota';
+    if (remStatus === 'carregada') return 'carregado';
+    if (remStatus === 'pronta') return 'montado';
+    return 'roteirizado';
+  };
 
   const load = async () => {
     let q = sb.from('aplicadores').select('*, bases(nome)', { count: 'exact' })
