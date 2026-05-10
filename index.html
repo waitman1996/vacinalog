@@ -3246,6 +3246,309 @@ function EtiquetasPage() {
   );
 }
 
+// ═══════════════════════════════════════════════
+// MÓDULO MOTORISTA
+// ═══════════════════════════════════════════════
+function MotoristaPage() {
+  const [userId, setUserId] = useState(null);
+  const [rotas, setRotas] = useState([]);
+  const [rotaSel, setRotaSel] = useState(null);
+
+  useEffect(() => {
+    sb.auth.getUser().then(({ data }) => {
+      if (data?.user) {
+        setUserId(data.user.id);
+        loadRotas(data.user.id);
+      }
+    });
+  }, []);
+
+  const loadRotas = async (uid) => {
+    const { data } = await sb.from('rotas')
+      .select('*, bases!rotas_base_origem_id_fkey(nome, cidade, uf), veiculos(placa, modelo)')
+      .eq('motorista_id', uid)
+      .in('status', ['pronta', 'em_transito', 'concluida'])
+      .order('data_prevista', { ascending: false });
+    setRotas(data || []);
+  };
+
+  if (rotaSel) {
+    return <MotoristaRota rota={rotaSel} onBack={() => { setRotaSel(null); loadRotas(userId); }} />;
+  }
+
+  const ST = { pronta:'Pronta p/ Saída', em_transito:'Em Trânsito', concluida:'Concluída' };
+  const SB = { pronta:'badge-cyan', em_transito:'badge-green', concluida:'badge-gray' };
+  const ativas = rotas.filter(r => r.status !== 'concluida');
+  const concluidas = rotas.filter(r => r.status === 'concluida');
+
+  return (
+    <div>
+      <div className="page-header">
+        <div><div className="page-title">Minhas Rotas</div><div className="page-subtitle">Rotas atribuídas a você</div></div>
+      </div>
+
+      {rotas.length === 0 && (
+        <div className="card"><div className="empty-state"><div className="empty-icon">🚚</div><div className="empty-text">Nenhuma rota atribuída a você</div></div></div>
+      )}
+
+      {ativas.length > 0 && (
+        <>
+          <div style={{fontSize:12,fontWeight:600,color:'var(--text-muted)',textTransform:'uppercase',letterSpacing:1,marginBottom:10}}>Ativas</div>
+          <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(320px,1fr))',gap:14,marginBottom:24}}>
+            {ativas.map(r => (
+              <div key={r.id} className="card" style={{cursor:'pointer',borderColor: r.status==='em_transito'?'rgba(16,185,129,0.4)':'var(--border)',transition:'border-color 0.15s'}}
+                onMouseEnter={e=>e.currentTarget.style.borderColor='var(--accent)'}
+                onMouseLeave={e=>e.currentTarget.style.borderColor=r.status==='em_transito'?'rgba(16,185,129,0.4)':'var(--border)'}
+                onClick={() => setRotaSel(r)}>
+                <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:12}}>
+                  <div style={{fontSize:18,fontWeight:700,color:'var(--accent)',fontFamily:'JetBrains Mono'}}>{r.codigo}</div>
+                  <span className={`badge ${SB[r.status]}`}>{ST[r.status]}</span>
+                </div>
+                <div style={{fontSize:13,color:'var(--text-secondary)',display:'flex',flexDirection:'column',gap:5}}>
+                  <div>📅 {r.data_prevista ? new Date(r.data_prevista+'T12:00:00').toLocaleDateString('pt-BR') : '—'}</div>
+                  <div>🏢 {r.bases?.nome} — {r.bases?.cidade}/{r.bases?.uf}</div>
+                  <div>🚗 {r.veiculos ? r.veiculos.modelo+' · '+r.veiculos.placa : (r.veiculo||'—')}</div>
+                </div>
+                <button className="btn btn-primary" style={{width:'100%',marginTop:12}}>
+                  {r.status==='pronta' ? 'Iniciar Rota →' : 'Ver Rota em Andamento →'}
+                </button>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+
+      {concluidas.length > 0 && (
+        <>
+          <div style={{fontSize:12,fontWeight:600,color:'var(--text-muted)',textTransform:'uppercase',letterSpacing:1,marginBottom:10}}>Histórico</div>
+          <div className="card"><div className="table-wrap"><table><thead>
+            <tr><th>Código</th><th>Data</th><th>Base</th><th>Veículo</th><th>Status</th><th></th></tr>
+          </thead><tbody>
+            {concluidas.map(r => (
+              <tr key={r.id}>
+                <td className="mono" style={{fontWeight:600,color:'var(--accent)'}}>{r.codigo}</td>
+                <td>{r.data_prevista ? new Date(r.data_prevista+'T12:00:00').toLocaleDateString('pt-BR') : '—'}</td>
+                <td>{r.bases?.nome}</td>
+                <td>{r.veiculos?.placa || r.veiculo || '—'}</td>
+                <td><span className="badge badge-gray">Concluída</span></td>
+                <td><button className="btn btn-secondary btn-sm" onClick={() => setRotaSel(r)}>Ver</button></td>
+              </tr>
+            ))}
+          </tbody></table></div></div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function MotoristaRota({ rota, onBack }) {
+  const [remessas, setRemessas] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const toast = useContext(ToastContext);
+
+  const ST_REM = { planejada:'Planejada', montagem:'Montagem', pronta:'Pronta', carregada:'Carregada', em_transito:'Em Trânsito', concluida:'Entregue', cancelada:'Cancelada' };
+  const SB_REM = { planejada:'badge-gray', montagem:'badge-yellow', pronta:'badge-cyan', carregada:'badge-blue', em_transito:'badge-green', concluida:'badge-gray', cancelada:'badge-red' };
+
+  const load = async () => {
+    setLoading(true);
+    const { data } = await sb.from('remessas')
+      .select('*, remessa_itens(quantidade, vacinas(nome)), bases(nome,cidade,uf), aplicadores(nome,cpf,cidade,uf,endereco)')
+      .eq('rota_id', rota.id)
+      .order('ordem_entrega');
+    setRemessas(data || []);
+    setLoading(false);
+  };
+  useEffect(() => { load(); }, []);
+
+  const iniciarRota = async () => {
+    const { error } = await sb.from('rotas').update({ status: 'em_transito' }).eq('id', rota.id);
+    if (error) { toast(error.message, 'error'); return; }
+    // Marcar todas as remessas prontas como "em_transito"
+    await sb.from('remessas').update({ status: 'em_transito' }).eq('rota_id', rota.id).in('status', ['pronta','carregada']);
+    toast('Rota iniciada! Boa viagem!', 'success');
+    load();
+  };
+
+  const confirmarEntrega = async (remId) => {
+    const { error } = await sb.from('remessas').update({ status: 'concluida' }).eq('id', remId);
+    if (error) { toast(error.message, 'error'); return; }
+    toast('Entrega confirmada!', 'success');
+    load();
+    // Verificar se todas foram concluídas
+    const { data } = await sb.from('remessas').select('status').eq('rota_id', rota.id);
+    const allDone = (data||[]).every(r => ['concluida','cancelada'].includes(r.status));
+    if (allDone) {
+      await sb.from('rotas').update({ status: 'concluida' }).eq('id', rota.id);
+      toast('Todas as entregas concluídas! Rota finalizada.', 'success');
+    }
+  };
+
+  const reportarProblema = async (remId, problema) => {
+    const { error } = await sb.from('remessas').update({ observacao: (remessas.find(r=>r.id===remId)?.observacao||'') + '\n[PROBLEMA] ' + problema }).eq('id', remId);
+    if (error) toast(error.message, 'error');
+    else { toast('Problema reportado', 'success'); load(); }
+  };
+
+  const totalDoses = remessas.reduce((s,r) => s + (r.remessa_itens||[]).reduce((ss,i)=>ss+i.quantidade,0), 0);
+  const entregues = remessas.filter(r => r.status === 'concluida').length;
+  const pendentes = remessas.filter(r => !['concluida','cancelada'].includes(r.status)).length;
+  const progresso = remessas.length > 0 ? (entregues / remessas.length * 100) : 0;
+
+  return (
+    <div>
+      {/* Header */}
+      <div className="page-header">
+        <div style={{display:'flex',alignItems:'center',gap:10}}>
+          <button className="btn btn-secondary btn-sm" onClick={onBack}>← Voltar</button>
+          <div>
+            <div className="page-title">Rota {rota.codigo}</div>
+            <div className="page-subtitle">{rota.bases?.nome} · {rota.data_prevista ? new Date(rota.data_prevista+'T12:00:00').toLocaleDateString('pt-BR') : '—'}</div>
+          </div>
+        </div>
+        {rota.status === 'pronta' && (
+          <button className="btn btn-success" onClick={iniciarRota}>🚀 Iniciar Rota</button>
+        )}
+        {rota.status === 'concluida' && (
+          <span className="badge badge-gray" style={{fontSize:14,padding:'8px 16px'}}>✓ Rota Concluída</span>
+        )}
+      </div>
+
+      {/* Resumo */}
+      <div className="stats-grid" style={{marginBottom:16}}>
+        <div className="stat-card">
+          <div className="stat-icon" style={{background:'var(--accent-subtle)',color:'var(--accent)'}}>📦</div>
+          <div className="stat-value">{remessas.length}</div>
+          <div className="stat-label">Total de Paradas</div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-icon" style={{background:'var(--success-bg)',color:'var(--success)'}}>✓</div>
+          <div className="stat-value">{entregues}</div>
+          <div className="stat-label">Entregues</div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-icon" style={{background:'var(--warning-bg)',color:'var(--warning)'}}>⏳</div>
+          <div className="stat-value">{pendentes}</div>
+          <div className="stat-label">Pendentes</div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-icon" style={{background:'var(--info-bg)',color:'var(--info)'}}>💉</div>
+          <div className="stat-value">{totalDoses.toLocaleString('pt-BR')}</div>
+          <div className="stat-label">Total de Doses</div>
+        </div>
+      </div>
+
+      {/* Barra de progresso */}
+      <div style={{marginBottom:20}}>
+        <div style={{display:'flex',justifyContent:'space-between',fontSize:12,color:'var(--text-muted)',marginBottom:4}}>
+          <span>Progresso</span><span>{entregues}/{remessas.length} entregas</span>
+        </div>
+        <div className="progress-bar" style={{height:10}}>
+          <div className="progress-fill" style={{width:progresso+'%',background:progresso===100?'var(--success)':'var(--accent)'}} />
+        </div>
+      </div>
+
+      {/* Lista de remessas */}
+      {loading && <div style={{textAlign:'center',padding:40,color:'var(--text-muted)'}}>Carregando...</div>}
+      <div style={{display:'flex',flexDirection:'column',gap:10}}>
+        {remessas.map(rem => {
+          const isConcluida = rem.status === 'concluida';
+          const isCancelada = rem.status === 'cancelada';
+          const destNome = rem.destino_tipo==='base' ? rem.bases?.nome : rem.aplicadores?.nome;
+          const destCidade = rem.destino_tipo==='base'
+            ? (rem.bases?.cidade||'')+'/'+(rem.bases?.uf||'')
+            : (rem.aplicadores?.cidade||'')+'/'+(rem.aplicadores?.uf||'');
+          const destCPF = rem.destino_tipo==='aplicador' ? rem.aplicadores?.cpf : null;
+          const destEnd = rem.destino_tipo==='aplicador' ? rem.aplicadores?.endereco : null;
+          const doses = (rem.remessa_itens||[]).reduce((s,i)=>s+i.quantidade,0);
+
+          // Parse destino da observação se necessário
+          let nomeExibir = destNome;
+          let cpfExibir = destCPF;
+          if (!nomeExibir || nomeExibir === rota.bases?.nome) {
+            const obs = rem.observacao || '';
+            const mNome = obs.match(/^([^(|]+)/);
+            const mCPF = obs.match(/\(([^)]+)\)/);
+            if (mNome) nomeExibir = mNome[1].trim();
+            if (mCPF) cpfExibir = mCPF[1].trim();
+          }
+
+          return (
+            <div key={rem.id} className="card" style={{
+              borderColor: isConcluida ? 'rgba(16,185,129,0.4)' : isCancelada ? 'rgba(239,68,68,0.2)' : 'var(--border)',
+              opacity: isCancelada ? 0.6 : 1
+            }}>
+              <div style={{display:'flex',gap:12,alignItems:'flex-start'}}>
+                {/* Número da parada */}
+                <div style={{
+                  width:36,height:36,borderRadius:'50%',flexShrink:0,
+                  background: isConcluida ? 'var(--success)' : 'var(--accent)',
+                  color:'#fff',display:'flex',alignItems:'center',justifyContent:'center',
+                  fontWeight:700,fontSize:16
+                }}>{isConcluida ? '✓' : rem.ordem_entrega}</div>
+
+                {/* Info da remessa */}
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',flexWrap:'wrap',gap:6,marginBottom:6}}>
+                    <div>
+                      <div style={{fontFamily:'JetBrains Mono',fontSize:12,color:'var(--accent)',fontWeight:600}}>{rem.codigo_rastreio}</div>
+                      <div style={{fontSize:14,fontWeight:600,color:'var(--text-primary)',marginTop:2}}>{nomeExibir || '—'}</div>
+                      <div style={{fontSize:12,color:'var(--text-muted)'}}>{destCidade}{cpfExibir && ' · CPF: '+cpfExibir}</div>
+                      {destEnd && <div style={{fontSize:11,color:'var(--text-muted)',marginTop:2}}>{destEnd}</div>}
+                    </div>
+                    <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>
+                      <span className={`badge ${SB_REM[rem.status]||'badge-gray'}`}>{ST_REM[rem.status]||rem.status}</span>
+                      {doses > 0 && <span className="badge badge-cyan">{doses} doses</span>}
+                    </div>
+                  </div>
+
+                  {/* Vacinas */}
+                  {(rem.remessa_itens||[]).length > 0 && (
+                    <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:8}}>
+                      {(rem.remessa_itens||[]).map((it,i) => (
+                        <span key={i} style={{fontSize:11,background:'var(--bg-input)',padding:'2px 8px',borderRadius:4,color:'var(--text-secondary)'}}>
+                          {it.vacinas?.nome}: <strong>{it.quantidade}</strong>
+                        </span>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Ações */}
+                  {!isConcluida && !isCancelada && rota.status === 'em_transito' && (
+                    <div style={{display:'flex',gap:8,flexWrap:'wrap',marginTop:4}}>
+                      <button className="btn btn-success btn-sm" onClick={() => confirmarEntrega(rem.id)}>
+                        ✓ Confirmar Entrega
+                      </button>
+                      <button className="btn btn-secondary btn-sm" onClick={() => {
+                        const p = prompt('Descreva o problema:');
+                        if (p) reportarProblema(rem.id, p);
+                      }}>
+                        ⚠ Reportar Problema
+                      </button>
+                      {rem.aplicadores?.cidade && (
+                        <a href={'https://maps.google.com/?q='+encodeURIComponent((destEnd||'')+' '+destCidade)}
+                          target="_blank" rel="noopener" className="btn btn-secondary btn-sm">
+                          🗺 Abrir no Maps
+                        </a>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Problema reportado */}
+                  {rem.observacao && rem.observacao.includes('[PROBLEMA]') && (
+                    <div style={{marginTop:8,padding:'6px 10px',background:'var(--danger-bg)',borderRadius:'var(--radius-sm)',fontSize:11,color:'var(--danger)'}}>
+                      {rem.observacao.split('\n').filter(l=>l.includes('[PROBLEMA]')).join('\n')}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function PlaceholderPage({ title, icon, description }) {
   return (
     <div>
@@ -3515,7 +3818,7 @@ function App() {
       case 'transferencia': return <TransferenciaPage />;
       case 'montagem': return <MontagemPage />;
       case 'etiquetas': return <EtiquetasPage />;
-      case 'minhas-rotas': return <PlaceholderPage title="Minhas Rotas" icon="🚚" description="Rotas atribuídas ao motorista" />;
+      case 'minhas-rotas': return <MotoristaPage />;
       case 'minhas-doses': return <PlaceholderPage title="Minhas Doses" icon="💉" description="Saldo de doses sob sua custódia" />;
       case 'abatimento': return <PlaceholderPage title="Registrar Abatimento" icon="✏️" description="Registrar vacinados, perdas e danos" />;
       case 'usuarios': return <UsuariosPage />;
