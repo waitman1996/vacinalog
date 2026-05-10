@@ -3758,6 +3758,7 @@ function App() {
   const [currentPage, setCurrentPage] = useState('dashboard');
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [conferirDados, setConferirDados] = useState(null);
+  const [viewAs, setViewAs] = useState(null); // null = perfil real, ou 'admin'|'planejador'|'motorista' etc
 
   useEffect(() => {
     sb.auth.getSession().then(({ data: { session } }) => setSession(session));
@@ -3826,12 +3827,42 @@ function App() {
     }
   };
 
+  // Perfil efetivo: usa viewAs se admin estiver em modo visualização
+  const effectiveRole = viewAs || profile?.role;
+  const effectiveProfile = viewAs ? { ...profile, role: viewAs } : profile;
+  const isAdmin = profile?.role === 'admin';
+
   return (
     <div className="app-layout">
       <div className="mobile-toggle" onClick={() => setSidebarOpen(!sidebarOpen)}>☰</div>
-      <Sidebar profile={profile} currentPage={currentPage} onNavigate={setCurrentPage}
+      <Sidebar profile={effectiveProfile} currentPage={currentPage}
+        onNavigate={(page) => { setCurrentPage(page); setSidebarOpen(false); }}
         open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
       <div className="main-content">
+        {/* Seletor de visão — só aparece para admin */}
+        {isAdmin && (
+          <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:16,padding:'8px 14px',background:'var(--bg-card)',borderRadius:'var(--radius-sm)',border:'1px solid var(--border)',flexWrap:'wrap'}}>
+            <span style={{fontSize:12,color:'var(--text-muted)',fontWeight:600}}>👁 Visualizar como:</span>
+            {[
+              {key:null, label:'Admin'},
+              {key:'planejador', label:'Planejador'},
+              {key:'montador', label:'Montador'},
+              {key:'motorista', label:'Motorista'},
+              {key:'aplicador', label:'Aplicador'},
+            ].map(opt => (
+              <button key={opt.key||'admin'} className={`btn btn-sm ${effectiveRole===(opt.key||'admin') ? 'btn-primary' : 'btn-secondary'}`}
+                style={{padding:'4px 10px',fontSize:11}}
+                onClick={() => { setViewAs(opt.key); setCurrentPage('dashboard'); }}>
+                {opt.label}
+              </button>
+            ))}
+            {viewAs && (
+              <span style={{fontSize:11,color:'var(--warning)',marginLeft:4}}>
+                ⚠ Modo visualização ativo
+              </span>
+            )}
+          </div>
+        )}
         {renderPage()}
       </div>
     </div>
