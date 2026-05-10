@@ -799,7 +799,8 @@ function ArvoreDistribuicaoPage() {
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase()
-    .replace(/\s+/g, ' ');
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
 
   const titleCase = (v) => String(v || '')
     .trim()
@@ -816,10 +817,6 @@ function ArvoreDistribuicaoPage() {
   const pontoInfo = (ponto, cidade, uf) => {
     const rawPonto = String(ponto || '').trim();
     const fromPonto = splitPonto(rawPonto);
-
-    // Regra principal: a árvore e o relatório são agrupados pelo PONTO DE PARTIDA,
-    // não pela cidade da campanha/aplicador. Ex.: campanhas em Barueri podem pertencer
-    // ao ponto de partida São Paulo-SP.
     const cid = (rawPonto ? fromPonto.cidade : cidade) || cidade || 'Sem ponto de partida';
     const estado = String((rawPonto ? (fromPonto.uf || uf) : uf) || '').trim().toUpperCase();
     const key = normText(cid) + '|' + estado;
@@ -833,43 +830,44 @@ function ArvoreDistribuicaoPage() {
       nome: info.label,
       cidade: info.cidade,
       uf: info.uf,
-      tipos: { Base: [], Aplicador: [], Clínica: [] }
+      tipos: { Base: [], Aplicador: [], Clínica: [], Demanda: [] }
     };
     pontos[info.key].tipos[tipo].push(item);
   };
 
   const totalTipo = (items) => items.reduce((s, x) => s + Number(x.doses || 0), 0);
-  const totalPonto = (p) => Object.values(p.tipos).reduce((s, items) => s + totalTipo(items), 0);
+  const totalPonto = (p) => Object.entries(p.tipos).reduce((s, [tipo, items]) => tipo === 'Demanda' ? s : s + totalTipo(items), 0);
 
   useEffect(() => {
     async function load() {
       setLoading(true);
       try {
         const hoje = new Date().toISOString().split('T')[0];
-        const [basesEst, aplicEst, tarefasRes, tarefasVinculosRes, remessasRes] = await Promise.all([
+        const [basesEst, aplicEst, tarefasRes, tarefasVinculosRes, escalasRes, remessasRes] = await Promise.all([
           sb.from('estoque').select('quantidade, bases(nome, cidade, uf, ponto_partida), vacinas(nome)').eq('localizacao_tipo','base'),
           sb.from('estoque').select('quantidade, aplicadores(nome, cidade, uf), vacinas(nome)').eq('localizacao_tipo','aplicador'),
-          sb.from('tarefas').select('codigo, ponto_partida, cidade_campanha, uf_campanha, data_inicio, doses_previstas, status').gt('data_inicio', hoje).limit(20000),
-          sb.from('tarefas').select('ponto_partida, cidade_campanha, uf_campanha').not('ponto_partida','is',null).limit(20000),
+          sb.from('tarefas').select('codigo, cliente, ponto_partida, cidade_campanha, uf_campanha, data_inicio, doses_previstas, status').gt('data_inicio', hoje).limit(20000),
+          sb.from('tarefas').select('codigo, ponto_partida, cidade_campanha, uf_campanha').not('ponto_partida','is',null).limit(20000),
+          sb.from('escalas').select('codigo_tarefa, tutor_nome, tutor_cpf, ponto_partida, doses_necessarias, data_inicio, status, aplicadores(nome, cidade, uf), tarefas(codigo, cliente, ponto_partida, cidade_campanha, uf_campanha, data_inicio, doses_previstas, status)').gt('data_inicio', hoje).limit(20000),
           sb.from('remessas').select('status, observacao').limit(20000),
         ]);
         if (basesEst.error) throw basesEst.error;
         if (aplicEst.error) throw aplicEst.error;
         if (tarefasRes.error) throw tarefasRes.error;
         if (tarefasVinculosRes.error) throw tarefasVinculosRes.error;
+        if (escalasRes.error) throw escalasRes.error;
         if (remessasRes.error) throw remessasRes.error;
 
         const pontos = {};
         const rel = {};
 
-        // Mapa: Cidade da Campanha + UF -> Ponto de Partida.
-        // Isso evita aparecerem cidades que não são pontos de partida na árvore/relatório.
         const pontoPorCidade = {};
         (tarefasVinculosRes.data || []).forEach(t => {
           const cidadeKey = normText(t.cidade_campanha) + '|' + String(t.uf_campanha || '').trim().toUpperCase();
           const ponto = String(t.ponto_partida || '').trim();
           if (cidadeKey !== '|' && ponto && !pontoPorCidade[cidadeKey]) pontoPorCidade[cidadeKey] = ponto;
         });
+
         const ensureReport = (info) => {
           if (!rel[info.key]) rel[info.key] = {
             key: info.key,
@@ -878,10 +876,19 @@ function ArvoreDistribuicaoPage() {
             uf: info.uf,
             aplicadores: 0,
             clinicas: 0,
-            demanda_aplicadores: 0
+            demanda_aplicadores: 0,
+            detalhes: []
           };
           return rel[info.key];
         };
+
+        const codigosEntregues = new Set();
+        (remessasRes.data || []).forEach(rem => {
+          if (!['concluida','entregue','finalizada'].includes(String(rem.status || '').toLowerCase())) return;
+          const obs = String(rem.observacao || '');
+          const codigos = obs.match(/[A-Z0-9]+(?:\.[A-Z0-9&]+)+/gi) || [];
+          codigos.forEach(c => codigosEntregues.add(c.trim()));
+        });
 
         (basesEst.data || []).forEach(r => {
           const b = r.bases || {};
@@ -905,36 +912,79 @@ function ArvoreDistribuicaoPage() {
           ensureReport({...info, nome: info.label}).aplicadores += Number(r.quantidade || 0);
         });
 
-        // Códigos de tarefas já entregues/concluídas pela logística.
-        const codigosEntregues = new Set();
-        (remessasRes.data || []).forEach(rem => {
-          if (rem.status !== 'concluida') return;
-          const obs = String(rem.observacao || '');
-          const codigos = obs.match(/[A-Z0-9]+(?:\.[A-Z0-9&]+)+/gi) || [];
-          codigos.forEach(c => codigosEntregues.add(c.trim()));
+        const escalasPorCodigo = {};
+        (escalasRes.data || []).forEach(e => {
+          const codigo = String(e.codigo_tarefa || e.tarefas?.codigo || '').trim();
+          if (!codigo || codigosEntregues.has(codigo)) return;
+          if (String(e.status || e.tarefas?.status || '').toLowerCase() === 'cancelada') return;
+          if (!escalasPorCodigo[codigo]) escalasPorCodigo[codigo] = [];
+          escalasPorCodigo[codigo].push(e);
         });
 
         (tarefasRes.data || []).forEach(t => {
-          if (codigosEntregues.has(String(t.codigo || '').trim())) return;
-          if (t.status === 'cancelada') return;
+          const codigo = String(t.codigo || '').trim();
+          if (codigosEntregues.has(codigo)) return;
+          if (String(t.status || '').toLowerCase() === 'cancelada') return;
+
           const info = pontoInfo(t.ponto_partida, t.cidade_campanha, t.uf_campanha);
-          ensureReport({...info, nome: info.label}).demanda_aplicadores += Number(t.doses_previstas || 0);
+          const reg = ensureReport({...info, nome: info.label});
+          const escalas = escalasPorCodigo[codigo] || [];
+
+          if (escalas.length > 0) {
+            escalas.forEach(e => {
+              const doses = Number(e.doses_necessarias || 0);
+              reg.demanda_aplicadores += doses;
+              const det = {
+                tipo: 'Aplicador',
+                nome: e.tutor_nome || e.aplicadores?.nome || 'Aplicador sem nome',
+                cliente: t.cliente || e.tarefas?.cliente || '—',
+                codigo,
+                cidade: t.cidade_campanha || e.tarefas?.cidade_campanha || '',
+                uf: t.uf_campanha || e.tarefas?.uf_campanha || '',
+                data: t.data_inicio || e.data_inicio || '',
+                doses,
+                status: e.status || t.status || ''
+              };
+              reg.detalhes.push(det);
+              addTreeItem(pontos, 'Demanda', info, det);
+            });
+          } else {
+            const doses = Number(t.doses_previstas || 0);
+            reg.demanda_aplicadores += doses;
+            const det = {
+              tipo: 'Cliente sem escala',
+              nome: t.cliente || 'Cliente não informado',
+              cliente: t.cliente || '—',
+              codigo,
+              cidade: t.cidade_campanha || '',
+              uf: t.uf_campanha || '',
+              data: t.data_inicio || '',
+              doses,
+              status: t.status || ''
+            };
+            reg.detalhes.push(det);
+            addTreeItem(pontos, 'Demanda', info, det);
+          }
         });
 
+        const sortedReport = Object.values(rel).sort((a,b)=>a.ponto_partida.localeCompare(b.ponto_partida));
+        sortedReport.forEach(r => r.detalhes.sort((a,b) => String(a.data).localeCompare(String(b.data)) || String(a.nome).localeCompare(String(b.nome))));
         setTree(Object.values(pontos).sort((a,b)=>a.nome.localeCompare(b.nome)));
-        setReport(Object.values(rel).sort((a,b)=>a.ponto_partida.localeCompare(b.ponto_partida)));
+        setReport(sortedReport);
       } catch (err) { toast('Erro ao carregar árvore: ' + err.message, 'error'); }
       setLoading(false);
     }
     load();
   }, []);
 
+  const formatDate = (d) => d ? new Date(d + 'T12:00:00').toLocaleDateString('pt-BR') : '—';
+
   return (
     <div>
       <div className="page-header">
         <div>
           <div className="page-title">Árvore de Distribuição</div>
-          <div className="page-subtitle">Ponto de partida consolidado → tipo de estoque → local/aplicador</div>
+          <div className="page-subtitle">Ponto de partida consolidado → demanda por aplicador ou cliente sem escala</div>
         </div>
       </div>
 
@@ -942,7 +992,7 @@ function ArvoreDistribuicaoPage() {
         <div className="card-header">
           <div>
             <div className="card-title">Relatório Consolidado</div>
-            <div className="page-subtitle">Demanda considera tarefas futuras ainda não entregues pela logística</div>
+            <div className="page-subtitle">Clique no ponto de partida para ver quem precisa de doses</div>
           </div>
         </div>
         {loading ? <div className="empty-state"><div className="empty-text">Carregando...</div></div> : (
@@ -955,14 +1005,42 @@ function ArvoreDistribuicaoPage() {
               </thead>
               <tbody>
                 {report.length === 0 ? <tr><td colSpan={6}>Nenhum dado encontrado</td></tr> : report.map(r => (
-                  <tr key={r.key}>
-                    <td style={{color:'var(--text-primary)',fontWeight:600}}>{r.ponto_partida}</td>
-                    <td>{r.cidade}</td>
-                    <td className="mono">{r.uf || '—'}</td>
-                    <td className="mono">{r.aplicadores}</td>
-                    <td className="mono">{r.clinicas}</td>
-                    <td className="mono" style={{color:r.demanda_aplicadores>0?'var(--warning)':'var(--text-secondary)'}}>{r.demanda_aplicadores}</td>
-                  </tr>
+                  <React.Fragment key={r.key}>
+                    <tr onClick={() => toggle('r:'+r.key)} style={{cursor:'pointer'}}>
+                      <td style={{color:'var(--text-primary)',fontWeight:600}}>{r.detalhes.length ? (open['r:'+r.key] ? '▼ ' : '▶ ') : '• '}{r.ponto_partida}</td>
+                      <td>{r.cidade}</td>
+                      <td className="mono">{r.uf || '—'}</td>
+                      <td className="mono">{r.aplicadores}</td>
+                      <td className="mono">{r.clinicas}</td>
+                      <td className="mono" style={{color:r.demanda_aplicadores>0?'var(--warning)':'var(--text-secondary)'}}>{r.demanda_aplicadores}</td>
+                    </tr>
+                    {open['r:'+r.key] && (
+                      <tr>
+                        <td colSpan={6} style={{background:'var(--bg-input)',padding:14}}>
+                          {r.detalhes.length === 0 ? (
+                            <div style={{fontSize:13,color:'var(--text-muted)'}}>Sem demanda futura pendente para este ponto de partida.</div>
+                          ) : (
+                            <div className="table-wrap">
+                              <table>
+                                <thead><tr><th>Tipo</th><th>Aplicador/Cliente</th><th>Cliente</th><th>Código</th><th>Cidade/UF</th><th>Data</th><th>Doses</th></tr></thead>
+                                <tbody>{r.detalhes.map((d,i)=>(
+                                  <tr key={i}>
+                                    <td><span className={`badge ${d.tipo === 'Aplicador' ? 'badge-green' : 'badge-yellow'}`}>{d.tipo}</span></td>
+                                    <td style={{color:'var(--text-primary)'}}>{d.nome}</td>
+                                    <td>{d.cliente}</td>
+                                    <td className="mono">{d.codigo || '—'}</td>
+                                    <td>{d.cidade}{d.uf ? '-' + d.uf : ''}</td>
+                                    <td>{formatDate(d.data)}</td>
+                                    <td className="mono" style={{color:'var(--warning)'}}>{d.doses}</td>
+                                  </tr>
+                                ))}</tbody>
+                              </table>
+                            </div>
+                          )}
+                        </td>
+                      </tr>
+                    )}
+                  </React.Fragment>
                 ))}
               </tbody>
             </table>
@@ -974,7 +1052,7 @@ function ArvoreDistribuicaoPage() {
         <div className="card-header">
           <div>
             <div className="card-title">Árvore Expandível</div>
-            <div className="page-subtitle">Agrupado pelo Ponto de Partida vinculado na tabela de tarefas</div>
+            <div className="page-subtitle">Estoque por tipo e demanda pendente por ponto de partida</div>
           </div>
         </div>
         {loading ? <div className="empty-state"><div className="empty-text">Carregando...</div></div> : tree.length === 0 ? <div className="empty-state"><div className="empty-text">Nenhum estoque encontrado</div></div> : (
@@ -983,7 +1061,7 @@ function ArvoreDistribuicaoPage() {
               <div key={p.key} style={{border:'1px solid var(--border)',borderRadius:'var(--radius-sm)',overflow:'hidden'}}>
                 <div onClick={()=>toggle('p:'+p.key)} style={{cursor:'pointer',padding:'12px 14px',background:'var(--bg-input)',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
                   <strong>{open['p:'+p.key] ? '▼' : '▶'} {p.nome}</strong>
-                  <span className="badge badge-blue">{totalPonto(p)} doses</span>
+                  <span className="badge badge-blue">{totalPonto(p)} doses em estoque</span>
                 </div>
                 {open['p:'+p.key] && Object.entries(p.tipos).map(([tipo, items]) => (
                   <div key={tipo} style={{marginLeft:18,borderLeft:'1px solid var(--border)'}}>
@@ -991,7 +1069,15 @@ function ArvoreDistribuicaoPage() {
                       <span>{open['t:'+p.key+tipo] ? '▼' : '▶'} {tipo}</span>
                       <span className="badge badge-gray">{items.length} itens · {totalTipo(items)} doses</span>
                     </div>
-                    {open['t:'+p.key+tipo] && <div className="table-wrap" style={{margin:'0 12px 12px 18px'}}><table><thead><tr><th>Nome</th><th>Cidade</th><th>UF</th><th>Vacina</th><th>Doses</th></tr></thead><tbody>{items.length === 0 ? <tr><td colSpan={5}>Ainda sem registros</td></tr> : items.map((x,i)=><tr key={i}><td>{x.nome}</td><td>{x.cidade}</td><td>{x.uf}</td><td>{x.vacina}</td><td className="mono">{x.doses}</td></tr>)}</tbody></table></div>}
+                    {open['t:'+p.key+tipo] && (
+                      <div className="table-wrap" style={{margin:'0 12px 12px 18px'}}>
+                        {tipo === 'Demanda' ? (
+                          <table><thead><tr><th>Tipo</th><th>Aplicador/Cliente</th><th>Cliente</th><th>Código</th><th>Cidade/UF</th><th>Data</th><th>Doses</th></tr></thead><tbody>{items.length === 0 ? <tr><td colSpan={7}>Ainda sem demanda</td></tr> : items.map((x,i)=><tr key={i}><td><span className={`badge ${x.tipo === 'Aplicador' ? 'badge-green' : 'badge-yellow'}`}>{x.tipo}</span></td><td>{x.nome}</td><td>{x.cliente}</td><td className="mono">{x.codigo || '—'}</td><td>{x.cidade}{x.uf ? '-' + x.uf : ''}</td><td>{formatDate(x.data)}</td><td className="mono">{x.doses}</td></tr>)}</tbody></table>
+                        ) : (
+                          <table><thead><tr><th>Nome</th><th>Cidade</th><th>UF</th><th>Vacina</th><th>Doses</th></tr></thead><tbody>{items.length === 0 ? <tr><td colSpan={5}>Ainda sem registros</td></tr> : items.map((x,i)=><tr key={i}><td>{x.nome}</td><td>{x.cidade}</td><td>{x.uf}</td><td>{x.vacina}</td><td className="mono">{x.doses}</td></tr>)}</tbody></table>
+                        )}
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
