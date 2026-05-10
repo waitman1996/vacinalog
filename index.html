@@ -2084,109 +2084,284 @@ function ImportEstoque() {
   const [importing, setImporting] = useState(false);
   const [progress, setProgress] = useState(0);
   const [result, setResult] = useState(null);
+  const [modo, setModo] = useState('substituir');
   const toast = useContext(ToastContext);
   const fileRef = useRef();
 
   const norm = (v) => String(v || '').trim();
-  const key = (v) => norm(v).toLowerCase();
-  const parseQtd = (v) => Math.round(parseFloat(String(v || '0').replace(',', '.'))) || 0;
+  const key = (v) => norm(v)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+  const onlyDigits = (v) => String(v || '').replace(/\D/g, '');
+  const parseQtd = (v) => {
+    const raw = String(v ?? '0').replace(/\./g, '').replace(',', '.');
+    const n = Number(raw);
+    return Number.isFinite(n) ? Math.round(n) : 0;
+  };
+  const pick = (row, names) => {
+    const rowKeys = Object.keys(row || {});
+    for (const name of names) {
+      const found = rowKeys.find(k => key(k) === key(name));
+      if (found !== undefined) return row[found];
+    }
+    return '';
+  };
+
+  const baixarModeloEstoque = () => {
+    const rows = [
+      ['localizacao_tipo','local','vacina','quantidade','cpf_aplicador','base','aplicador','lote','validade','observacao'],
+      ['base','Base Marília','Gripe',1000,'','Base Marília','','L001','2026-12-31','Estoque inicial base'],
+      ['aplicador','Pedro Silva','Gripe',150,'12345678901','','Pedro Silva','L001','2026-12-31','Estoque em posse do aplicador'],
+      ['base','Base Campinas','Gripe',500,'','Base Campinas','','L002','2026-12-31','Exemplo']
+    ];
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet(rows);
+    ws['!cols'] = [
+      {wch:18},{wch:26},{wch:20},{wch:12},{wch:18},{wch:24},{wch:28},{wch:12},{wch:14},{wch:34}
+    ];
+    XLSX.utils.book_append_sheet(wb, ws, 'Estoque');
+    XLSX.writeFile(wb, 'modelo_importacao_estoque.xlsx');
+  };
+
+  const normalizarLinha = (r, idx) => {
+    const tipoRaw = pick(r, ['localizacao_tipo','tipo_estoque','tipo estoque','tipo','localização tipo','localizacao tipo']);
+    const localRaw = pick(r, ['local','nome_local','nome local','base','aplicador']);
+    const baseRaw = pick(r, ['base','nome_base','nome base']);
+    const aplicadorRaw = pick(r, ['aplicador','nome_aplicador','nome aplicador','tutor']);
+    const cpfRaw = pick(r, ['cpf_aplicador','cpf aplicador','cpf','documento']);
+    const vacinaRaw = pick(r, ['vacina','nome_vacina','nome vacina','produto']);
+    const qtdRaw = pick(r, ['quantidade','qtd','doses','dose','saldo','estoque']);
+    const loteRaw = pick(r, ['lote']);
+    const validadeRaw = pick(r, ['validade','data_validade','data validade']);
+    const tipoKey = key(tipoRaw || localRaw);
+    let localizacao_tipo = '';
+    if (tipoKey.includes('base') || tipoKey.includes('cd')) localizacao_tipo = 'base';
+    else if (tipoKey.includes('aplicador') || tipoKey.includes('tutor')) localizacao_tipo = 'aplicador';
+    else if (tipoKey.includes('clinica') || tipoKey.includes('clinica')) localizacao_tipo = 'clinica';
+
+    const quantidade = parseQtd(qtdRaw);
+    const vacina = norm(vacinaRaw);
+    const base = norm(baseRaw || (localizacao_tipo === 'base' ? localRaw : ''));
+    const aplicador = norm(aplicadorRaw || (localizacao_tipo === 'aplicador' ? localRaw : ''));
+    const cpf = onlyDigits(cpfRaw);
+    const local = norm(localRaw || base || aplicador);
+
+    const erros = [];
+    if (!localizacao_tipo) erros.push('tipo inválido');
+    if (!vacina) erros.push('vacina vazia');
+    if (quantidade < 0) erros.push('quantidade negativa');
+    if (quantidade === 0) erros.push('quantidade zerada');
+    if (localizacao_tipo === 'base' && !base && !local) erros.push('base/local vazio');
+    if (localizacao_tipo === 'aplicador' && !aplicador && !cpf && !local) erros.push('aplicador/cpf/local vazio');
+    if (localizacao_tipo === 'clinica') erros.push('clínica ainda não implementada no banco');
+
+    return {
+      linha: idx + 2,
+      raw: r,
+      localizacao_tipo,
+      local,
+      base,
+      aplicador,
+      cpf,
+      vacina,
+      quantidade,
+      lote: norm(loteRaw),
+      validade: excelDateToString(validadeRaw) || norm(validadeRaw),
+      erros
+    };
+  };
 
   const handleFile = (f) => {
     if (!f) return;
     setFile(f); setResult(null);
     const reader = new FileReader();
     reader.onload = (e) => {
-      const wb = XLSX.read(e.target.result, { type: 'array', raw: true });
-      const sheet = wb.Sheets[wb.SheetNames[0]];
-      const data = XLSX.utils.sheet_to_json(sheet, { raw: true, defval: '' });
-      const valid = data.filter(r => parseQtd(r['Quantidade']) > 0 && norm(r['Vacina']) && norm(r['Tipo Estoque']));
-      const bases = valid.filter(r => key(r['Tipo Estoque']).includes('base'));
-      const aplicadores = valid.filter(r => key(r['Tipo Estoque']).includes('aplicador'));
-      setPreview({ total: data.length, valid: valid.length, bases: bases.length, aplicadores: aplicadores.length, data: valid });
+      try {
+        const wb = XLSX.read(e.target.result, { type: 'array', raw: true });
+        const sheet = wb.Sheets[wb.SheetNames[0]];
+        const data = XLSX.utils.sheet_to_json(sheet, { raw: true, defval: '' });
+        const linhas = data.map(normalizarLinha);
+        const valid = linhas.filter(r => r.erros.length === 0);
+        const invalid = linhas.filter(r => r.erros.length > 0);
+        const bases = valid.filter(r => r.localizacao_tipo === 'base');
+        const aplicadores = valid.filter(r => r.localizacao_tipo === 'aplicador');
+        const clinicas = linhas.filter(r => r.localizacao_tipo === 'clinica');
+        setPreview({
+          total: data.length,
+          valid: valid.length,
+          invalid: invalid.length,
+          bases: bases.length,
+          aplicadores: aplicadores.length,
+          clinicas: clinicas.length,
+          data: linhas,
+          validRows: valid,
+          invalidRows: invalid.slice(0, 20)
+        });
+      } catch (err) {
+        toast('Erro ao ler arquivo de estoque: ' + err.message, 'error');
+      }
     };
     reader.readAsArrayBuffer(f);
+  };
+
+  const findExistingEstoque = async (row, vacinaId, baseId, aplicadorId) => {
+    let q = sb.from('estoque').select('id, quantidade')
+      .eq('vacina_id', vacinaId)
+      .eq('localizacao_tipo', row.localizacao_tipo);
+    if (row.localizacao_tipo === 'base') q = q.eq('base_id', baseId);
+    if (row.localizacao_tipo === 'aplicador') q = q.eq('aplicador_id', aplicadorId);
+    const { data, error } = await q.limit(1);
+    if (error) throw error;
+    return (data || [])[0] || null;
   };
 
   const doImport = async () => {
     if (!preview) return;
     setImporting(true); setProgress(0);
     try {
-      const [{ data: bases }, { data: aplicadores }, { data: vacinas }] = await Promise.all([
-        sb.from('bases').select('id,nome,cidade,uf'),
-        sb.from('aplicadores').select('id,nome,cpf'),
+      const [{ data: bases, error: bErr }, { data: aplicadores, error: aErr }, { data: vacinas, error: vErr }] = await Promise.all([
+        sb.from('bases').select('id,nome,cidade,uf,ponto_partida'),
+        sb.from('aplicadores').select('id,nome,cpf,cidade,uf'),
         sb.from('vacinas').select('id,nome')
       ]);
-      const baseMap = {}; (bases || []).forEach(b => { baseMap[key(b.nome)] = b.id; });
-      const apCpfMap = {}; const apNomeMap = {}; (aplicadores || []).forEach(a => { apCpfMap[norm(a.cpf)] = a.id; apNomeMap[key(a.nome)] = a.id; });
-      const vacinaMap = {}; (vacinas || []).forEach(v => { vacinaMap[key(v.nome)] = v.id; });
+      if (bErr) throw bErr;
+      if (aErr) throw aErr;
+      if (vErr) throw vErr;
 
+      const baseMap = {};
+      (bases || []).forEach(b => {
+        baseMap[key(b.nome)] = b.id;
+        if (b.cidade && b.uf) baseMap[key(`${b.cidade}-${b.uf}`)] = b.id;
+        if (b.ponto_partida) baseMap[key(b.ponto_partida)] = b.id;
+      });
+      const apCpfMap = {};
+      const apNomeMap = {};
+      (aplicadores || []).forEach(a => {
+        if (a.cpf) apCpfMap[onlyDigits(a.cpf)] = a.id;
+        apNomeMap[key(a.nome)] = a.id;
+      });
+      const vacinaMap = {};
+      (vacinas || []).forEach(v => { vacinaMap[key(v.nome)] = v.id; });
+
+      const { data: userData } = await sb.auth.getUser();
       const { data: imp } = await sb.from('importacoes').insert({
-        tipo: 'estoque', nome_arquivo: file.name, registros_total: preview.valid,
-        usuario_id: (await sb.auth.getUser()).data.user.id
+        tipo: 'estoque',
+        nome_arquivo: file.name,
+        registros_total: preview.valid,
+        usuario_id: userData?.user?.id || null
       }).select().single();
 
-      let imported = 0, ignored = 0;
-      const rows = preview.data;
-      const batchSize = 50;
-      for (let i = 0; i < rows.length; i += batchSize) {
-        const batch = [];
-        for (const r of rows.slice(i, i + batchSize)) {
-          const tipoRaw = key(r['Tipo Estoque']);
-          const isBase = tipoRaw.includes('base');
-          const isAplicador = tipoRaw.includes('aplicador');
-          const vacinaId = vacinaMap[key(r['Vacina'])];
-          const quantidade = parseQtd(r['Quantidade']);
-          let baseId = null, aplicadorId = null;
-          if (isBase) baseId = baseMap[key(r['Base']) || key(r['Local'])];
-          if (isAplicador) aplicadorId = apCpfMap[norm(r['CPF Aplicador'])] || apNomeMap[key(r['Aplicador']) || key(r['Local'])];
-          if (!vacinaId || quantidade <= 0 || (!baseId && !aplicadorId)) { ignored++; continue; }
-          batch.push({
-            vacina_id: vacinaId,
-            localizacao_tipo: isBase ? 'base' : 'aplicador',
-            base_id: baseId,
-            aplicador_id: aplicadorId,
-            quantidade
-          });
+      let imported = 0, updated = 0, inserted = 0, ignored = 0;
+      const errors = [];
+      const rows = preview.validRows;
+      for (let i = 0; i < rows.length; i++) {
+        const r = rows[i];
+        try {
+          const vacinaId = vacinaMap[key(r.vacina)];
+          let baseId = null;
+          let aplicadorId = null;
+          if (r.localizacao_tipo === 'base') baseId = baseMap[key(r.base || r.local)];
+          if (r.localizacao_tipo === 'aplicador') aplicadorId = apCpfMap[r.cpf] || apNomeMap[key(r.aplicador || r.local)];
+
+          if (!vacinaId) throw new Error(`Vacina não encontrada: ${r.vacina}`);
+          if (r.localizacao_tipo === 'base' && !baseId) throw new Error(`Base não encontrada: ${r.base || r.local}`);
+          if (r.localizacao_tipo === 'aplicador' && !aplicadorId) throw new Error(`Aplicador não encontrado: ${r.aplicador || r.local || r.cpf}`);
+
+          const existing = await findExistingEstoque(r, vacinaId, baseId, aplicadorId);
+          if (existing) {
+            const novaQtd = modo === 'somar' ? Number(existing.quantidade || 0) + r.quantidade : r.quantidade;
+            const { error } = await sb.from('estoque').update({ quantidade: novaQtd }).eq('id', existing.id);
+            if (error) throw error;
+            updated++;
+          } else {
+            const payload = {
+              vacina_id: vacinaId,
+              localizacao_tipo: r.localizacao_tipo,
+              base_id: baseId,
+              aplicador_id: aplicadorId,
+              quantidade: r.quantidade
+            };
+            const { error } = await sb.from('estoque').insert(payload);
+            if (error) throw error;
+            inserted++;
+          }
+          imported++;
+        } catch (err) {
+          ignored++;
+          if (errors.length < 15) errors.push(`Linha ${r.linha}: ${err.message}`);
         }
-        if (batch.length > 0) {
-          const { error } = await sb.from('estoque').upsert(batch, { onConflict: 'vacina_id,localizacao_tipo,base_id,aplicador_id' });
-          if (error) { ignored += batch.length; toast('Erro em lote de estoque: ' + error.message, 'error'); }
-          else imported += batch.length;
-        }
-        setProgress(Math.round(((i + batchSize) / rows.length) * 100));
+        setProgress(Math.round(((i + 1) / Math.max(rows.length, 1)) * 100));
       }
-      if (imp?.id) await sb.from('importacoes').update({ registros_importados: imported, registros_ignorados: ignored }).eq('id', imp.id);
-      setResult({ imported, ignored, total: rows.length });
-      toast(`Estoque importado: ${imported} registros.`, 'success');
-    } catch (err) { toast('Erro na importação de estoque: ' + err.message, 'error'); }
-    finally { setImporting(false); }
+
+      ignored += preview.invalid;
+      if (imp?.id) await sb.from('importacoes').update({
+        registros_importados: imported,
+        registros_ignorados: ignored
+      }).eq('id', imp.id);
+      setResult({ imported, updated, inserted, ignored, total: preview.total, errors });
+      toast(`Estoque importado: ${imported} registros.`, imported > 0 ? 'success' : 'error');
+    } catch (err) {
+      toast('Erro na importação de estoque: ' + err.message, 'error');
+    } finally {
+      setImporting(false);
+    }
   };
 
   return (
     <div className="card">
-      <div className="card-title" style={{marginBottom:16}}>Importar Estoque Inicial</div>
+      <div className="card-header">
+        <div>
+          <div className="card-title">Importar Estoque Inicial</div>
+          <div className="page-subtitle">Migração do estoque antigo para Base ou Aplicador</div>
+        </div>
+        <button className="btn btn-secondary btn-sm" type="button" onClick={baixarModeloEstoque}>⬇️ Baixar modelo Excel</button>
+      </div>
       <p style={{fontSize:13,color:'var(--text-secondary)',marginBottom:12}}>
-        Use para migrar seu estoque antigo. Colunas esperadas: Tipo Estoque, Local, Base, Aplicador, CPF Aplicador, Vacina e Quantidade.
+        Colunas aceitas: <strong>localizacao_tipo</strong>, <strong>local</strong>, <strong>vacina</strong>, <strong>quantidade</strong>, <strong>cpf_aplicador</strong>, <strong>base</strong>, <strong>aplicador</strong>, lote e validade. Também aceita nomes antigos como Tipo Estoque, Local, Vacina e Quantidade.
       </p>
-      <a className="btn btn-secondary btn-sm" href="./modelo_importacao_estoque.xlsx" download style={{marginBottom:14}}>⬇️ Baixar modelo Excel</a>
+
+      <div className="form-grid" style={{marginBottom:14}}>
+        <div className="form-group">
+          <label className="form-label">Como atualizar o estoque?</label>
+          <select className="form-select" value={modo} onChange={e=>setModo(e.target.value)}>
+            <option value="substituir">Substituir saldo atual pelo valor da planilha</option>
+            <option value="somar">Somar valor da planilha ao saldo atual</option>
+          </select>
+        </div>
+      </div>
+
       <div className="upload-area" onClick={() => fileRef.current?.click()}
         onDragOver={e=>{e.preventDefault();e.currentTarget.classList.add('drag-over')}}
         onDragLeave={e=>e.currentTarget.classList.remove('drag-over')}
         onDrop={e=>{e.preventDefault();e.currentTarget.classList.remove('drag-over');handleFile(e.dataTransfer.files[0])}}>
         <div className="upload-icon">📦</div>
         <div className="upload-text">{file ? file.name : 'Clique ou arraste o arquivo Excel de estoque'}</div>
-        <div className="upload-hint">Para base, preencha Base/Local. Para aplicador, preencha CPF Aplicador ou Aplicador.</div>
+        <div className="upload-hint">Para base, preencha base/local. Para aplicador, use CPF do aplicador ou nome do aplicador.</div>
         <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv" style={{display:'none'}} onChange={e=>handleFile(e.target.files[0])} />
       </div>
+
       {preview && <div style={{marginTop:16}}>
         <div style={{display:'flex',gap:12,marginBottom:12,flexWrap:'wrap'}}>
           <div className="stat-card" style={{flex:1,minWidth:120}}><div className="stat-label">Linhas</div><div className="stat-value" style={{fontSize:22}}>{preview.total}</div></div>
           <div className="stat-card" style={{flex:1,minWidth:120}}><div className="stat-label">Válidas</div><div className="stat-value" style={{fontSize:22,color:'var(--success)'}}>{preview.valid}</div></div>
           <div className="stat-card" style={{flex:1,minWidth:120}}><div className="stat-label">Bases</div><div className="stat-value" style={{fontSize:22}}>{preview.bases}</div></div>
           <div className="stat-card" style={{flex:1,minWidth:120}}><div className="stat-label">Aplicadores</div><div className="stat-value" style={{fontSize:22}}>{preview.aplicadores}</div></div>
+          <div className="stat-card" style={{flex:1,minWidth:120}}><div className="stat-label">Ignoradas</div><div className="stat-value" style={{fontSize:22,color:preview.invalid>0?'var(--warning)':'var(--text-muted)'}}>{preview.invalid}</div></div>
         </div>
+
+        {preview.invalidRows.length > 0 && <div style={{padding:12,background:'var(--warning-bg)',border:'1px solid rgba(245,158,11,0.3)',borderRadius:'var(--radius-sm)',marginBottom:12,fontSize:12,color:'var(--warning)'}}>
+          <strong>Atenção:</strong> {preview.invalid} linhas têm problema e serão ignoradas. Exemplos: {preview.invalidRows.slice(0,5).map(r => `Linha ${r.linha}: ${r.erros.join(', ')}`).join(' · ')}
+        </div>}
+
         {importing && <div style={{marginBottom:12}}><div style={{fontSize:13,color:'var(--text-secondary)',marginBottom:6}}>Importando... {progress}%</div><div className="progress-bar"><div className="progress-fill" style={{width:progress+'%'}} /></div></div>}
-        {result && <div style={{padding:14,background:'var(--success-bg)',borderRadius:'var(--radius-sm)',border:'1px solid rgba(16,185,129,0.2)',marginBottom:12}}><div style={{fontSize:14,fontWeight:600,color:'var(--success)'}}>✓ Importação concluída</div><div style={{fontSize:13,color:'var(--text-secondary)',marginTop:4}}>{result.imported} importados · {result.ignored} ignorados · {result.total} total</div></div>}
+        {result && <div style={{padding:14,background: result.imported > 0 ? 'var(--success-bg)' : 'var(--danger-bg)',borderRadius:'var(--radius-sm)',border:`1px solid ${result.imported > 0 ? 'rgba(16,185,129,0.2)' : 'rgba(239,68,68,0.2)'}`,marginBottom:12}}>
+          <div style={{fontSize:14,fontWeight:600,color: result.imported > 0 ? 'var(--success)' : 'var(--danger)'}}>✓ Importação finalizada</div>
+          <div style={{fontSize:13,color:'var(--text-secondary)',marginTop:4}}>{result.imported} processados · {result.inserted} novos · {result.updated} atualizados · {result.ignored} ignorados · {result.total} total</div>
+          {result.errors?.length > 0 && <div style={{fontSize:12,color:'var(--warning)',marginTop:8}}>{result.errors.join(' · ')}</div>}
+        </div>}
         <button className="btn btn-primary" onClick={doImport} disabled={importing || preview.valid === 0}>{importing ? 'Importando...' : `Importar ${preview.valid} registros de estoque`}</button>
       </div>}
     </div>
@@ -2475,13 +2650,13 @@ function EscalasPage() {
                 <tr key={e.id}>
                   <td style={{color:'var(--text-primary)',fontWeight:500,maxWidth:160,overflow:'hidden',textOverflow:'ellipsis'}}>{e.tutor_nome}</td>
                   <td className="mono" style={{fontSize:11}}>{e.tutor_cpf}</td>
-                  <td className="mono" style={{fontSize:11,maxWidth:200,overflow:'hidden',textOverflow:'ellipsis'}}>{e.codigo_tarefa}</td>
+                  <td className="mono" style={{fontSize:11,maxWidth:200,overflow:'hidden',textOverflow:'ellipsis'}}>{e.codigo_tarefa || e._tarefa?.codigo}</td>
                   <td>{e.data_inicio ? new Date(e.data_inicio+'T12:00:00').toLocaleDateString('pt-BR') : '—'}</td>
                   <td className="mono">{e.doses_necessarias}</td>
                   <td className="mono" style={{color:e.doses_aplicadas>0?'var(--success)':'inherit'}}>{e.doses_aplicadas}</td>
                   <td className="mono" style={{color:e.doses_perdidas>0?'var(--warning)':'inherit'}}>{e.doses_perdidas}</td>
                   <td className="mono" style={{color:e.doses_danificadas>0?'var(--danger)':'inherit'}}>{e.doses_danificadas}</td>
-                  <td><span className={`badge ${STATUS_BADGES[e.status]||'badge-gray'}`}>{STATUS_LABELS[e.status]||e.status}</span></td>
+                  <td><span className={`badge ${STATUS_BADGES[e._status || e.status]||'badge-gray'}`}>{STATUS_LABELS[e._status || e.status]||(e._status || e.status)}</span></td>
                   <td>{e.base_nome || '—'}</td>
                 </tr>
               ))}
@@ -2683,6 +2858,8 @@ function DemandaOfertaPage({ profile }) {
   const [pontoPartida, setPontoPartida] = useState('');
   const [vacinaFiltro, setVacinaFiltro] = useState('');
   const [planejamentos, setPlanejamentos] = useState({});
+  const [transferModal, setTransferModal] = useState(null);
+  const [transferForm, setTransferForm] = useState({ origem: '', quantidade: '' });
   const toast = useContext(ToastContext);
   const isAdmin = profile?.role === 'admin';
   async function fetchAll(table, select, build) {
@@ -2742,6 +2919,11 @@ function DemandaOfertaPage({ profile }) {
 
       const norm = (v) => String(v || '').trim().toLowerCase()
         .normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+      const normalizeCode = (v) => String(v || '')
+        .trim()
+        .toUpperCase()
+        .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+        .replace(/[^A-Z0-9]/g, '');
       const vacinaMap = {}; const vacinaNomeMap = {};
       (vacinas || []).forEach(v => { vacinaMap[v.id] = v.nome; vacinaNomeMap[norm(v.nome)] = v.id; });
       const baseMap = {}; (bases || []).forEach(b => baseMap[b.id] = b);
@@ -2750,15 +2932,16 @@ function DemandaOfertaPage({ profile }) {
       const tarefaByCodigo = {};
       (tarefasFallback || []).forEach(t => {
         if (t.id) tarefaById[t.id] = t;
-        const c = String(t.codigo || '').trim();
+        const c = normalizeCode(t.codigo);
         if (c) tarefaByCodigo[c] = t;
       });
 
+      const defaultVacinaId = (vacinas && vacinas[0]?.id) || null;
       const resolveVacinaId = (e, t={}) => {
         if (e?.vacina_id) return e.vacina_id;
         if (t?.vacina_id) return t.vacina_id;
         const nome = e?.tipo_vacina || t?.vacina || 'Gripe';
-        return vacinaNomeMap[norm(nome)] || vacinaNomeMap['gripe'] || null;
+        return vacinaNomeMap[norm(nome)] || vacinaNomeMap['gripe'] || defaultVacinaId;
       };
       const resolveVacinaNome = (id, e={}, t={}) => vacinaMap[id] || e.tipo_vacina || t.vacina || 'Vacina';
 
@@ -2786,13 +2969,32 @@ function DemandaOfertaPage({ profile }) {
       const grouped = {};
       const start = range.inicio, end = range.fim;
       const codigosComEscala = new Set();
+      const selectedSemana = safeSemana(semana);
+      const numSemana = (v) => {
+        if (v === null || v === undefined || v === '') return null;
+        const n = Number(String(v).replace(',', '.'));
+        if (Number.isFinite(n) && n > 0) return Math.floor(n);
+        const m = String(v ?? '').match(/\d+/);
+        return m ? parseInt(m[0], 10) : null;
+      };
+      const dateInRange = (d) => {
+        const x = String(d || '').slice(0,10);
+        return !!x && x >= start && x <= end;
+      };
+      const belongsToWeek = (e, t={}) => {
+        const semanaEscala = numSemana(e?.semanas);
+        const semanaTarefa = numSemana(t?.semanas);
+        if (semanaEscala === selectedSemana || semanaTarefa === selectedSemana) return true;
+        return dateInRange(t?.data_inicio) || dateInRange(e?.data_inicio);
+      };
 
       // Principal: todos os aplicadores escalados entram, mesmo com estoque zerado.
+      // Usa primeiro a coluna Semanas importada; se ela não existir, cai para o intervalo de datas.
       (escalas || []).forEach(e => {
-        const codigoEscala = String(e.codigo_tarefa || '').trim();
+        const codigoEscala = normalizeCode(e.codigo_tarefa);
         const t = tarefaById[e.tarefa_id] || tarefaByCodigo[codigoEscala] || {};
+        if (!belongsToWeek(e, t)) return;
         const data = (t.data_inicio || e.data_inicio || '').slice(0,10);
-        if (!data || data < start || data > end) return;
         const statusEscala = String(e.status || t.status || '').toLowerCase();
         if (statusEscala === 'cancelada' || statusEscala === 'cancelado') return;
         const statusLog = t.status_logistica || 'nao_roteirizado';
@@ -2836,43 +3038,123 @@ function DemandaOfertaPage({ profile }) {
           doses,
           status_logistica: statusLog
         });
-        const codigo = String(e.codigo_tarefa || t.codigo || '').trim();
+        const codigo = normalizeCode(e.codigo_tarefa || t.codigo);
         if (codigo) codigosComEscala.add(codigo);
       });
 
-      // Clientes sem escala ainda entram como demanda sem aplicador, para programar escala/envio depois.
+      // Demanda da semana: tarefas são a fonte principal da necessidade.
+      // Se houver escala vinculada pelo código, a demanda entra no aplicador.
+      // Se não houver escala, entra como cliente sem escala para programação.
       (tarefasFallback || []).forEach(t => {
         const data = (t.data_inicio || '').slice(0,10);
-        if (!data || data < start || data > end) return;
+        if (!belongsToWeek({}, t)) return;
         const statusTarefa = String(t.status || '').toLowerCase();
         if (statusTarefa === 'cancelada' || statusTarefa === 'cancelado') return;
         const statusLog = t.status_logistica || 'nao_roteirizado';
         if (statusLog === 'concluido') return;
-        const codigo = String(t.codigo || '').trim();
-        if (codigo && codigosComEscala.has(codigo)) return;
+
+        const codigoNorm = normalizeCode(t.codigo);
         const vacinaId = resolveVacinaId({}, t);
         if (!vacinaId) return;
-        const key = `cliente|${t.cliente || codigo || t.id}|${vacinaId}`;
+
+        // tenta achar escala pelo código da tarefa e semana
+        const escalaVinculada = (escalas || []).find(e => {
+          const ce = normalizeCode(e.codigo_tarefa);
+          if (!ce || ce !== codigoNorm) return false;
+          return belongsToWeek(e, t);
+        });
+
+        let key, baseId, base, nome, cpf, cidade, uf, apId;
+        if (escalaVinculada && escalaVinculada.aplicador_id) {
+          apId = escalaVinculada.aplicador_id;
+          key = `${apId}|${vacinaId}`;
+          const est = estoqueMap[key] || {};
+          const ap = apMap[apId] || {};
+          baseId = escalaVinculada.base_id || est.base_id || ap.base_vinculada_id || t.base_id || null;
+          base = baseMap[baseId] || {};
+          nome = est.aplicador_nome || escalaVinculada.tutor_nome || ap.nome || 'Aplicador sem cadastro';
+          cpf = est.cpf || escalaVinculada.tutor_cpf || ap.cpf || '';
+          cidade = est.cidade || ap.cidade || t.cidade_campanha || '';
+          uf = est.uf || ap.uf || t.uf_campanha || '';
+        } else {
+          apId = null;
+          key = `cliente|${t.cliente || codigoNorm || t.id}|${vacinaId}`;
+          baseId = t.base_id || null;
+          base = baseMap[baseId] || {};
+          nome = t.cliente || 'Cliente sem escala';
+          cpf = '';
+          cidade = t.cidade_campanha || '';
+          uf = t.uf_campanha || '';
+        }
+
         if (!grouped[key]) {
-          const base = baseMap[t.base_id] || {};
           grouped[key] = {
             key,
-            aplicador_id: null,
-            aplicador_nome: t.cliente || 'Cliente sem escala',
-            cpf: '', cidade: t.cidade_campanha || '', uf: t.uf_campanha || '',
-            ponto_partida: t.ponto_partida || base.ponto_partida || t.base_nome || base.nome || '',
-            base_origem_id: t.base_id || null,
-            base_origem_nome: t.base_nome || base.nome || '—',
+            aplicador_id: apId,
+            aplicador_nome: nome,
+            cpf,
+            cidade,
+            uf,
+            ponto_partida: (escalaVinculada?.ponto_partida) || t.ponto_partida || base.ponto_partida || t.base_nome || base.nome || '',
+            base_origem_id: baseId,
+            base_origem_nome: base.nome || escalaVinculada?.base_nome || t.base_nome || '—',
             vacina_id: vacinaId,
-            vacina_nome: resolveVacinaNome(vacinaId, {}, t),
-            estoque_atual: 0,
+            vacina_nome: resolveVacinaNome(vacinaId, escalaVinculada || {}, t),
+            estoque_atual: apId ? (estoqueMap[`${apId}|${vacinaId}`]?.estoque_atual || 0) : 0,
             demanda_futura: 0,
             tarefas: []
           };
         }
-        const doses = Number(t.doses_previstas || 0);
-        grouped[key].demanda_futura += doses;
-        grouped[key].tarefas.push({ tarefa_id: t.id, codigo, cliente: t.cliente || '', data_inicio: data, doses, status_logistica: statusLog });
+
+        // Evita duplicar se essa mesma tarefa já entrou via escala antes
+        const jaTem = grouped[key].tarefas.some(x => normalizeCode(x.codigo) === codigoNorm && codigoNorm);
+        if (!jaTem) {
+          const doses = Number(t.doses_previstas || escalaVinculada?.doses_necessarias || 0);
+          grouped[key].demanda_futura += doses;
+          grouped[key].tarefas.push({ tarefa_id: t.id, escala_id: escalaVinculada?.id, codigo: t.codigo || '', cliente: t.cliente || '', data_inicio: data, doses, status_logistica: statusLog });
+        }
+      });
+
+      // Se ainda não houver demanda, inclui escalas da semana diretamente como fallback,
+      // mesmo sem tarefa vinculada ou sem código compatível.
+      (escalas || []).forEach(e => {
+        const t = tarefaById[e.tarefa_id] || tarefaByCodigo[normalizeCode(e.codigo_tarefa)] || {};
+        if (!belongsToWeek(e, t)) return;
+        const statusEscala = String(e.status || t.status || '').toLowerCase();
+        if (statusEscala === 'cancelada' || statusEscala === 'cancelado') return;
+        const vacinaId = resolveVacinaId(e, t);
+        if (!vacinaId) return;
+        const apId = e.aplicador_id || null;
+        const key = apId ? `${apId}|${vacinaId}` : `escala|${e.tutor_cpf || e.tutor_nome || e.id}|${vacinaId}`;
+        const codigoNorm = normalizeCode(e.codigo_tarefa || t.codigo);
+        if (!grouped[key]) {
+          const est = apId ? (estoqueMap[key] || {}) : {};
+          const ap = apId ? (apMap[apId] || {}) : {};
+          const baseId = e.base_id || est.base_id || ap.base_vinculada_id || t.base_id || null;
+          const base = baseMap[baseId] || {};
+          grouped[key] = {
+            key,
+            aplicador_id: apId,
+            aplicador_nome: est.aplicador_nome || e.tutor_nome || ap.nome || 'Aplicador sem cadastro',
+            cpf: est.cpf || e.tutor_cpf || ap.cpf || '',
+            cidade: est.cidade || ap.cidade || t.cidade_campanha || '',
+            uf: est.uf || ap.uf || t.uf_campanha || '',
+            ponto_partida: e.ponto_partida || t.ponto_partida || base.ponto_partida || e.base_nome || t.base_nome || base.nome || '',
+            base_origem_id: baseId,
+            base_origem_nome: base.nome || e.base_nome || t.base_nome || '—',
+            vacina_id: vacinaId,
+            vacina_nome: resolveVacinaNome(vacinaId, e, t),
+            estoque_atual: est.estoque_atual || 0,
+            demanda_futura: 0,
+            tarefas: []
+          };
+        }
+        const jaTem = grouped[key].tarefas.some(x => normalizeCode(x.codigo) === codigoNorm && codigoNorm);
+        if (!jaTem) {
+          const doses = Number(e.doses_necessarias || t.doses_previstas || 0);
+          grouped[key].demanda_futura += doses;
+          grouped[key].tarefas.push({ escala_id: e.id, tarefa_id: e.tarefa_id || t.id, codigo: e.codigo_tarefa || t.codigo || '', cliente: t.cliente || '', data_inicio: (t.data_inicio || e.data_inicio || '').slice(0,10), doses, status_logistica: t.status_logistica || 'nao_roteirizado' });
+        }
       });
 
       // Inclui aplicadores com estoque, mesmo sem demanda na semana, para analisar transferência para outro aplicador.
@@ -2963,6 +3245,7 @@ function DemandaOfertaPage({ profile }) {
   const confirmarEntrega = async (item) => {
     if (!isAdmin) { toast('Somente ADM pode confirmar entrega.', 'error'); return; }
     if (!item.necessidade || item.necessidade <= 0) { toast('Este aplicador não precisa de envio.', 'info'); return; }
+    if (!item.base_origem_id) { toast('Este registro não tem base de origem definida.', 'error'); return; }
     if (!confirm(`Confirmar entrega de ${item.necessidade} doses para ${item.aplicador_nome}?`)) return;
     try {
       // Preferência: usa a função do banco, se existir.
@@ -2981,6 +3264,62 @@ function DemandaOfertaPage({ profile }) {
       await load();
     } catch (err) {
       toast('Erro ao confirmar entrega: ' + err.message, 'error');
+    }
+  };
+
+  const aprovarEnvio = async (item) => {
+    if (!isAdmin) { toast('Somente ADM pode aprovar envio.', 'error'); return; }
+    if (!item.aplicador_id) { toast('Este item ainda não tem aplicador vinculado.', 'error'); return; }
+    if ((item.necessidade || 0) <= 0) { toast('Este aplicador não precisa de envio.', 'info'); return; }
+    await savePlanning(item, 'envio_aprovado', { observacao: `Envio aprovado para ${item.necessidade} doses - Semana ${safeSemana(semana)}` });
+  };
+
+  const gerarMontagem = async (item) => {
+    if (!isAdmin) { toast('Somente ADM pode enviar para montagem.', 'error'); return; }
+    if ((item.necessidade || 0) <= 0) { toast('Este aplicador não precisa de montagem.', 'info'); return; }
+    await savePlanning(item, 'em_montagem', { observacao: `Enviado para montagem pela Demanda vs Oferta - Semana ${safeSemana(semana)}` });
+  };
+
+  const abrirTransferencia = (item) => {
+    const donors = items.filter(d =>
+      d.aplicador_id && d.aplicador_id !== item.aplicador_id &&
+      d.vacina_id === item.vacina_id &&
+      (d.ponto_partida || '') === (item.ponto_partida || '') &&
+      Number(d.saldo_projetado || 0) > 0
+    );
+    if (donors.length === 0) { toast('Não encontrei aplicador com sobra no mesmo ponto de partida e vacina.', 'error'); return; }
+    setTransferModal({ destino: item, donors });
+    setTransferForm({ origem: donors[0].aplicador_id, quantidade: String(Math.min(item.necessidade || 0, donors[0].saldo_projetado || 0)) });
+  };
+
+  const confirmarTransferencia = async () => {
+    if (!isAdmin) { toast('Somente ADM pode transferir.', 'error'); return; }
+    const item = transferModal?.destino;
+    const donor = transferModal?.donors?.find(d => d.aplicador_id === transferForm.origem);
+    const qtd = parseInt(transferForm.quantidade, 10);
+    if (!item || !donor) { toast('Selecione a origem da transferência.', 'error'); return; }
+    if (!qtd || qtd <= 0) { toast('Informe uma quantidade válida.', 'error'); return; }
+    if (qtd > Number(donor.saldo_projetado || 0)) { toast('Quantidade maior que a sobra disponível do aplicador origem.', 'error'); return; }
+    if (qtd > Number(item.necessidade || 0)) { toast('Quantidade maior que a necessidade do aplicador destino.', 'error'); return; }
+    if (!confirm(`Transferir ${qtd} doses de ${donor.aplicador_nome} para ${item.aplicador_nome}?`)) return;
+    try {
+      const { error } = await sb.rpc('transferir_estoque', {
+        p_vacina_id: item.vacina_id,
+        p_quantidade: qtd,
+        p_origem_tipo: 'aplicador',
+        p_origem_id: donor.aplicador_id,
+        p_destino_tipo: 'aplicador',
+        p_destino_id: item.aplicador_id,
+        p_remessa_id: null,
+        p_observacao: `Transferência entre aplicadores - Demanda vs Oferta - Semana ${safeSemana(semana)}`
+      });
+      if (error) throw error;
+      await savePlanning(item, qtd >= item.necessidade ? 'nao_enviar_estoque_suficiente' : 'envio_sugerido', { observacao: `Transferidas ${qtd} doses de ${donor.aplicador_nome}.` });
+      setTransferModal(null);
+      await load();
+      toast('Transferência realizada com sucesso.', 'success');
+    } catch (err) {
+      toast('Erro ao transferir: ' + err.message, 'error');
     }
   };
 
@@ -3014,7 +3353,7 @@ function DemandaOfertaPage({ profile }) {
       <div className="page-header">
         <div>
           <div className="page-title">Demanda vs Oferta</div>
-          <div className="page-subtitle">Decisão de envio por aplicador · Semana {range.semana}: {range.label}</div>
+          <div className="page-subtitle">Decisão de envio por aplicador · Semana {range.semana}: {range.label} · Fonte: tarefas + escalas + estoque</div>
         </div>
         <button className="btn btn-secondary" onClick={load}>↻ Atualizar</button>
       </div>
@@ -3073,6 +3412,9 @@ function DemandaOfertaPage({ profile }) {
                             <option value="entregue">Entregue</option>
                             <option value="cancelado">Cancelado</option>
                           </select>
+                          {i.necessidade > 0 && <button className="btn btn-primary btn-sm" onClick={()=>aprovarEnvio(i)}>Aprovar envio</button>}
+                          {i.necessidade > 0 && <button className="btn btn-secondary btn-sm" onClick={()=>abrirTransferencia(i)}>Transferir</button>}
+                          {i.necessidade > 0 && <button className="btn btn-success btn-sm" onClick={()=>gerarMontagem(i)}>Gerar montagem</button>}
                           {i.necessidade > 0 && <button className="btn btn-success btn-sm" onClick={()=>confirmarEntrega(i)}>Confirmar entrega</button>}
                           {i.necessidade <= 0 && i.demanda_futura > 0 && <button className="btn btn-secondary btn-sm" onClick={()=>savePlanning(i,'nao_enviar_estoque_suficiente',{observacao:'Estoque atual cobre a demanda futura.'})}>Confirmar não envio</button>}
                         </div>
@@ -3085,6 +3427,36 @@ function DemandaOfertaPage({ profile }) {
           </table>
         </div>
       </div>
+
+      {transferModal && (
+        <Modal title="Transferência entre aplicadores" onClose={() => setTransferModal(null)}>
+          <div style={{fontSize:13,color:'var(--text-secondary)',marginBottom:14}}>
+            Destino: <strong style={{color:'var(--text-primary)'}}>{transferModal.destino.aplicador_nome}</strong><br />
+            Necessidade: <strong>{Number(transferModal.destino.necessidade || 0).toLocaleString('pt-BR')}</strong> doses · Vacina: {transferModal.destino.vacina_nome}
+          </div>
+          <div className="form-grid">
+            <div className="form-group" style={{gridColumn:'1/-1'}}>
+              <label className="form-label">Aplicador origem com sobra</label>
+              <select className="form-select" value={transferForm.origem} onChange={e => {
+                const donor = transferModal.donors.find(d => d.aplicador_id === e.target.value);
+                setTransferForm({ origem: e.target.value, quantidade: String(Math.min(transferModal.destino.necessidade || 0, donor?.saldo_projetado || 0)) });
+              }}>
+                {transferModal.donors.map(d => (
+                  <option key={d.aplicador_id} value={d.aplicador_id}>{d.aplicador_nome} · sobra {Number(d.saldo_projetado || 0).toLocaleString('pt-BR')} doses</option>
+                ))}
+              </select>
+            </div>
+            <div className="form-group">
+              <label className="form-label">Quantidade</label>
+              <input className="form-input" type="number" min="1" value={transferForm.quantidade} onChange={e=>setTransferForm(f=>({...f,quantidade:e.target.value}))} />
+            </div>
+          </div>
+          <div className="modal-actions">
+            <button className="btn btn-secondary" onClick={() => setTransferModal(null)}>Cancelar</button>
+            <button className="btn btn-primary" onClick={confirmarTransferencia}>Confirmar transferência</button>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }
@@ -3280,6 +3652,10 @@ function RoteirizacaoPage({ onBack }) {
   const [showJaRoteirizado, setShowJaRoteirizado] = useState(false);
   const [searchTarefa, setSearchTarefa] = useState('');
   const [pontosPartida, setPontosPartida] = useState([]);
+  const [planejamentoByAplicador, setPlanejamentoByAplicador] = useState({});
+  const [manualDosesRota, setManualDosesRota] = useState({});
+  const [selectedTarefasRota, setSelectedTarefasRota] = useState({});
+  const [manualDosesTarefaRota, setManualDosesTarefaRota] = useState({});
 
   const [rotaTipo, setRotaTipo] = useState('entrega');
   const [rotaData, setRotaData] = useState(new Date().toISOString().split('T')[0]);
@@ -3298,49 +3674,156 @@ function RoteirizacaoPage({ onBack }) {
   }, []);
 
   const loadEscalas = async () => {
-    // Supabase limita 1000 por request — buscar em páginas
-    let allRows = [];
-    let page = 0;
     const PAGE = 1000;
-    while (true) {
-      const { data, error } = await sb.from('escalas')
-        .select('id, codigo_tarefa, tutor_nome, tutor_cpf, ponto_partida, doses_necessarias, data_inicio, data_termino, base_nome, base_id, status, endereco_tarefa, aplicador_id, aplicadores(nome, cpf, cidade, uf, endereco)')
-        .in('status', ['aprovada','em_validacao','em_execucao','pronta_faturamento'])
-        .order('tutor_nome')
-        .range(page * PAGE, (page + 1) * PAGE - 1);
-      if (error || !data || data.length === 0) break;
-      allRows = allRows.concat(data);
-      if (data.length < PAGE) break;
-      page++;
+    const normalizeRouteCode = (v) => String(v || '')
+      .trim()
+      .toUpperCase()
+      .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^A-Z0-9]/g, '');
+
+    const fetchPaged = async (table, select, queryBuilder) => {
+      let all = [];
+      let page = 0;
+      while (true) {
+        let q = sb.from(table).select(select).range(page * PAGE, (page + 1) * PAGE - 1);
+        if (queryBuilder) q = queryBuilder(q);
+        const { data, error } = await q;
+        if (error) throw error;
+        if (!data || data.length === 0) break;
+        all = all.concat(data);
+        if (data.length < PAGE) break;
+        page++;
+      }
+      return all;
+    };
+
+    let allRows = [];
+    try {
+      // Consulta robusta: não depende de relacionamento embedded com aplicadores.
+      // Antes, quando o relacionamento falhava, a tela ficava vazia e mostrava "Importe escalas primeiro".
+      allRows = await fetchPaged(
+        'escalas',
+        'id,tarefa_id,codigo_tarefa,aplicador_id,tutor_nome,tutor_cpf,ponto_partida,doses_necessarias,data_inicio,data_termino,base_nome,base_id,status,endereco_tarefa,vacina_id,tipo_vacina,semanas',
+        q => q.order('tutor_nome')
+      );
+    } catch (err) {
+      console.warn('Falha ao carregar escalas com colunas esperadas. Tentando select *:', err);
+      try {
+        allRows = await fetchPaged('escalas', '*', q => q.order('tutor_nome'));
+      } catch (err2) {
+        console.error('Erro ao carregar escalas:', err2);
+        toast('Erro ao carregar escalas: ' + (err2.message || err2), 'error');
+        allRows = [];
+      }
+    }
+
+    // Buscar aplicadores em separado para preencher cidade/UF/endereço, sem travar a consulta de escalas.
+    const apIds = [...new Set(allRows.map(e => e.aplicador_id).filter(Boolean))];
+    const apById = {};
+    for (let i = 0; i < apIds.length; i += 500) {
+      const ids = apIds.slice(i, i + 500);
+      const { data: aps, error: apErr } = await sb.from('aplicadores')
+        .select('id,nome,cpf,cidade,uf,endereco,base_vinculada_id')
+        .in('id', ids);
+      if (!apErr && aps) aps.forEach(a => { apById[a.id] = a; });
     }
 
     // Buscar aplicadores que JÁ têm remessas ativas (não concluídas/canceladas)
-    // para excluí-los da roteirização
     const { data: remessasAtivas } = await sb.from('remessas')
       .select('destino_aplicador_id')
       .not('destino_aplicador_id', 'is', null)
       .not('status', 'in', '("concluida","cancelada")');
     const apJaRoteirizados = new Set((remessasAtivas || []).map(r => r.destino_aplicador_id));
 
-    const rows = allRows;
+    // Buscar tarefas para usar status/data/doses corretos e cruzar com escala.
+    let tarefasAll = [];
+    try {
+      tarefasAll = await fetchPaged(
+        'tarefas',
+        'id,codigo,cliente,cidade_campanha,uf_campanha,data_inicio,doses_previstas,status,status_logistica,ponto_partida,base_id,base_nome,vacina_id,semanas',
+        q => q.order('data_inicio', { ascending: true })
+      );
+    } catch (err) {
+      console.warn('Não foi possível carregar tarefas para roteirização:', err);
+      tarefasAll = [];
+    }
+
+    const tarefaByCodigo = {};
+    const tarefaById = {};
+    tarefasAll.forEach(t => {
+      if (t.id) tarefaById[t.id] = t;
+      const c = normalizeRouteCode(t.codigo);
+      if (c) tarefaByCodigo[c] = t;
+    });
+
+    const activeStatuses = new Set(['aprovada','em_validacao','em_execucao','pronta_faturamento']);
+    let rows = allRows.map(e => {
+      const ap = apById[e.aplicador_id] || {};
+      const t = tarefaById[e.tarefa_id] || tarefaByCodigo[normalizeRouteCode(e.codigo_tarefa)] || {};
+      const statusFinal = t.status || e.status || 'aprovada';
+      return {
+        ...e,
+        aplicadores: ap,
+        _tarefa: t,
+        _data_inicio: String(t.data_inicio || e.data_inicio || '').slice(0,10),
+        _status: statusFinal,
+        _status_logistica: t.status_logistica || 'nao_roteirizado',
+        _doses: Number(t.doses_previstas || e.doses_necessarias || 0),
+        _ponto_partida: t.ponto_partida || e.ponto_partida || '',
+        _base_nome: t.base_nome || e.base_nome || '',
+        _cliente: t.cliente || '',
+        _semana: Number(t.semanas || e.semanas || 0) || null,
+      };
+    });
+
+    // Mantém só o fluxo operacional principal, mas se a base tiver status diferente não zera a tela.
+    const rowsAtivas = rows.filter(e => activeStatuses.has(String(e._status || '').toLowerCase()));
+    if (rowsAtivas.length > 0) rows = rowsAtivas;
+
     setEscalas(rows);
 
-    // Agrupar por CPF do tutor — normaliza CPF removendo pontuação
+    // Buscar decisões da Demanda vs Oferta para ajustar quantidade a roteirizar.
+    let planningRows = [];
+    try {
+      const { data: pr, error: prErr } = await sb.from('planejamento_logistico')
+        .select('aplicador_id,vacina_id,semana,quantidade_sugerida,status,saldo_projetado,demanda_futura,estoque_atual')
+        .not('aplicador_id', 'is', null);
+      if (!prErr) planningRows = pr || [];
+    } catch (err) {
+      planningRows = [];
+    }
+
+    const planMap = {};
+    planningRows.forEach(p => {
+      if (!p.aplicador_id) return;
+      if (!planMap[p.aplicador_id]) planMap[p.aplicador_id] = { quantidade_sugerida: 0, status: p.status, items: [] };
+      planMap[p.aplicador_id].items.push(p);
+      if (p.status === 'nao_enviar_estoque_suficiente') {
+        planMap[p.aplicador_id].status = p.status;
+      } else if (['envio_sugerido','envio_aprovado','em_montagem','montado','carregado','em_rota'].includes(p.status)) {
+        planMap[p.aplicador_id].quantidade_sugerida += Number(p.quantidade_sugerida || 0);
+        planMap[p.aplicador_id].status = p.status;
+      }
+    });
+    setPlanejamentoByAplicador(planMap);
+
+    // Agrupar por aplicador/CPF.
     const groups = {};
     rows.forEach(e => {
-      const cpfRaw = String(e.tutor_cpf || '').trim();
-      const cpfNorm = cpfRaw.replace(/\D/g, ''); // só dígitos
-      const key = cpfNorm || e.id;
+      const ap = e.aplicadores || {};
+      const cpfRaw = String(e.tutor_cpf || ap.cpf || '').trim();
+      const cpfNorm = cpfRaw.replace(/\D/g, '');
+      const key = e.aplicador_id || cpfNorm || e.id;
       if (!groups[key]) {
         groups[key] = {
           cpf: cpfRaw,
           cpfNorm,
-          nome: (e.tutor_nome || '').trim(),
-          ponto_partida: e.ponto_partida,
-          cidade: e.aplicadores?.cidade || '',
-          uf: e.aplicadores?.uf || '',
-          endereco: e.aplicadores?.endereco || '',
-          base_nome: e.base_nome,
+          nome: (e.tutor_nome || ap.nome || '').trim(),
+          ponto_partida: e._ponto_partida,
+          cidade: ap.cidade || '',
+          uf: ap.uf || '',
+          endereco: ap.endereco || e.endereco_tarefa || '',
+          base_nome: e._base_nome,
           aplicador_id: e.aplicador_id,
           tarefas: [],
           total_doses: 0,
@@ -3348,11 +3831,14 @@ function RoteirizacaoPage({ onBack }) {
           jaRoteirizado: apJaRoteirizados.has(e.aplicador_id),
         };
       }
-      if (!groups[key].nome && e.tutor_nome) groups[key].nome = e.tutor_nome.trim();
+      if (!groups[key].nome && (e.tutor_nome || ap.nome)) groups[key].nome = (e.tutor_nome || ap.nome || '').trim();
+      if (!groups[key].ponto_partida && e._ponto_partida) groups[key].ponto_partida = e._ponto_partida;
+      if (!groups[key].base_nome && e._base_nome) groups[key].base_nome = e._base_nome;
       groups[key].tarefas.push(e);
-      groups[key].total_doses += (e.doses_necessarias || 0);
-      groups[key].statuses.add(e.status);
+      groups[key].total_doses += Number(e._doses || e.doses_necessarias || 0);
+      groups[key].statuses.add(e._status || e.status);
     });
+
     const tutorList = Object.values(groups).sort((a,b) => b.total_doses - a.total_doses);
     setTutores(tutorList);
 
@@ -3368,9 +3854,9 @@ function RoteirizacaoPage({ onBack }) {
     // Ocultar já roteirizados por padrão
     if (!showJaRoteirizado) f = f.filter(t => !t.jaRoteirizado);
     if (filterPP) f = f.filter(t => t.ponto_partida === filterPP);
-    if (filterStatus) f = f.filter(t => t.statuses ? t.statuses.has(filterStatus) : t.tarefas.some(e => e.status === filterStatus));
-    if (filterDateStart) f = f.filter(t => t.tarefas.some(e => e.data_inicio >= filterDateStart));
-    if (filterDateEnd) f = f.filter(t => t.tarefas.some(e => e.data_inicio <= filterDateEnd));
+    if (filterStatus) f = f.filter(t => t.statuses ? t.statuses.has(filterStatus) : t.tarefas.some(e => (e._status || e.status) === filterStatus));
+    if (filterDateStart) f = f.filter(t => t.tarefas.some(e => (e._data_inicio || e.data_inicio) >= filterDateStart));
+    if (filterDateEnd) f = f.filter(t => t.tarefas.some(e => (e._data_inicio || e.data_inicio) <= filterDateEnd));
     if (searchTarefa) {
       const s = searchTarefa.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
       f = f.filter(t => {
@@ -3417,17 +3903,67 @@ function RoteirizacaoPage({ onBack }) {
     return null;
   };
 
+  const tarefaRouteKey = (e) => String(e.id || e.tarefa_id || e.codigo_tarefa || e._tarefa?.codigo || '').trim();
+
+  const getTarefasRotaTutor = (tutor) => {
+    let tarefas = filterStatus
+      ? tutor.tarefas.filter(e => (e._status || e.status) === filterStatus)
+      : tutor.tarefas;
+    if (filterDateStart) tarefas = tarefas.filter(e => (e._data_inicio || e.data_inicio || '') >= filterDateStart);
+    if (filterDateEnd) tarefas = tarefas.filter(e => (e._data_inicio || e.data_inicio || '') <= filterDateEnd);
+    return tarefas;
+  };
+
+  const isTarefaRotaSelecionada = (e) => {
+    const key = tarefaRouteKey(e);
+    return selectedTarefasRota[key] !== false;
+  };
+
+  const getDoseTarefaRota = (e) => {
+    const key = tarefaRouteKey(e);
+    if (manualDosesTarefaRota[key] !== undefined && manualDosesTarefaRota[key] !== '') {
+      return Math.max(0, Number(manualDosesTarefaRota[key]) || 0);
+    }
+    return Number(e._doses || e.doses_necessarias || 0);
+  };
+
+  const calcDosesRotaTutor = (tutor) => {
+    const tarefasFiltradas = getTarefasRotaTutor(tutor).filter(isTarefaRotaSelecionada);
+    const original = tarefasFiltradas.reduce((s, e) => s + getDoseTarefaRota(e), 0);
+    const manualKey = tutor.cpfNorm || tutor.cpf || tutor.aplicador_id;
+    if (manualDosesRota[manualKey] !== undefined && manualDosesRota[manualKey] !== '') {
+      return Math.max(0, Number(manualDosesRota[manualKey]) || 0);
+    }
+    const plan = planejamentoByAplicador[tutor.aplicador_id];
+    if (plan?.status === 'nao_enviar_estoque_suficiente') return 0;
+    if (plan?.quantidade_sugerida > 0) return Math.min(Number(plan.quantidade_sugerida || 0), original || Number(plan.quantidade_sugerida || 0));
+    return original;
+  };
+
+  const statusDemandaTutor = (tutor) => {
+    const plan = planejamentoByAplicador[tutor.aplicador_id];
+    if (!plan) return 'Sem decisão DvO';
+    if (plan.status === 'nao_enviar_estoque_suficiente') return 'DvO: não enviar';
+    if (plan.quantidade_sugerida > 0) return `DvO: enviar ${Number(plan.quantidade_sugerida || 0).toLocaleString('pt-BR')}`;
+    return 'DvO: revisar';
+  };
+
   const addTutor = async (tutor) => {
     toast('Buscando coordenadas para ' + (tutor.ponto_partida||tutor.cidade) + '...', 'info');
     const query = tutor.ponto_partida || (tutor.cidade + ', ' + tutor.uf);
     const coords = await geocode(query);
     if (!coords) toast('⚠ Coordenadas não encontradas para "' + query + '" — parada adicionada sem pin no mapa', 'error');
 
-    // Filtrar tarefas pelo status selecionado (se houver filtro ativo)
-    const tarefasFiltradas = filterStatus
-      ? tutor.tarefas.filter(e => e.status === filterStatus)
-      : tutor.tarefas;
-    const dosesFiltradas = tarefasFiltradas.reduce((s, e) => s + (e.doses_necessarias||0), 0);
+    // Filtrar tarefas pelo status/data e manter somente as selecionadas para esta rota.
+    const tarefasFiltradasBase = getTarefasRotaTutor(tutor);
+    const tarefasFiltradas = tarefasFiltradasBase
+      .filter(isTarefaRotaSelecionada)
+      .map(e => ({ ...e, _doses_rota: getDoseTarefaRota(e), _selecionada_rota: true }));
+    const dosesOriginais = tarefasFiltradasBase.reduce((s, e) => s + (e._doses || e.doses_necessarias || 0), 0);
+    const dosesFiltradas = calcDosesRotaTutor(tutor);
+    if (tarefasFiltradas.length === 0 || dosesFiltradas <= 0) {
+      if (!confirm('Nenhuma tarefa/dose selecionada para este aplicador. Adicionar mesmo assim?')) return;
+    }
 
     const parada = {
       cpf: tutor.cpf,
@@ -3436,6 +3972,8 @@ function RoteirizacaoPage({ onBack }) {
       cidade: tutor.cidade,
       uf: tutor.uf,
       doses: dosesFiltradas,
+      doses_originais: dosesOriginais,
+      decisao_demanda_oferta: statusDemandaTutor(tutor),
       tarefas_count: tarefasFiltradas.length,
       tarefas: tarefasFiltradas,
       status_filtro: filterStatus || null,
@@ -3445,7 +3983,7 @@ function RoteirizacaoPage({ onBack }) {
     };
     setParadas(p => [...p, parada]);
     setMapKey(k => k+1);
-    if (coords) toast(tutor.nome + ' adicionado(a) ✓ (' + tarefasFiltradas.length + ' tarefas · ' + dosesFiltradas + ' doses)', 'success');
+    if (coords) toast(tutor.nome + ' adicionado(a) ✓ (' + tarefasFiltradas.length + ' tarefas · ' + dosesFiltradas + ' doses para enviar)', 'success');
   };
 
   const removeParada = (idx) => {
@@ -3520,7 +4058,7 @@ function RoteirizacaoPage({ onBack }) {
     let errs = 0;
     for (const p of paradas) {
       const aplicadorId = apMap[p.cpf] || null;
-      const obs = p.nome+' ('+p.cpf+') | '+p.doses+' doses | '+p.tarefas.map(t => t.codigo_tarefa).join(', ');
+      const obs = p.nome+' ('+p.cpf+') | '+p.doses+' doses para enviar | original '+(p.doses_originais||p.doses)+' | '+(p.decisao_demanda_oferta||'')+' | '+p.tarefas.map(t => t.codigo_tarefa || t._tarefa?.codigo).join(', ');
       const { error } = await sb.from('remessas').insert({
         rota_id: rota.id,
         tipo: rotaTipo === 'coleta' ? 'coleta' : 'entrega',
@@ -3625,7 +4163,7 @@ function RoteirizacaoPage({ onBack }) {
               {filteredTutores.length === 0 && <div style={{padding:20,textAlign:'center',color:'var(--text-muted)',fontSize:12}}>{tutores.length===0?'Importe escalas primeiro':'Nenhum resultado'}</div>}
               {filteredTutores.slice(0,80).map(t => {
                 const isExpanded = expandedTutor === t.cpf;
-                const statusCounts = t.tarefas.reduce((acc, e) => { acc[e.status] = (acc[e.status]||0)+1; return acc; }, {});
+                const statusCounts = t.tarefas.reduce((acc, e) => { const st = e._status || e.status; acc[st] = (acc[st]||0)+1; return acc; }, {});
                 return (
                   <div key={t.cpf} style={{borderBottom:'1px solid var(--border)', opacity: t.jaRoteirizado ? 0.65 : 1}}>
                     {/* Header do card - clica para colapsar/expandir */}
@@ -3648,10 +4186,7 @@ function RoteirizacaoPage({ onBack }) {
                       </div>
                       <div style={{display:'flex',alignItems:'center',gap:4,flexShrink:0}}>
                         <span className="badge badge-cyan" style={{fontSize:10}}>
-                          {filterStatus
-                            ? t.tarefas.filter(e=>e.status===filterStatus).reduce((s,e)=>s+(e.doses_necessarias||0),0).toLocaleString('pt-BR')
-                            : t.total_doses.toLocaleString('pt-BR')
-                          }
+                          {calcDosesRotaTutor(t).toLocaleString('pt-BR')}
                         </span>
                         <button className="btn btn-primary btn-sm" style={{padding:'3px 8px',fontSize:10}} onClick={(e) => {e.stopPropagation(); addTutor(t);}}>+</button>
                       </div>
@@ -3660,19 +4195,51 @@ function RoteirizacaoPage({ onBack }) {
                     {isExpanded && (
                       <div style={{padding:'4px 10px 8px',background:'var(--bg-input)'}}>
                         <div style={{fontSize:10,color:'var(--text-muted)',marginBottom:4}}>
-                          CPF: {t.cpf} · Base: {t.base_nome}
+                          CPF: {t.cpf} · Base: {t.base_nome} · <span style={{color:'var(--info)'}}>{statusDemandaTutor(t)}</span>
                           {filterStatus && <span style={{marginLeft:6,color:'var(--warning)'}}>⚠ Mostrando só: {STATUS_LABELS[filterStatus]}</span>}
                         </div>
-                        {(filterStatus ? t.tarefas.filter(e => e.status === filterStatus) : t.tarefas).slice(0,10).map(e => (
-                          <div key={e.id} style={{fontSize:10,color:'var(--text-secondary)',padding:'3px 0',borderBottom:'1px solid var(--border)',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
-                            <span style={{fontFamily:'JetBrains Mono',fontSize:9,overflow:'hidden',textOverflow:'ellipsis',maxWidth:140}}>{e.codigo_tarefa}</span>
-                            <div style={{display:'flex',gap:4,alignItems:'center'}}>
-                              <span className={`badge ${STATUS_BADGES[e.status]||'badge-gray'}`} style={{fontSize:9,padding:'1px 5px'}}>{STATUS_LABELS[e.status]||e.status}</span>
-                              <span style={{color:'var(--info)',minWidth:50,textAlign:'right'}}>{e.doses_necessarias} doses</span>
-                            </div>
+                        <div style={{display:'grid',gridTemplateColumns:'1fr 90px',gap:6,alignItems:'end',marginBottom:6}}>
+                          <div style={{fontSize:10,color:'var(--text-muted)'}}>
+                            Selecione as tarefas que entram nesta rota. A quantidade pode ser parcial por tarefa.
+                            <br />Selecionadas: {getTarefasRotaTutor(t).filter(isTarefaRotaSelecionada).length} · Doses: <strong style={{color:'var(--info)'}}>{calcDosesRotaTutor(t).toLocaleString('pt-BR')}</strong>
                           </div>
-                        ))}
-                        {(filterStatus ? t.tarefas.filter(e => e.status === filterStatus) : t.tarefas).length > 10 && <div style={{fontSize:10,color:'var(--text-muted)',marginTop:3}}>+{(filterStatus ? t.tarefas.filter(e => e.status === filterStatus) : t.tarefas).length-10} tarefas...</div>}
+                          <input className="form-input" type="number" min="0" style={{padding:'4px 6px',fontSize:10}}
+                            title="Sobrescreve o total do aplicador nesta rota"
+                            value={manualDosesRota[t.cpfNorm || t.cpf || t.aplicador_id] ?? calcDosesRotaTutor(t)}
+                            onChange={ev => setManualDosesRota(m => ({...m, [t.cpfNorm || t.cpf || t.aplicador_id]: ev.target.value}))}
+                          />
+                        </div>
+                        <div style={{display:'flex',gap:6,marginBottom:5}}>
+                          <button className="btn btn-secondary btn-sm" style={{fontSize:9,padding:'3px 6px'}} onClick={() => {
+                            const updates = {};
+                            getTarefasRotaTutor(t).forEach(e => { updates[tarefaRouteKey(e)] = true; });
+                            setSelectedTarefasRota(m => ({...m, ...updates}));
+                          }}>Selecionar todas</button>
+                          <button className="btn btn-secondary btn-sm" style={{fontSize:9,padding:'3px 6px'}} onClick={() => {
+                            const updates = {};
+                            getTarefasRotaTutor(t).forEach(e => { updates[tarefaRouteKey(e)] = false; });
+                            setSelectedTarefasRota(m => ({...m, ...updates}));
+                          }}>Limpar</button>
+                        </div>
+                        {getTarefasRotaTutor(t).slice(0,20).map(e => {
+                          const tk = tarefaRouteKey(e);
+                          const selected = isTarefaRotaSelecionada(e);
+                          const originalDose = Number(e._doses || e.doses_necessarias || 0);
+                          const doseRota = getDoseTarefaRota(e);
+                          return (
+                          <div key={tk || e.id} style={{fontSize:10,color:selected?'var(--text-secondary)':'var(--text-muted)',padding:'4px 0',borderBottom:'1px solid var(--border)',display:'grid',gridTemplateColumns:'18px 1fr 54px',gap:6,alignItems:'center',opacity:selected?1:0.55}}>
+                            <input type="checkbox" checked={selected} onChange={ev => setSelectedTarefasRota(m => ({...m, [tk]: ev.target.checked}))} />
+                            <div style={{minWidth:0}}>
+                              <div style={{fontFamily:'JetBrains Mono',fontSize:9,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{e.codigo_tarefa || e._tarefa?.codigo}</div>
+                              <div style={{display:'flex',gap:4,alignItems:'center',marginTop:2}}>
+                                <span className={`badge ${STATUS_BADGES[e._status || e.status]||'badge-gray'}`} style={{fontSize:9,padding:'1px 5px'}}>{STATUS_LABELS[e._status || e.status]||(e._status || e.status)}</span>
+                                {doseRota < originalDose && <span style={{color:'var(--warning)',fontSize:9}}>Parcial: falta {originalDose - doseRota}</span>}
+                              </div>
+                            </div>
+                            <input className="form-input" type="number" min="0" max={originalDose} disabled={!selected} style={{padding:'3px 5px',fontSize:10,textAlign:'right'}} value={manualDosesTarefaRota[tk] ?? originalDose} onChange={ev => setManualDosesTarefaRota(m => ({...m, [tk]: ev.target.value}))} />
+                          </div>
+                        )})}
+                        {getTarefasRotaTutor(t).length > 20 && <div style={{fontSize:10,color:'var(--text-muted)',marginTop:3}}>+{getTarefasRotaTutor(t).length-20} tarefas...</div>}
                       </div>
                     )}
                   </div>
@@ -3713,7 +4280,7 @@ function RoteirizacaoPage({ onBack }) {
                       <div style={{flex:1,minWidth:0}}>
                         <div style={{fontSize:11,fontWeight:600,color:'var(--text-primary)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{p.nome}</div>
                         <div style={{fontSize:10,color:'var(--text-muted)'}}>
-                          {p.ponto_partida||p.cidade} · {p.doses} doses · {p.tarefas_count} tarefas
+                          {p.ponto_partida||p.cidade} · {p.doses} doses · {p.tarefas_count} tarefas selecionadas
                           {!p.lat && <span style={{color:'var(--danger)',marginLeft:3}}>⚠</span>}
                         </div>
                       </div>
@@ -5238,7 +5805,7 @@ function MinhasDosesPage() {
                 const saldo = e.doses_necessarias - e.doses_aplicadas - e.doses_perdidas - e.doses_danificadas;
                 return (
                   <tr key={e.id}>
-                    <td className="mono" style={{fontSize:11,maxWidth:180,overflow:'hidden',textOverflow:'ellipsis'}}>{e.codigo_tarefa}</td>
+                    <td className="mono" style={{fontSize:11,maxWidth:180,overflow:'hidden',textOverflow:'ellipsis'}}>{e.codigo_tarefa || e._tarefa?.codigo}</td>
                     <td style={{maxWidth:160,overflow:'hidden',textOverflow:'ellipsis'}}>{e.tarefas?.cliente || '—'}</td>
                     <td>{e.data_inicio ? new Date(e.data_inicio+'T12:00:00').toLocaleDateString('pt-BR') : '—'}</td>
                     <td className="mono">{e.doses_necessarias}</td>
