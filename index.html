@@ -3649,7 +3649,7 @@ function RoteirizacaoPage({ onBack }) {
   const [filterDateStart, setFilterDateStart] = useState('');
   const [filterDateEnd, setFilterDateEnd] = useState('');
   const [filterStatus, setFilterStatus] = useState('');
-  const [showJaRoteirizado, setShowJaRoteirizado] = useState(false);
+  const [showJaRoteirizado, setShowJaRoteirizado] = useState(true);
   const [searchTarefa, setSearchTarefa] = useState('');
   const [pontosPartida, setPontosPartida] = useState([]);
   const [planejamentoByAplicador, setPlanejamentoByAplicador] = useState({});
@@ -3748,6 +3748,29 @@ function RoteirizacaoPage({ onBack }) {
       tarefasAll = [];
     }
 
+    // Buscar estoque atual dos aplicadores para mostrar na roteirização.
+    let estoqueAplicadorAll = [];
+    try {
+      estoqueAplicadorAll = await fetchPaged(
+        'estoque',
+        'aplicador_id,vacina_id,quantidade,localizacao_tipo',
+        q => q.eq('localizacao_tipo', 'aplicador')
+      );
+    } catch (err) {
+      console.warn('Não foi possível carregar estoque dos aplicadores para roteirização:', err);
+      estoqueAplicadorAll = [];
+    }
+
+    const estoqueByAplicador = {};
+    const estoqueByAplicadorVacina = {};
+    estoqueAplicadorAll.forEach(s => {
+      if (!s.aplicador_id) return;
+      const qtd = Number(s.quantidade || 0);
+      estoqueByAplicador[s.aplicador_id] = (estoqueByAplicador[s.aplicador_id] || 0) + qtd;
+      const k = s.aplicador_id + '|' + (s.vacina_id || '');
+      estoqueByAplicadorVacina[k] = (estoqueByAplicadorVacina[k] || 0) + qtd;
+    });
+
     const tarefaByCodigo = {};
     const tarefaById = {};
     tarefasAll.forEach(t => {
@@ -3829,6 +3852,8 @@ function RoteirizacaoPage({ onBack }) {
           total_doses: 0,
           statuses: new Set(),
           jaRoteirizado: apJaRoteirizados.has(e.aplicador_id),
+          estoque_atual: estoqueByAplicador[e.aplicador_id] || 0,
+          estoque_mesma_vacina: 0,
         };
       }
       if (!groups[key].nome && (e.tutor_nome || ap.nome)) groups[key].nome = (e.tutor_nome || ap.nome || '').trim();
@@ -3836,9 +3861,16 @@ function RoteirizacaoPage({ onBack }) {
       if (!groups[key].base_nome && e._base_nome) groups[key].base_nome = e._base_nome;
       groups[key].tarefas.push(e);
       groups[key].total_doses += Number(e._doses || e.doses_necessarias || 0);
+      if (!groups[key]._vacinasEstoqueComputadas) groups[key]._vacinasEstoqueComputadas = new Set();
+      const vacKey = e.vacina_id || e._tarefa?.vacina_id || '';
+      if (e.aplicador_id && vacKey && !groups[key]._vacinasEstoqueComputadas.has(vacKey)) {
+        groups[key].estoque_mesma_vacina += Number(estoqueByAplicadorVacina[e.aplicador_id + '|' + vacKey] || 0);
+        groups[key]._vacinasEstoqueComputadas.add(vacKey);
+      }
       groups[key].statuses.add(e._status || e.status);
     });
 
+    Object.values(groups).forEach(g => { delete g._vacinasEstoqueComputadas; });
     const tutorList = Object.values(groups).sort((a,b) => b.total_doses - a.total_doses);
     setTutores(tutorList);
 
@@ -4160,7 +4192,7 @@ function RoteirizacaoPage({ onBack }) {
             </div>
 
             <div style={{flex:1,overflow:'auto',border:'1px solid var(--border)',borderRadius:'var(--radius)',background:'var(--bg-card)'}}>
-              {filteredTutores.length === 0 && <div style={{padding:20,textAlign:'center',color:'var(--text-muted)',fontSize:12}}>{tutores.length===0?'Importe escalas primeiro':'Nenhum resultado'}</div>}
+              {filteredTutores.length === 0 && <div style={{padding:20,textAlign:'center',color:'var(--text-muted)',fontSize:12}}>{tutores.length===0?'Nenhuma escala encontrada. Confira filtros, semana/status ou importação de escalas.':'Nenhum resultado para os filtros selecionados'}</div>}
               {filteredTutores.slice(0,80).map(t => {
                 const isExpanded = expandedTutor === t.cpf;
                 const statusCounts = t.tarefas.reduce((acc, e) => { const st = e._status || e.status; acc[st] = (acc[st]||0)+1; return acc; }, {});
@@ -4185,8 +4217,11 @@ function RoteirizacaoPage({ onBack }) {
                         </div>
                       </div>
                       <div style={{display:'flex',alignItems:'center',gap:4,flexShrink:0}}>
-                        <span className="badge badge-cyan" style={{fontSize:10}}>
-                          {calcDosesRotaTutor(t).toLocaleString('pt-BR')}
+                        <span className="badge badge-green" title="Estoque atual do aplicador" style={{fontSize:10}}>
+                          Est. {(t.estoque_atual || 0).toLocaleString('pt-BR')}
+                        </span>
+                        <span className="badge badge-cyan" title="Doses selecionadas para esta rota" style={{fontSize:10}}>
+                          Enviar {calcDosesRotaTutor(t).toLocaleString('pt-BR')}
                         </span>
                         <button className="btn btn-primary btn-sm" style={{padding:'3px 8px',fontSize:10}} onClick={(e) => {e.stopPropagation(); addTutor(t);}}>+</button>
                       </div>
@@ -4195,7 +4230,7 @@ function RoteirizacaoPage({ onBack }) {
                     {isExpanded && (
                       <div style={{padding:'4px 10px 8px',background:'var(--bg-input)'}}>
                         <div style={{fontSize:10,color:'var(--text-muted)',marginBottom:4}}>
-                          CPF: {t.cpf} · Base: {t.base_nome} · <span style={{color:'var(--info)'}}>{statusDemandaTutor(t)}</span>
+                          CPF: {t.cpf} · Base: {t.base_nome} · Estoque aplicador: <strong style={{color:'var(--success)'}}>{(t.estoque_atual || 0).toLocaleString('pt-BR')}</strong> · Estoque mesma vacina: <strong style={{color:'var(--info)'}}>{(t.estoque_mesma_vacina || 0).toLocaleString('pt-BR')}</strong> · <span style={{color:'var(--info)'}}>{statusDemandaTutor(t)}</span>
                           {filterStatus && <span style={{marginLeft:6,color:'var(--warning)'}}>⚠ Mostrando só: {STATUS_LABELS[filterStatus]}</span>}
                         </div>
                         <div style={{display:'grid',gridTemplateColumns:'1fr 90px',gap:6,alignItems:'end',marginBottom:6}}>
