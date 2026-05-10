@@ -604,28 +604,106 @@ function Modal({ title, onClose, children, large }) {
 // ═══════════════════════════════════════════════
 // DASHBOARD
 // ═══════════════════════════════════════════════
-function DashboardPage() {
+function DashboardPage({ onNavigate }) {
   const [stats, setStats] = useState({ bases: 0, vacinas: 0, aplicadores: 0, tarefas: 0, escalas: 0 });
+  const [modal, setModal] = useState(null);
+  const [modalData, setModalData] = useState([]);
+  const [modalLoading, setModalLoading] = useState(false);
+  const [weekData, setWeekData] = useState([]);
+  const [apFilters, setApFilters] = useState({ ponto: '', uf: '', cidade: '', nome: '' });
   const toast = useContext(ToastContext);
 
-  useEffect(() => {
-    async function load() {
-      try {
-        const [b, v, a, t, e] = await Promise.all([
-          sb.from('bases').select('id', { count: 'exact', head: true }),
-          sb.from('vacinas').select('id', { count: 'exact', head: true }),
-          sb.from('aplicadores').select('id', { count: 'exact', head: true }),
-          sb.from('tarefas').select('id', { count: 'exact', head: true }),
-          sb.from('escalas').select('id', { count: 'exact', head: true }),
-        ]);
-        setStats({
-          bases: b.count || 0, vacinas: v.count || 0, aplicadores: a.count || 0,
-          tarefas: t.count || 0, escalas: e.count || 0
-        });
-      } catch (err) { toast('Erro ao carregar dashboard', 'error'); }
+  const semanaCampanha = (dataISO, semanaPlanilha) => {
+    if (semanaPlanilha !== null && semanaPlanilha !== undefined && semanaPlanilha !== '') {
+      const n = Number(semanaPlanilha);
+      if (!Number.isNaN(n) && n > 0) return Math.round(n);
     }
-    load();
-  }, []);
+    if (!dataISO) return null;
+    const inicio = new Date('2026-03-08T00:00:00');
+    const d = new Date(dataISO + 'T00:00:00');
+    if (Number.isNaN(d.getTime())) return null;
+    return Math.floor((d - inicio) / (7 * 24 * 60 * 60 * 1000)) + 1;
+  };
+
+  const load = async () => {
+    try {
+      const [b, v, a, t, e, tarefasSemana] = await Promise.all([
+        sb.from('bases').select('id', { count: 'exact', head: true }),
+        sb.from('vacinas').select('id', { count: 'exact', head: true }),
+        sb.from('aplicadores').select('id', { count: 'exact', head: true }),
+        sb.from('tarefas').select('id', { count: 'exact', head: true }),
+        sb.from('escalas').select('id', { count: 'exact', head: true }),
+        sb.from('tarefas').select('id, data_inicio, semanas, doses_previstas').order('data_inicio', { ascending: true }).limit(10000),
+      ]);
+      setStats({ bases: b.count || 0, vacinas: v.count || 0, aplicadores: a.count || 0, tarefas: t.count || 0, escalas: e.count || 0 });
+
+      const porSemana = {};
+      (tarefasSemana.data || []).forEach(t => {
+        const sem = semanaCampanha(t.data_inicio, t.semanas);
+        if (!sem || sem < 1) return;
+        if (!porSemana[sem]) porSemana[sem] = { semana: sem, tarefas: 0, doses: 0 };
+        porSemana[sem].tarefas += 1;
+        porSemana[sem].doses += Number(t.doses_previstas || 0);
+      });
+      setWeekData(Object.values(porSemana).sort((x,y) => x.semana - y.semana));
+    } catch (err) { toast('Erro ao carregar dashboard: ' + err.message, 'error'); }
+  };
+
+  useEffect(() => { load(); }, []);
+
+  const openBasesModal = async () => {
+    setModal('bases'); setModalLoading(true);
+    try {
+      const { data, error } = await sb.from('estoque').select('quantidade, bases(nome, cidade, uf), vacinas(nome)').eq('localizacao_tipo','base');
+      if (error) throw error;
+      const map = {};
+      (data || []).forEach(r => {
+        const nome = r.bases?.nome || 'Base não informada';
+        const key = nome + '|' + (r.vacinas?.nome || 'Vacina');
+        if (!map[key]) map[key] = { base: nome, cidade: r.bases?.cidade || '', uf: r.bases?.uf || '', vacina: r.vacinas?.nome || '—', doses: 0 };
+        map[key].doses += Number(r.quantidade || 0);
+      });
+      setModalData(Object.values(map).sort((a,b) => a.base.localeCompare(b.base)));
+    } catch (err) { toast('Erro ao carregar doses por base: ' + err.message, 'error'); }
+    setModalLoading(false);
+  };
+
+  const openVacinasModal = async () => {
+    setModal('vacinas'); setModalLoading(true);
+    try {
+      const { data, error } = await sb.from('vacinas').select('*').order('nome');
+      if (error) throw error;
+      setModalData(data || []);
+    } catch (err) { toast('Erro ao carregar vacinas: ' + err.message, 'error'); }
+    setModalLoading(false);
+  };
+
+  const openAplicadoresModal = async () => {
+    setModal('aplicadores'); setModalLoading(true);
+    try {
+      const { data, error } = await sb.from('estoque').select('quantidade, aplicadores(nome, cidade, uf), vacinas(nome)').eq('localizacao_tipo','aplicador');
+      if (error) throw error;
+      const map = {};
+      (data || []).forEach(r => {
+        const nome = r.aplicadores?.nome || 'Aplicador não informado';
+        const key = nome + '|' + (r.vacinas?.nome || 'Vacina');
+        if (!map[key]) map[key] = { nome, cidade: r.aplicadores?.cidade || '', uf: r.aplicadores?.uf || '', ponto: '', vacina: r.vacinas?.nome || '—', doses: 0 };
+        map[key].doses += Number(r.quantidade || 0);
+      });
+      setModalData(Object.values(map).sort((a,b) => a.nome.localeCompare(b.nome)));
+    } catch (err) { toast('Erro ao carregar doses por aplicador: ' + err.message, 'error'); }
+    setModalLoading(false);
+  };
+
+  const filteredAplicadores = modal === 'aplicadores' ? modalData.filter(a => {
+    const f = apFilters;
+    return (!f.nome || a.nome.toLowerCase().includes(f.nome.toLowerCase())) &&
+      (!f.cidade || a.cidade.toLowerCase().includes(f.cidade.toLowerCase())) &&
+      (!f.uf || a.uf.toLowerCase().includes(f.uf.toLowerCase())) &&
+      (!f.ponto || (a.ponto || '').toLowerCase().includes(f.ponto.toLowerCase()));
+  }) : [];
+
+  const maxTarefas = Math.max(...weekData.map(w => w.tarefas), 1);
 
   return (
     <div>
@@ -634,19 +712,20 @@ function DashboardPage() {
           <div className="page-title">Dashboard</div>
           <div className="page-subtitle">Visão geral do sistema</div>
         </div>
+        <button className="btn btn-primary" onClick={() => onNavigate && onNavigate('arvore-distribuicao')}>🌳 Árvore de Distribuição</button>
       </div>
       <div className="stats-grid">
-        <div className="stat-card">
+        <div className="stat-card" onClick={openBasesModal} style={{cursor:'pointer'}} title="Ver doses por base">
           <div className="stat-icon" style={{background: 'var(--accent-subtle)', color: 'var(--accent)'}}>🏢</div>
           <div className="stat-value">{stats.bases}</div>
           <div className="stat-label">Bases</div>
         </div>
-        <div className="stat-card">
+        <div className="stat-card" onClick={openVacinasModal} style={{cursor:'pointer'}} title="Ver vacinas">
           <div className="stat-icon" style={{background: 'var(--success-bg)', color: 'var(--success)'}}>💉</div>
           <div className="stat-value">{stats.vacinas}</div>
           <div className="stat-label">Vacinas</div>
         </div>
-        <div className="stat-card">
+        <div className="stat-card" onClick={openAplicadoresModal} style={{cursor:'pointer'}} title="Ver doses por aplicador">
           <div className="stat-icon" style={{background: 'var(--warning-bg)', color: 'var(--warning)'}}>👤</div>
           <div className="stat-value">{stats.aplicadores}</div>
           <div className="stat-label">Aplicadores</div>
@@ -661,6 +740,123 @@ function DashboardPage() {
           <div className="stat-value">{stats.escalas}</div>
           <div className="stat-label">Escalas</div>
         </div>
+      </div>
+
+      <div className="card">
+        <div className="card-header">
+          <div>
+            <div className="card-title">Tarefas x Semanas</div>
+            <div className="page-subtitle">Semana 1: 08/03/2026 a 14/03/2026</div>
+          </div>
+        </div>
+        {weekData.length === 0 ? <div className="empty-state"><div className="empty-text">Sem dados semanais</div></div> : (
+          <div style={{display:'flex',alignItems:'flex-end',gap:8,height:240,overflowX:'auto',paddingTop:20,paddingBottom:8}}>
+            {weekData.map(w => (
+              <div key={w.semana} style={{minWidth:58,display:'flex',flexDirection:'column',alignItems:'center',gap:6}} title={`${w.tarefas} tarefas · ${w.doses} doses`}>
+                <div style={{fontSize:11,color:'var(--text-secondary)',fontFamily:'JetBrains Mono'}}>{w.tarefas}</div>
+                <div style={{width:34,height:Math.max(8, Math.round((w.tarefas / maxTarefas) * 170)),background:'var(--accent)',borderRadius:'6px 6px 2px 2px'}}></div>
+                <div style={{fontSize:11,color:'var(--text-muted)'}}>S{w.semana}</div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {modal && (
+        <Modal title={modal === 'bases' ? 'Doses por Base' : modal === 'vacinas' ? 'Lista de Vacinas' : 'Doses por Aplicador'} onClose={() => setModal(null)} large>
+          {modalLoading ? <div className="empty-state"><div className="empty-text">Carregando...</div></div> : (
+            <>
+              {modal === 'bases' && <div className="table-wrap"><table><thead><tr><th>Base</th><th>Cidade</th><th>UF</th><th>Vacina</th><th>Doses</th></tr></thead><tbody>{modalData.map((r,i)=><tr key={i}><td>{r.base}</td><td>{r.cidade}</td><td>{r.uf}</td><td>{r.vacina}</td><td className="mono">{r.doses}</td></tr>)}</tbody></table></div>}
+              {modal === 'vacinas' && <div className="table-wrap"><table><thead><tr><th>Vacina</th><th>Fabricante</th><th>Lote</th><th>Validade</th><th>Doses/Frasco</th></tr></thead><tbody>{modalData.map(v=><tr key={v.id}><td>{v.nome}</td><td>{v.fabricante || '—'}</td><td>{v.lote || '—'}</td><td>{v.validade ? new Date(v.validade+'T12:00:00').toLocaleDateString('pt-BR') : '—'}</td><td className="mono">{v.doses_por_frasco || 1}</td></tr>)}</tbody></table></div>}
+              {modal === 'aplicadores' && <>
+                <div className="form-grid" style={{marginBottom:14}}>
+                  <div className="form-group"><label className="form-label">Ponto de Partida</label><input className="form-input sm" value={apFilters.ponto} onChange={e=>setApFilters(f=>({...f,ponto:e.target.value}))} placeholder="Ex: Marília-sp" /></div>
+                  <div className="form-group"><label className="form-label">UF</label><input className="form-input sm" value={apFilters.uf} onChange={e=>setApFilters(f=>({...f,uf:e.target.value}))} placeholder="SP" /></div>
+                  <div className="form-group"><label className="form-label">Cidade</label><input className="form-input sm" value={apFilters.cidade} onChange={e=>setApFilters(f=>({...f,cidade:e.target.value}))} placeholder="Cidade" /></div>
+                  <div className="form-group"><label className="form-label">Nome</label><input className="form-input sm" value={apFilters.nome} onChange={e=>setApFilters(f=>({...f,nome:e.target.value}))} placeholder="Aplicador" /></div>
+                </div>
+                <div className="table-wrap"><table><thead><tr><th>Aplicador</th><th>Cidade</th><th>UF</th><th>Vacina</th><th>Doses</th></tr></thead><tbody>{filteredAplicadores.map((r,i)=><tr key={i}><td>{r.nome}</td><td>{r.cidade}</td><td>{r.uf}</td><td>{r.vacina}</td><td className="mono">{r.doses}</td></tr>)}</tbody></table></div>
+              </>}
+            </>
+          )}
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+function ArvoreDistribuicaoPage() {
+  const [tree, setTree] = useState([]);
+  const [open, setOpen] = useState({});
+  const [loading, setLoading] = useState(true);
+  const toast = useContext(ToastContext);
+
+  const toggle = (key) => setOpen(o => ({...o, [key]: !o[key]}));
+
+  useEffect(() => {
+    async function load() {
+      setLoading(true);
+      try {
+        const [basesEst, aplicEst] = await Promise.all([
+          sb.from('estoque').select('quantidade, bases(nome, cidade, uf, ponto_partida), vacinas(nome)').eq('localizacao_tipo','base'),
+          sb.from('estoque').select('quantidade, aplicadores(nome, cidade, uf), vacinas(nome)').eq('localizacao_tipo','aplicador'),
+        ]);
+        if (basesEst.error) throw basesEst.error;
+        if (aplicEst.error) throw aplicEst.error;
+        const pontos = {};
+        const ensure = (ponto) => {
+          const p = ponto || 'Sem ponto de partida';
+          if (!pontos[p]) pontos[p] = { nome: p, tipos: { Base: [], Aplicador: [], Clínica: [] } };
+          return pontos[p];
+        };
+        (basesEst.data || []).forEach(r => {
+          const p = ensure(r.bases?.ponto_partida || `${r.bases?.cidade || 'Sem cidade'}-${r.bases?.uf || ''}`);
+          p.tipos.Base.push({ nome: r.bases?.nome || 'Base', cidade: r.bases?.cidade || '', uf: r.bases?.uf || '', vacina: r.vacinas?.nome || '—', doses: Number(r.quantidade || 0) });
+        });
+        (aplicEst.data || []).forEach(r => {
+          const p = ensure(`${r.aplicadores?.cidade || 'Sem cidade'}-${r.aplicadores?.uf || ''}`);
+          p.tipos.Aplicador.push({ nome: r.aplicadores?.nome || 'Aplicador', cidade: r.aplicadores?.cidade || '', uf: r.aplicadores?.uf || '', vacina: r.vacinas?.nome || '—', doses: Number(r.quantidade || 0) });
+        });
+        setTree(Object.values(pontos).sort((a,b)=>a.nome.localeCompare(b.nome)));
+      } catch (err) { toast('Erro ao carregar árvore: ' + err.message, 'error'); }
+      setLoading(false);
+    }
+    load();
+  }, []);
+
+  const totalTipo = (items) => items.reduce((s, x) => s + Number(x.doses || 0), 0);
+  const totalPonto = (p) => Object.values(p.tipos).reduce((s, items) => s + totalTipo(items), 0);
+
+  return (
+    <div>
+      <div className="page-header">
+        <div>
+          <div className="page-title">Árvore de Distribuição</div>
+          <div className="page-subtitle">Ponto de partida → tipo de estoque → local/aplicador</div>
+        </div>
+      </div>
+      <div className="card">
+        {loading ? <div className="empty-state"><div className="empty-text">Carregando...</div></div> : tree.length === 0 ? <div className="empty-state"><div className="empty-text">Nenhum estoque encontrado</div></div> : (
+          <div style={{display:'flex',flexDirection:'column',gap:8}}>
+            {tree.map(p => (
+              <div key={p.nome} style={{border:'1px solid var(--border)',borderRadius:'var(--radius-sm)',overflow:'hidden'}}>
+                <div onClick={()=>toggle('p:'+p.nome)} style={{cursor:'pointer',padding:'12px 14px',background:'var(--bg-input)',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                  <strong>{open['p:'+p.nome] ? '▼' : '▶'} {p.nome}</strong>
+                  <span className="badge badge-blue">{totalPonto(p)} doses</span>
+                </div>
+                {open['p:'+p.nome] && Object.entries(p.tipos).map(([tipo, items]) => (
+                  <div key={tipo} style={{marginLeft:18,borderLeft:'1px solid var(--border)'}}>
+                    <div onClick={()=>toggle('t:'+p.nome+tipo)} style={{cursor:'pointer',padding:'10px 14px',display:'flex',justifyContent:'space-between'}}>
+                      <span>{open['t:'+p.nome+tipo] ? '▼' : '▶'} {tipo}</span>
+                      <span className="badge badge-gray">{items.length} itens · {totalTipo(items)} doses</span>
+                    </div>
+                    {open['t:'+p.nome+tipo] && <div className="table-wrap" style={{margin:'0 12px 12px 18px'}}><table><thead><tr><th>Nome</th><th>Cidade</th><th>UF</th><th>Vacina</th><th>Doses</th></tr></thead><tbody>{items.length === 0 ? <tr><td colSpan={5}>Ainda sem registros</td></tr> : items.map((x,i)=><tr key={i}><td>{x.nome}</td><td>{x.cidade}</td><td>{x.uf}</td><td>{x.vacina}</td><td className="mono">{x.doses}</td></tr>)}</tbody></table></div>}
+                  </div>
+                ))}
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -1473,43 +1669,6 @@ function TarefasPage() {
   const PAGE_SIZE = 50;
   const toast = useContext(ToastContext);
 
-  const LOGISTICA_LABELS = {
-    nao_roteirizado: 'Não roteirizado',
-    roteirizado: 'Roteirizado',
-    montado: 'Montado',
-    carregado: 'Carregado',
-    em_rota: 'Em rota',
-    concluido: 'Concluído'
-  };
-  const LOGISTICA_BADGES = {
-    nao_roteirizado: 'badge-gray',
-    roteirizado: 'badge-blue',
-    montado: 'badge-yellow',
-    carregado: 'badge-cyan',
-    em_rota: 'badge-green',
-    concluido: 'badge-gray'
-  };
-  const LOGISTICA_PRIORITY = {
-    nao_roteirizado: 0,
-    roteirizado: 1,
-    montado: 2,
-    carregado: 3,
-    em_rota: 4,
-    concluido: 5
-  };
-
-  const getLogisticaStatus = (remessa) => {
-    if (!remessa) return 'nao_roteirizado';
-    const remStatus = remessa.status;
-    const rotaStatus = remessa.rotas?.status;
-
-    if (remStatus === 'concluida') return 'concluido';
-    if (remStatus === 'em_transito' || rotaStatus === 'em_transito') return 'em_rota';
-    if (remStatus === 'carregada') return 'carregado';
-    if (remStatus === 'pronta') return 'montado';
-    return 'roteirizado';
-  };
-
   const load = async () => {
     setLoading(true);
     let q = sb.from('tarefas').select('*', { count: 'exact' })
@@ -1518,47 +1677,8 @@ function TarefasPage() {
     if (search) q = q.or(`codigo.ilike.%${search}%,cliente.ilike.%${search}%,cidade_campanha.ilike.%${search}%`);
     if (statusFilter) q = q.eq('status', statusFilter);
     const { data, error, count } = await q;
-    if (error) {
-      toast(error.message, 'error');
-      setLoading(false);
-      return;
-    }
-
-    let rows = data || [];
-
-    // Status da logística por tarefa:
-    // Roteirizado = entrou em uma rota/remessa
-    // Montado = caixa pronta
-    // Carregado = remessa carregada
-    // Em rota = motorista fez check-in/iniciou rota
-    // Concluído = entrega confirmada
-    if (rows.length > 0) {
-      const filtros = rows
-        .map(t => String(t.codigo || '').trim())
-        .filter(Boolean)
-        .map(codigo => `observacao.ilike.%${codigo}%`);
-
-      if (filtros.length > 0) {
-        const { data: remessas, error: remErr } = await sb.from('remessas')
-          .select('id, status, observacao, rotas(status)')
-          .or(filtros.join(','));
-
-        if (!remErr && remessas) {
-          rows = rows.map(t => {
-            const codigo = String(t.codigo || '').trim();
-            const relacionadas = remessas.filter(r => String(r.observacao || '').includes(codigo));
-            let melhorStatus = 'nao_roteirizado';
-            relacionadas.forEach(r => {
-              const st = getLogisticaStatus(r);
-              if (LOGISTICA_PRIORITY[st] > LOGISTICA_PRIORITY[melhorStatus]) melhorStatus = st;
-            });
-            return { ...t, logistica_status: melhorStatus };
-          });
-        }
-      }
-    }
-
-    setItems({ data: rows, count: count || 0 });
+    if (error) toast(error.message, 'error');
+    else setItems({ data: data || [], count: count || 0 });
     setLoading(false);
   };
   useEffect(() => { load(); }, [page, statusFilter]);
@@ -1595,7 +1715,7 @@ function TarefasPage() {
         <div className="table-wrap">
           <table>
             <thead>
-              <tr><th>Código</th><th>Cliente</th><th>Cidade</th><th>UF</th><th>Data</th><th>Doses Prev.</th><th>Doses Aplic.</th><th>Status</th><th>Logística</th><th>Base</th></tr>
+              <tr><th>Código</th><th>Cliente</th><th>Cidade</th><th>UF</th><th>Data</th><th>Doses Prev.</th><th>Doses Aplic.</th><th>Status</th><th>Base</th></tr>
             </thead>
             <tbody>
               {(items.data || []).map(t => (
@@ -1608,7 +1728,6 @@ function TarefasPage() {
                   <td className="mono">{t.doses_previstas}</td>
                   <td className="mono">{t.doses_aplicadas}</td>
                   <td><span className={`badge ${STATUS_BADGES[t.status]||'badge-gray'}`}>{STATUS_LABELS[t.status]||t.status}</span></td>
-                  <td><span className={`badge ${LOGISTICA_BADGES[t.logistica_status]||'badge-gray'}`}>{LOGISTICA_LABELS[t.logistica_status]||'Não roteirizado'}</span></td>
                   <td>{t.base_nome || '—'}</td>
                 </tr>
               ))}
@@ -1638,43 +1757,6 @@ function EscalasPage() {
   const [page, setPage] = useState(0);
   const PAGE_SIZE = 50;
   const toast = useContext(ToastContext);
-
-  const LOGISTICA_LABELS = {
-    nao_roteirizado: 'Não roteirizado',
-    roteirizado: 'Roteirizado',
-    montado: 'Montado',
-    carregado: 'Carregado',
-    em_rota: 'Em rota',
-    concluido: 'Concluído'
-  };
-  const LOGISTICA_BADGES = {
-    nao_roteirizado: 'badge-gray',
-    roteirizado: 'badge-blue',
-    montado: 'badge-yellow',
-    carregado: 'badge-cyan',
-    em_rota: 'badge-green',
-    concluido: 'badge-gray'
-  };
-  const LOGISTICA_PRIORITY = {
-    nao_roteirizado: 0,
-    roteirizado: 1,
-    montado: 2,
-    carregado: 3,
-    em_rota: 4,
-    concluido: 5
-  };
-
-  const getLogisticaStatus = (remessa) => {
-    if (!remessa) return 'nao_roteirizado';
-    const remStatus = remessa.status;
-    const rotaStatus = remessa.rotas?.status;
-
-    if (remStatus === 'concluida') return 'concluido';
-    if (remStatus === 'em_transito' || rotaStatus === 'em_transito') return 'em_rota';
-    if (remStatus === 'carregada') return 'carregado';
-    if (remStatus === 'pronta') return 'montado';
-    return 'roteirizado';
-  };
 
   const load = async () => {
     let q = sb.from('escalas').select('*', { count: 'exact' })
@@ -4416,43 +4498,6 @@ function AplicadoresPage() {
   const PAGE_SIZE = 50;
   const toast = useContext(ToastContext);
 
-  const LOGISTICA_LABELS = {
-    nao_roteirizado: 'Não roteirizado',
-    roteirizado: 'Roteirizado',
-    montado: 'Montado',
-    carregado: 'Carregado',
-    em_rota: 'Em rota',
-    concluido: 'Concluído'
-  };
-  const LOGISTICA_BADGES = {
-    nao_roteirizado: 'badge-gray',
-    roteirizado: 'badge-blue',
-    montado: 'badge-yellow',
-    carregado: 'badge-cyan',
-    em_rota: 'badge-green',
-    concluido: 'badge-gray'
-  };
-  const LOGISTICA_PRIORITY = {
-    nao_roteirizado: 0,
-    roteirizado: 1,
-    montado: 2,
-    carregado: 3,
-    em_rota: 4,
-    concluido: 5
-  };
-
-  const getLogisticaStatus = (remessa) => {
-    if (!remessa) return 'nao_roteirizado';
-    const remStatus = remessa.status;
-    const rotaStatus = remessa.rotas?.status;
-
-    if (remStatus === 'concluida') return 'concluido';
-    if (remStatus === 'em_transito' || rotaStatus === 'em_transito') return 'em_rota';
-    if (remStatus === 'carregada') return 'carregado';
-    if (remStatus === 'pronta') return 'montado';
-    return 'roteirizado';
-  };
-
   const load = async () => {
     let q = sb.from('aplicadores').select('*, bases(nome)', { count: 'exact' })
       .order('nome').range(page * PAGE_SIZE, (page+1) * PAGE_SIZE - 1);
@@ -4616,7 +4661,7 @@ function App() {
 
   const renderPage = () => {
     switch (currentPage) {
-      case 'dashboard': return <DashboardPage />;
+      case 'dashboard': return <DashboardPage onNavigate={setCurrentPage} />;
       case 'bases': return <BasesPage />;
       case 'vacinas': return <VacinasPage />;
       case 'aplicadores': return <AplicadoresPage />;
@@ -4635,6 +4680,7 @@ function App() {
       case 'minhas-doses': return <MinhasDosesPage />;
       case 'abatimento': return <AbatimentoPage />;
       case 'usuarios': return <UsuariosPage />;
+      case 'arvore-distribuicao': return <ArvoreDistribuicaoPage />;
       default: return <DashboardPage />;
     }
   };
