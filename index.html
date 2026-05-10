@@ -3251,66 +3251,126 @@ function EtiquetasPage() {
 // ═══════════════════════════════════════════════
 function MotoristaPage() {
   const [userId, setUserId] = useState(null);
+  const [userRole, setUserRole] = useState(null);
   const [rotas, setRotas] = useState([]);
   const [rotaSel, setRotaSel] = useState(null);
+  const [statusFilter, setStatusFilter] = useState('');
+  const [motoristas, setMotoristas] = useState([]);
+  const [filtroMotorista, setFiltroMotorista] = useState('');
+  const toast = useContext(ToastContext);
+
+  const ST = { pronta:'Pronta p/ Saída', em_transito:'Em Trânsito', concluida:'Concluída', planejada:'Planejada', montagem:'Em Montagem' };
+  const SB = { pronta:'badge-cyan', em_transito:'badge-green', concluida:'badge-gray', planejada:'badge-blue', montagem:'badge-yellow' };
 
   useEffect(() => {
     sb.auth.getUser().then(({ data }) => {
-      if (data?.user) {
-        setUserId(data.user.id);
-        loadRotas(data.user.id);
-      }
+      if (!data?.user) return;
+      const uid = data.user.id;
+      setUserId(uid);
+      sb.from('profiles').select('role').eq('id', uid).single().then(({ data: p }) => {
+        const role = p?.role;
+        setUserRole(role);
+        loadRotas(uid, role);
+        if (role === 'admin' || role === 'planejador') {
+          sb.from('profiles').select('id, nome').in('role', ['motorista','admin']).eq('ativo', true).order('nome')
+            .then(r => setMotoristas(r.data||[]));
+        }
+      });
     });
   }, []);
 
-  const loadRotas = async (uid) => {
-    const { data } = await sb.from('rotas')
-      .select('*, bases!rotas_base_origem_id_fkey(nome, cidade, uf), veiculos(placa, modelo)')
-      .eq('motorista_id', uid)
-      .in('status', ['pronta', 'em_transito', 'concluida'])
+  const loadRotas = async (uid, role) => {
+    let q = sb.from('rotas')
+      .select('*, bases!rotas_base_origem_id_fkey(nome, cidade, uf), profiles!rotas_motorista_id_fkey(nome), veiculos(placa, modelo)')
       .order('data_prevista', { ascending: false });
+
+    // Admin/planejador veem todas; motorista vê só as suas
+    if (role !== 'admin' && role !== 'planejador') {
+      q = q.eq('motorista_id', uid);
+      q = q.in('status', ['pronta', 'em_transito', 'concluida']);
+    }
+
+    const { data, error } = await q;
+    if (error) toast(error.message, 'error');
     setRotas(data || []);
   };
 
+  const reload = () => loadRotas(userId, userRole);
+
   if (rotaSel) {
-    return <MotoristaRota rota={rotaSel} onBack={() => { setRotaSel(null); loadRotas(userId); }} />;
+    return <MotoristaRota rota={rotaSel} onBack={() => { setRotaSel(null); reload(); }} isAdmin={userRole==='admin'||userRole==='planejador'} />;
   }
 
-  const ST = { pronta:'Pronta p/ Saída', em_transito:'Em Trânsito', concluida:'Concluída' };
-  const SB = { pronta:'badge-cyan', em_transito:'badge-green', concluida:'badge-gray' };
-  const ativas = rotas.filter(r => r.status !== 'concluida');
-  const concluidas = rotas.filter(r => r.status === 'concluida');
+  // Filtros
+  let filtered = [...rotas];
+  if (statusFilter) filtered = filtered.filter(r => r.status === statusFilter);
+  if (filtroMotorista) filtered = filtered.filter(r => r.motorista_id === filtroMotorista);
+
+  const isAdmin = userRole === 'admin' || userRole === 'planejador';
+  const ativas = filtered.filter(r => r.status !== 'concluida');
+  const concluidas = filtered.filter(r => r.status === 'concluida');
 
   return (
     <div>
       <div className="page-header">
-        <div><div className="page-title">Minhas Rotas</div><div className="page-subtitle">Rotas atribuídas a você</div></div>
+        <div>
+          <div className="page-title">{isAdmin ? 'Rotas de Entrega' : 'Minhas Rotas'}</div>
+          <div className="page-subtitle">{isAdmin ? `${filtered.length} rotas encontradas` : 'Rotas atribuídas a você'}</div>
+        </div>
       </div>
 
-      {rotas.length === 0 && (
-        <div className="card"><div className="empty-state"><div className="empty-icon">🚚</div><div className="empty-text">Nenhuma rota atribuída a você</div></div></div>
+      {/* Filtros — só para admin/planejador */}
+      {isAdmin && (
+        <div className="card" style={{marginBottom:16,padding:14}}>
+          <div style={{display:'flex',gap:10,flexWrap:'wrap',alignItems:'flex-end'}}>
+            <div className="form-group" style={{marginBottom:0}}>
+              <label className="form-label">Status</label>
+              <select className="form-select" style={{padding:'6px 8px',fontSize:12}} value={statusFilter} onChange={e=>setStatusFilter(e.target.value)}>
+                <option value="">Todos</option>
+                {Object.entries(ST).map(([k,v]) => <option key={k} value={k}>{v}</option>)}
+              </select>
+            </div>
+            <div className="form-group" style={{marginBottom:0}}>
+              <label className="form-label">Motorista</label>
+              <select className="form-select" style={{padding:'6px 8px',fontSize:12}} value={filtroMotorista} onChange={e=>setFiltroMotorista(e.target.value)}>
+                <option value="">Todos</option>
+                {motoristas.map(m => <option key={m.id} value={m.id}>{m.nome}</option>)}
+              </select>
+            </div>
+            <div style={{display:'flex',gap:8,flexWrap:'wrap',marginLeft:'auto'}}>
+              <span className="badge badge-blue" style={{fontSize:12,alignSelf:'center'}}>{filtered.filter(r=>r.status==='pronta').length} prontas</span>
+              <span className="badge badge-green" style={{fontSize:12,alignSelf:'center'}}>{filtered.filter(r=>r.status==='em_transito').length} em trânsito</span>
+              <span className="badge badge-gray" style={{fontSize:12,alignSelf:'center'}}>{filtered.filter(r=>r.status==='concluida').length} concluídas</span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {filtered.length === 0 && (
+        <div className="card"><div className="empty-state"><div className="empty-icon">🚚</div><div className="empty-text">Nenhuma rota encontrada</div></div></div>
       )}
 
       {ativas.length > 0 && (
         <>
           <div style={{fontSize:12,fontWeight:600,color:'var(--text-muted)',textTransform:'uppercase',letterSpacing:1,marginBottom:10}}>Ativas</div>
-          <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(320px,1fr))',gap:14,marginBottom:24}}>
+          <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(300px,1fr))',gap:12,marginBottom:24}}>
             {ativas.map(r => (
               <div key={r.id} className="card" style={{cursor:'pointer',borderColor: r.status==='em_transito'?'rgba(16,185,129,0.4)':'var(--border)',transition:'border-color 0.15s'}}
                 onMouseEnter={e=>e.currentTarget.style.borderColor='var(--accent)'}
                 onMouseLeave={e=>e.currentTarget.style.borderColor=r.status==='em_transito'?'rgba(16,185,129,0.4)':'var(--border)'}
                 onClick={() => setRotaSel(r)}>
-                <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:12}}>
-                  <div style={{fontSize:18,fontWeight:700,color:'var(--accent)',fontFamily:'JetBrains Mono'}}>{r.codigo}</div>
-                  <span className={`badge ${SB[r.status]}`}>{ST[r.status]}</span>
+                <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:10}}>
+                  <div style={{fontSize:17,fontWeight:700,color:'var(--accent)',fontFamily:'JetBrains Mono'}}>{r.codigo}</div>
+                  <span className={`badge ${SB[r.status]||'badge-gray'}`}>{ST[r.status]||r.status}</span>
                 </div>
-                <div style={{fontSize:13,color:'var(--text-secondary)',display:'flex',flexDirection:'column',gap:5}}>
+                <div style={{fontSize:13,color:'var(--text-secondary)',display:'flex',flexDirection:'column',gap:4}}>
                   <div>📅 {r.data_prevista ? new Date(r.data_prevista+'T12:00:00').toLocaleDateString('pt-BR') : '—'}</div>
-                  <div>🏢 {r.bases?.nome} — {r.bases?.cidade}/{r.bases?.uf}</div>
+                  <div>🏢 {r.bases?.nome}</div>
+                  <div>👤 {r.profiles?.nome || '—'}</div>
                   <div>🚗 {r.veiculos ? r.veiculos.modelo+' · '+r.veiculos.placa : (r.veiculo||'—')}</div>
                 </div>
-                <button className="btn btn-primary" style={{width:'100%',marginTop:12}}>
-                  {r.status==='pronta' ? 'Iniciar Rota →' : 'Ver Rota em Andamento →'}
+                <button className="btn btn-primary" style={{width:'100%',marginTop:10,fontSize:12}}>
+                  {r.status==='pronta' ? 'Ver / Iniciar →' : 'Ver Andamento →'}
                 </button>
               </div>
             ))}
@@ -3320,17 +3380,17 @@ function MotoristaPage() {
 
       {concluidas.length > 0 && (
         <>
-          <div style={{fontSize:12,fontWeight:600,color:'var(--text-muted)',textTransform:'uppercase',letterSpacing:1,marginBottom:10}}>Histórico</div>
+          <div style={{fontSize:12,fontWeight:600,color:'var(--text-muted)',textTransform:'uppercase',letterSpacing:1,marginBottom:10}}>Concluídas</div>
           <div className="card"><div className="table-wrap"><table><thead>
-            <tr><th>Código</th><th>Data</th><th>Base</th><th>Veículo</th><th>Status</th><th></th></tr>
+            <tr><th>Código</th><th>Data</th><th>Base</th><th>Motorista</th><th>Veículo</th><th></th></tr>
           </thead><tbody>
             {concluidas.map(r => (
               <tr key={r.id}>
                 <td className="mono" style={{fontWeight:600,color:'var(--accent)'}}>{r.codigo}</td>
                 <td>{r.data_prevista ? new Date(r.data_prevista+'T12:00:00').toLocaleDateString('pt-BR') : '—'}</td>
                 <td>{r.bases?.nome}</td>
+                <td>{r.profiles?.nome || '—'}</td>
                 <td>{r.veiculos?.placa || r.veiculo || '—'}</td>
-                <td><span className="badge badge-gray">Concluída</span></td>
                 <td><button className="btn btn-secondary btn-sm" onClick={() => setRotaSel(r)}>Ver</button></td>
               </tr>
             ))}
