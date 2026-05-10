@@ -814,12 +814,17 @@ function ArvoreDistribuicaoPage() {
   };
 
   const pontoInfo = (ponto, cidade, uf) => {
-    const fromPonto = splitPonto(ponto);
-    const cid = (cidade || fromPonto.cidade || 'Sem cidade').trim();
-    const estado = String(uf || fromPonto.uf || '').trim().toUpperCase();
+    const rawPonto = String(ponto || '').trim();
+    const fromPonto = splitPonto(rawPonto);
+
+    // Regra principal: a árvore e o relatório são agrupados pelo PONTO DE PARTIDA,
+    // não pela cidade da campanha/aplicador. Ex.: campanhas em Barueri podem pertencer
+    // ao ponto de partida São Paulo-SP.
+    const cid = (rawPonto ? fromPonto.cidade : cidade) || cidade || 'Sem ponto de partida';
+    const estado = String((rawPonto ? (fromPonto.uf || uf) : uf) || '').trim().toUpperCase();
     const key = normText(cid) + '|' + estado;
     const label = titleCase(cid) + (estado ? '-' + estado : '');
-    return { key, label, cidade: titleCase(cid), uf: estado };
+    return { key, label, nome: label, cidade: titleCase(cid), uf: estado };
   };
 
   const addTreeItem = (pontos, tipo, info, item) => {
@@ -841,19 +846,30 @@ function ArvoreDistribuicaoPage() {
       setLoading(true);
       try {
         const hoje = new Date().toISOString().split('T')[0];
-        const [basesEst, aplicEst, tarefasRes, remessasRes] = await Promise.all([
+        const [basesEst, aplicEst, tarefasRes, tarefasVinculosRes, remessasRes] = await Promise.all([
           sb.from('estoque').select('quantidade, bases(nome, cidade, uf, ponto_partida), vacinas(nome)').eq('localizacao_tipo','base'),
           sb.from('estoque').select('quantidade, aplicadores(nome, cidade, uf), vacinas(nome)').eq('localizacao_tipo','aplicador'),
           sb.from('tarefas').select('codigo, ponto_partida, cidade_campanha, uf_campanha, data_inicio, doses_previstas, status').gt('data_inicio', hoje).limit(20000),
+          sb.from('tarefas').select('ponto_partida, cidade_campanha, uf_campanha').not('ponto_partida','is',null).limit(20000),
           sb.from('remessas').select('status, observacao').limit(20000),
         ]);
         if (basesEst.error) throw basesEst.error;
         if (aplicEst.error) throw aplicEst.error;
         if (tarefasRes.error) throw tarefasRes.error;
+        if (tarefasVinculosRes.error) throw tarefasVinculosRes.error;
         if (remessasRes.error) throw remessasRes.error;
 
         const pontos = {};
         const rel = {};
+
+        // Mapa: Cidade da Campanha + UF -> Ponto de Partida.
+        // Isso evita aparecerem cidades que não são pontos de partida na árvore/relatório.
+        const pontoPorCidade = {};
+        (tarefasVinculosRes.data || []).forEach(t => {
+          const cidadeKey = normText(t.cidade_campanha) + '|' + String(t.uf_campanha || '').trim().toUpperCase();
+          const ponto = String(t.ponto_partida || '').trim();
+          if (cidadeKey !== '|' && ponto && !pontoPorCidade[cidadeKey]) pontoPorCidade[cidadeKey] = ponto;
+        });
         const ensureReport = (info) => {
           if (!rel[info.key]) rel[info.key] = {
             key: info.key,
@@ -879,9 +895,11 @@ function ArvoreDistribuicaoPage() {
 
         (aplicEst.data || []).forEach(r => {
           const a = r.aplicadores || {};
-          const info = pontoInfo('', a.cidade, a.uf);
+          const cidadeKey = normText(a.cidade) + '|' + String(a.uf || '').trim().toUpperCase();
+          const pontoVinculado = pontoPorCidade[cidadeKey] || '';
+          const info = pontoInfo(pontoVinculado, a.cidade, a.uf);
           addTreeItem(pontos, 'Aplicador', info, {
-            nome: a.nome || 'Aplicador', cidade: info.cidade, uf: info.uf,
+            nome: a.nome || 'Aplicador', cidade: a.cidade || info.cidade, uf: a.uf || info.uf,
             vacina: r.vacinas?.nome || '—', doses: Number(r.quantidade || 0)
           });
           ensureReport({...info, nome: info.label}).aplicadores += Number(r.quantidade || 0);
@@ -956,7 +974,7 @@ function ArvoreDistribuicaoPage() {
         <div className="card-header">
           <div>
             <div className="card-title">Árvore Expandível</div>
-            <div className="page-subtitle">Pontos repetidos como “Marília” e “Marília-SP” são consolidados pelo par Cidade/UF</div>
+            <div className="page-subtitle">Agrupado pelo Ponto de Partida vinculado na tabela de tarefas</div>
           </div>
         </div>
         {loading ? <div className="empty-state"><div className="empty-text">Carregando...</div></div> : tree.length === 0 ? <div className="empty-state"><div className="empty-text">Nenhum estoque encontrado</div></div> : (
