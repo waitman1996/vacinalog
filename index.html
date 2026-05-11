@@ -3463,9 +3463,22 @@ function DemandaOfertaPage({ profile }) {
     if (!isAdmin) { toast('Somente ADM pode confirmar entrega.', 'error'); return; }
     if (!item.necessidade || item.necessidade <= 0) { toast('Este aplicador não precisa de envio.', 'info'); return; }
     if (!item.base_origem_id) { toast('Este registro não tem base de origem definida.', 'error'); return; }
+
+    // Verificar saldo antes
+    const { data: estoque } = await sb.from('estoque')
+      .select('quantidade')
+      .eq('vacina_id', item.vacina_id)
+      .eq('base_id', item.base_origem_id)
+      .eq('localizacao_tipo', 'base')
+      .single();
+    const saldo = estoque?.quantidade || 0;
+    if (saldo < item.necessidade) {
+      toast(`⚠ Saldo insuficiente na base: disponível ${saldo}, necessário ${item.necessidade}. Use Ajuste Manual no Estoque para corrigir.`, 'error');
+      return;
+    }
+
     if (!confirm(`Confirmar entrega de ${item.necessidade} doses para ${item.aplicador_nome}?`)) return;
     try {
-      // Preferência: usa a função do banco, se existir.
       const { error } = await sb.rpc('transferir_estoque', {
         p_vacina_id: item.vacina_id,
         p_quantidade: item.necessidade,
@@ -3477,6 +3490,17 @@ function DemandaOfertaPage({ profile }) {
         p_observacao: `Demanda vs Oferta - Semana ${safeSemana(semana)}`
       });
       if (error) throw error;
+
+      // Atualizar status_logistica das tarefas do aplicador para 'entregue'
+      if (item.aplicador_id) {
+        const { data: escalas } = await sb.from('escalas')
+          .select('tarefa_id').eq('aplicador_id', item.aplicador_id).not('tarefa_id', 'is', null);
+        const tarefaIds = [...new Set((escalas||[]).map(e => e.tarefa_id).filter(Boolean))];
+        if (tarefaIds.length > 0) {
+          await sb.from('tarefas').update({ status_logistica: 'entregue' }).in('id', tarefaIds);
+        }
+      }
+
       await savePlanning(item, 'entregue', { observacao: `Entrega confirmada pela tela Demanda vs Oferta - Semana ${safeSemana(semana)}` });
       await load();
     } catch (err) {
@@ -5609,6 +5633,29 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
       }
     }
 
+    // Verificar saldo antes de transferir
+    if (itens.length > 0 && destId) {
+      // Checar estoque disponível na base para cada item
+      for (const item of itens) {
+        const { data: estoque } = await sb.from('estoque')
+          .select('quantidade')
+          .eq('vacina_id', item.vacina_id)
+          .eq('base_id', rota.base_origem_id)
+          .eq('localizacao_tipo', 'base')
+          .single();
+        const saldo = estoque?.quantidade || 0;
+        if (saldo < item.quantidade) {
+          toast(`⚠ Saldo insuficiente para ${item.vacinas?.nome || 'vacina'}: disponível ${saldo}, necessário ${item.quantidade}. Use "Entrada de Estoque" ou "Ajuste Manual" para corrigir.`, 'error');
+          // Marcar remessa como concluída mesmo assim, mas sem transferir
+          await sb.from('remessas').update({ status: 'concluida' }).eq('id', remId);
+          // Atualizar status_logistica das tarefas vinculadas para 'entregue'
+          await atualizarStatusLogisticaRemessa(rem, destId);
+          load();
+          return;
+        }
+      }
+    }
+
     // Transferir estoque base → aplicador para cada item
     if (itens.length > 0 && destId) {
       let erros = 0;
@@ -5644,11 +5691,33 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
     // Marcar remessa como concluída
     const { error } = await sb.from('remessas').update({ status: 'concluida' }).eq('id', remId);
     if (error) { toast(error.message, 'error'); return; }
+
+    // Atualizar status_logistica das tarefas vinculadas para 'entregue'
+    await atualizarStatusLogisticaRemessa(rem, destId);
+
     toast('Entrega confirmada! ✓', 'success');
     load();
     const { data } = await sb.from('remessas').select('status').eq('rota_id', rota.id);
     const allDone = (data||[]).every(r => ['concluida','cancelada'].includes(r.status));
     if (allDone) toast('Todas as entregas feitas! Faça o check-out quando chegar na empresa.', 'success');
+  };
+
+  // Atualizar status_logistica das tarefas vinculadas à remessa
+  const atualizarStatusLogisticaRemessa = async (rem, aplicadorId) => {
+    try {
+      // Buscar escalas do aplicador com tarefas vinculadas
+      if (!aplicadorId) return;
+      const { data: escalas } = await sb.from('escalas')
+        .select('tarefa_id')
+        .eq('aplicador_id', aplicadorId)
+        .not('tarefa_id', 'is', null);
+      const tarefaIds = [...new Set((escalas||[]).map(e => e.tarefa_id).filter(Boolean))];
+      if (tarefaIds.length === 0) return;
+      // Atualizar status_logistica = 'entregue' para essas tarefas
+      await sb.from('tarefas').update({ status_logistica: 'entregue' }).in('id', tarefaIds);
+    } catch(e) {
+      console.warn('Não foi possível atualizar status_logistica:', e.message);
+    }
   };
 
   const fazerCheckout = async (obs) => {
