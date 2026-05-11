@@ -1721,25 +1721,32 @@ function ImportConsulta() {
       (vacinas || []).forEach(v => { vacinaMap[v.nome.toLowerCase()] = v.id; });
 
       // Buscar tarefas já existentes para detectar novas doses aplicadas
+      // Paginar em lotes de 200 (limite seguro do .in() do Supabase)
+      toast('Verificando tarefas existentes...', 'info');
       const codigos = preview.data.map(r => r['Código']).filter(Boolean);
       const existingMap = {};
-      for (let i = 0; i < codigos.length; i += 500) {
-        const { data: existing } = await sb.from('tarefas')
+      const LOOKUP_BATCH = 200;
+      for (let i = 0; i < codigos.length; i += LOOKUP_BATCH) {
+        const { data: existing, error: exErr } = await sb.from('tarefas')
           .select('id, codigo, doses_aplicadas')
-          .in('codigo', codigos.slice(i, i + 500));
+          .in('codigo', codigos.slice(i, i + LOOKUP_BATCH));
+        if (exErr) console.warn('Erro ao buscar existentes:', exErr.message);
         (existing || []).forEach(t => { existingMap[t.codigo] = t; });
+        setProgress(Math.round((i / codigos.length) * 10)); // 0-10% para lookup
       }
 
-      // Buscar escalas para vincular abatimentos (codigo_tarefa → escala → aplicador)
-      const { data: escalasData } = await sb.from('escalas')
-        .select('id, codigo_tarefa, aplicador_id, vacina_id, status')
-        .in('codigo_tarefa', codigos)
-        .in('status', ['aprovada','em_validacao','em_execucao','pronta_faturamento']);
-      // Pegar a primeira escala ativa por tarefa
+      // Buscar escalas para vincular abatimentos — também paginar
+      toast('Carregando escalas vinculadas...', 'info');
       const escalaMap = {};
-      (escalasData || []).forEach(e => {
-        if (!escalaMap[e.codigo_tarefa]) escalaMap[e.codigo_tarefa] = e;
-      });
+      for (let i = 0; i < codigos.length; i += LOOKUP_BATCH) {
+        const { data: escalasData } = await sb.from('escalas')
+          .select('id, codigo_tarefa, aplicador_id, vacina_id, status')
+          .in('codigo_tarefa', codigos.slice(i, i + LOOKUP_BATCH))
+          .in('status', ['aprovada','em_validacao','em_execucao','pronta_faturamento']);
+        (escalasData || []).forEach(e => {
+          if (!escalaMap[e.codigo_tarefa]) escalaMap[e.codigo_tarefa] = e;
+        });
+      }
 
       const userId = (await sb.auth.getUser()).data.user.id;
 
@@ -1874,7 +1881,7 @@ function ImportConsulta() {
           }
         }
 
-        setProgress(Math.round(((i + batch.length) / rows.length) * 100));
+        setProgress(10 + Math.round(((i + batch.length) / rows.length) * 90));
       }
 
       await sb.from('importacoes').update({
