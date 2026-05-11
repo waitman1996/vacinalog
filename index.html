@@ -4056,7 +4056,7 @@ function RoteirizacaoPage({ onBack }) {
           _data_inicio: String(t.data_inicio || e.data_inicio || '').slice(0,10),
           _status: statusFinal,
           _status_original: statusOriginal,
-          _status_logistica: t.status_logistica || e.status_logistica || 'nao_roteirizado',
+          _status_logistica: String(t.status_logistica || e.status_logistica || 'nao_roteirizado').toLowerCase().trim(),
           _doses: Number(t.doses_previstas || e.doses_necessarias || 0),
           _ponto_partida: t.ponto_partida || e.ponto_partida || e.base_nome || '',
           _base_nome: t.base_nome || e.base_nome || '',
@@ -4130,7 +4130,15 @@ function RoteirizacaoPage({ onBack }) {
         groups[key].statuses.add(e._status || e.status || 'aprovada');
       });
 
-      Object.values(groups).forEach(g => { delete g._vacinasEstoqueComputadas; });
+      Object.values(groups).forEach(g => {
+        delete g._vacinasEstoqueComputadas;
+        // Calcular se todas as tarefas estão com status logística concluído
+        const CONCLUIDOS = ['entregue','concluido','concluída','concluido'];
+        g.todasConcluidas = g.tarefas.length > 0 && g.tarefas.every(e => {
+          const sl = String(e._status_logistica || e._tarefa?.status_logistica || e.status_logistica || '').toLowerCase().trim();
+          return CONCLUIDOS.includes(sl);
+        });
+      });
       const tutorList = Object.values(groups).sort((a,b) => b.total_doses - a.total_doses);
       setTutores(tutorList);
 
@@ -4168,6 +4176,8 @@ function RoteirizacaoPage({ onBack }) {
 
     // Ocultar já roteirizados por padrão
     if (!showJaRoteirizado) f = f.filter(t => !t.jaRoteirizado);
+    // Ocultar tutores cujas tarefas estão todas com status logística concluído/entregue
+    f = f.filter(t => !t.todasConcluidas);
     if (filterPP) f = f.filter(t => t.ponto_partida === filterPP);
     if (filterStatus) f = f.filter(t => t.statuses ? t.statuses.has(filterStatus) : t.tarefas.some(e => (e._status || e.status) === filterStatus));
     if (filterDateStart) f = f.filter(t => t.tarefas.some(e => (e._data_inicio || e.data_inicio) >= filterDateStart));
