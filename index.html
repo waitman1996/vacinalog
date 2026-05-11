@@ -4056,7 +4056,7 @@ function RoteirizacaoPage({ onBack }) {
           _data_inicio: String(t.data_inicio || e.data_inicio || '').slice(0,10),
           _status: statusFinal,
           _status_original: statusOriginal,
-          _status_logistica: String(t.status_logistica || e.status_logistica || 'nao_roteirizado').toLowerCase().trim(),
+          _status_logistica: String(t.status_logistica || e.status_logistica || 'nao_roteirizado').toLowerCase().trim().normalize('NFD').replace(/[\u0300-\u036f]/g, ''),
           _doses: Number(t.doses_previstas || e.doses_necessarias || 0),
           _ponto_partida: t.ponto_partida || e.ponto_partida || e.base_nome || '',
           _base_nome: t.base_nome || e.base_nome || '',
@@ -4133,9 +4133,11 @@ function RoteirizacaoPage({ onBack }) {
       Object.values(groups).forEach(g => {
         delete g._vacinasEstoqueComputadas;
         // Calcular se todas as tarefas estão com status logística concluído
-        const CONCLUIDOS = ['entregue','concluido','concluída','concluido'];
+        const normSL = (v) => String(v || '').toLowerCase().trim()
+          .normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+        const CONCLUIDOS = ['entregue','concluido','concluida','finalizado','finalizada'];
         g.todasConcluidas = g.tarefas.length > 0 && g.tarefas.every(e => {
-          const sl = String(e._status_logistica || e._tarefa?.status_logistica || e.status_logistica || '').toLowerCase().trim();
+          const sl = normSL(e._status_logistica || e._tarefa?.status_logistica || e.status_logistica || '');
           return CONCLUIDOS.includes(sl);
         });
       });
