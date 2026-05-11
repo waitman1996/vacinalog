@@ -1702,7 +1702,6 @@ function ImportConsulta() {
   const doImport = async () => {
     if (!preview) return;
 
-    // Bloquear se todas as doses estiverem zeradas
     if (preview.comDoses === 0) {
       toast('❌ Todas as doses estão zeradas. Verifique se o arquivo está correto.', 'error');
       return;
@@ -1721,33 +1720,62 @@ function ImportConsulta() {
       const vacinaMap = {};
       (vacinas || []).forEach(v => { vacinaMap[v.nome.toLowerCase()] = v.id; });
 
+      // Buscar tarefas já existentes para detectar novas doses aplicadas
+      const codigos = preview.data.map(r => r['Código']).filter(Boolean);
+      const existingMap = {};
+      for (let i = 0; i < codigos.length; i += 500) {
+        const { data: existing } = await sb.from('tarefas')
+          .select('id, codigo, doses_aplicadas')
+          .in('codigo', codigos.slice(i, i + 500));
+        (existing || []).forEach(t => { existingMap[t.codigo] = t; });
+      }
+
+      // Buscar escalas para vincular abatimentos (codigo_tarefa → escala → aplicador)
+      const { data: escalasData } = await sb.from('escalas')
+        .select('id, codigo_tarefa, aplicador_id, vacina_id, status')
+        .in('codigo_tarefa', codigos)
+        .in('status', ['aprovada','em_validacao','em_execucao','pronta_faturamento']);
+      // Pegar a primeira escala ativa por tarefa
+      const escalaMap = {};
+      (escalasData || []).forEach(e => {
+        if (!escalaMap[e.codigo_tarefa]) escalaMap[e.codigo_tarefa] = e;
+      });
+
+      const userId = (await sb.auth.getUser()).data.user.id;
+
       const { data: imp, error: impErr } = await sb.from('importacoes').insert({
         tipo: 'tarefa', nome_arquivo: file.name,
         registros_total: preview.filtered,
-        usuario_id: (await sb.auth.getUser()).data.user.id
+        usuario_id: userId
       }).select().single();
       if (impErr) throw new Error('Erro ao registrar importação: ' + impErr.message);
 
       const rows = preview.data;
       const batchSize = 50;
-      let imported = 0, ignored = 0;
+      let imported = 0, ignored = 0, atualizados = 0, abatimentos = 0;
 
       for (let i = 0; i < rows.length; i += batchSize) {
-        const batch = rows.slice(i, i + batchSize).map(r => {
+        const batch = rows.slice(i, i + batchSize);
+
+        // Separar novos e existentes
+        const novos = [];
+        const paraAtualizar = [];
+
+        batch.forEach(r => {
+          const codigo = r['Código'] || '';
           const statusRaw = r['Status'] || '';
           const status = STATUS_MAP[statusRaw] || 'aprovada';
           const baseNome = (String(r['Bases'] || '')).trim();
           const vacinaNome = (String(r['vacina'] || 'Gripe')).trim();
-          
-          // Parse dates usando helper robusto (suporta serial Excel e string)
           const dataInicio = excelDateToString(r['Início']);
           const dataTermino = excelDateToString(r['Término']);
           const horaInicio = excelTimeToString(r['Horas']);
-          // Horas duplicado: SheetJS renomeia o segundo para 'Horas_1' ou 'Horas.1'
           const horaTermino = excelTimeToString(r['Horas_1'] || r['Horas.1']);
+          const dosesAplicadas = Math.round(parseFloat(r['Doses Aplicadas'])) || 0;
+          const dosesPrevistas = Math.round(parseFloat(r[preview.dosesCol] || r['Doses Previstas'])) || 0;
 
-          return {
-            codigo: r['Código'] || '',
+          const payload = {
+            codigo,
             nome_agenda: r['nome_agenda'] || '',
             grupo: r['Grupo'] || '',
             cliente: r['Cliente'] || '',
@@ -1762,10 +1790,10 @@ function ImportConsulta() {
             hora_termino: horaTermino,
             ponto_focal: r['Ponto focal'] || '',
             vendedor: r['Vendedor'] || '',
-            doses_previstas: Math.round(parseFloat(r[preview.dosesCol] || r['Doses Previstas'])) || 0,
+            doses_previstas: dosesPrevistas,
             doses_consumidas: Math.round(parseFloat(r['Doses Consumidas'])) || 0,
-            doses_aplicadas: Math.round(parseFloat(r['Doses Aplicadas'])) || 0,
-            status: status,
+            doses_aplicadas: dosesAplicadas,
+            status,
             status_original: statusRaw,
             ponto_partida: (r['Ponto de partida'] || '').trim(),
             base_nome: baseNome,
@@ -1781,26 +1809,85 @@ function ImportConsulta() {
             vacina_id: vacinaMap[vacinaNome.toLowerCase()] || vacinaMap['gripe'] || null,
             importacao_id: imp.id,
           };
+
+          if (existingMap[codigo]) {
+            // Tarefa existente → atualizar
+            paraAtualizar.push({
+              ...payload,
+              id: existingMap[codigo].id,
+              dosesAntigas: existingMap[codigo].doses_aplicadas || 0,
+              dosesNovas: dosesAplicadas,
+              escala: escalaMap[codigo] || null,
+            });
+          } else {
+            novos.push(payload);
+          }
         });
 
-        const { data: inserted, error } = await sb.from('tarefas').insert(batch).select('id');
-        if (error) {
-          console.error('Batch error:', error.message, error.details);
-          ignored += batch.length;
-          if (ignored <= batch.length) toast(`Aviso: erro no lote ${Math.ceil(i/batchSize)+1}: ${error.message}`, 'error');
-        } else {
-          imported += (inserted?.length || batch.length);
+        // INSERT para novas tarefas
+        if (novos.length > 0) {
+          const { data: insertedData, error: insertErr } = await sb.from('tarefas').insert(novos).select('id');
+          if (insertErr) {
+            ignored += novos.length;
+          } else {
+            imported += (insertedData?.length || novos.length);
+          }
         }
+
+        // UPDATE para tarefas existentes + abatimento se houver novas doses
+        for (const t of paraAtualizar) {
+          const { id, dosesAntigas, dosesNovas, escala, ...fields } = t;
+          delete fields.importacao_id; // não sobrescrever importacao_id original
+
+          const { error: updErr } = await sb.from('tarefas')
+            .update({
+              doses_previstas: fields.doses_previstas,
+              doses_consumidas: fields.doses_consumidas,
+              doses_aplicadas: dosesNovas,
+              status: fields.status,
+              status_original: fields.status_original,
+            })
+            .eq('id', id);
+
+          if (updErr) {
+            ignored++;
+          } else {
+            atualizados++;
+
+            // Calcular incremento de doses aplicadas
+            const incremento = dosesNovas - dosesAntigas;
+            if (incremento > 0 && escala?.aplicador_id && escala?.vacina_id) {
+              // Registrar abatimento automático
+              const { error: abErr } = await sb.from('abatimentos').insert({
+                escala_id: escala.id,
+                aplicador_id: escala.aplicador_id,
+                vacina_id: escala.vacina_id,
+                tarefa_id: id,
+                tipo: 'vacinados',
+                quantidade: incremento,
+                observacao: `Importação Consulta: +${incremento} doses (${dosesAntigas} → ${dosesNovas})`,
+                criado_por: userId,
+              });
+              if (!abErr) abatimentos++;
+              else console.warn('Erro ao registrar abatimento:', abErr.message);
+            }
+          }
+        }
+
         setProgress(Math.round(((i + batch.length) / rows.length) * 100));
       }
 
-      // Atualizar contadores da importação
       await sb.from('importacoes').update({
-        registros_importados: imported, registros_ignorados: ignored
+        registros_importados: imported + atualizados,
+        registros_ignorados: ignored,
+        detalhes: { novos: imported, atualizados, abatimentos_gerados: abatimentos }
       }).eq('id', imp.id);
 
-      setResult({ imported, ignored, total: rows.length });
-      toast(`Importação concluída! ${imported} tarefas importadas.`, 'success');
+      setResult({ imported, atualizados, abatimentos, ignored, total: rows.length });
+      toast(
+        `Importação concluída! ${imported} novas · ${atualizados} atualizadas · ${abatimentos} abatimentos gerados.`,
+        'success'
+      );
     } catch (err) {
       toast('Erro na importação: ' + err.message, 'error');
     } finally {
@@ -1871,8 +1958,11 @@ function ImportConsulta() {
           {result && (
             <div style={{padding:14,background:'var(--success-bg)',borderRadius:'var(--radius-sm)',border:'1px solid rgba(16,185,129,0.2)',marginBottom:12}}>
               <div style={{fontSize:14,fontWeight:600,color:'var(--success)'}}>✓ Importação concluída</div>
-              <div style={{fontSize:13,color:'var(--text-secondary)',marginTop:4}}>
-                {result.imported} importadas · {result.ignored} com erro · {result.total} total
+              <div style={{fontSize:13,color:'var(--text-secondary)',marginTop:4,display:'flex',gap:16,flexWrap:'wrap'}}>
+                <span>📥 {result.imported} novas</span>
+                <span>🔄 {result.atualizados} atualizadas</span>
+                <span style={{color:'var(--accent)'}}>💉 {result.abatimentos} abatimentos gerados</span>
+                {result.ignored > 0 && <span style={{color:'var(--warning)'}}>⚠ {result.ignored} com erro</span>}
               </div>
             </div>
           )}
@@ -2711,6 +2801,9 @@ function EscalasPage() {
 function EstoquePage() {
   const [items, setItems] = useState([]);
   const [showEntrada, setShowEntrada] = useState(false);
+  const [editingId, setEditingId] = useState(null);
+  const [editingVal, setEditingVal] = useState('');
+  const [profile, setProfile] = useState(null);
   const toast = useContext(ToastContext);
 
   const load = async () => {
@@ -2721,7 +2814,56 @@ function EstoquePage() {
     if (error) toast(error.message, 'error');
     else setItems(data || []);
   };
-  useEffect(() => { load(); }, []);
+
+  useEffect(() => {
+    load();
+    sb.auth.getUser().then(({ data }) => {
+      if (data?.user) sb.from('profiles').select('role').eq('id', data.user.id).single().then(({ data: p }) => setProfile(p));
+    });
+  }, []);
+
+  const isAdmin = profile?.role === 'admin';
+
+  const startEdit = (item) => {
+    setEditingId(item.id);
+    setEditingVal(String(item.quantidade));
+  };
+
+  const cancelEdit = () => { setEditingId(null); setEditingVal(''); };
+
+  const saveEdit = async (item) => {
+    const novaQtd = parseInt(editingVal);
+    if (isNaN(novaQtd)) { toast('Valor inválido', 'error'); return; }
+    if (novaQtd === item.quantidade) { cancelEdit(); return; }
+
+    const diff = novaQtd - item.quantidade;
+    const tipo = diff > 0 ? 'ajuste' : 'ajuste';
+    const locNome = item.localizacao_tipo === 'base' ? item.bases?.nome : item.aplicadores?.nome;
+    const obs = `Ajuste manual ADM: ${item.quantidade} → ${novaQtd} (${diff > 0 ? '+' : ''}${diff}) em ${locNome}`;
+
+    // Atualizar estoque diretamente
+    const { error: estErr } = await sb.from('estoque')
+      .update({ quantidade: novaQtd })
+      .eq('id', item.id);
+    if (estErr) { toast(estErr.message, 'error'); return; }
+
+    // Registrar movimentação de ajuste
+    const userId = (await sb.auth.getUser()).data.user.id;
+    await sb.from('movimentacoes').insert({
+      tipo: 'ajuste',
+      vacina_id: item.vacina_id,
+      quantidade: Math.abs(diff),
+      origem_tipo: item.localizacao_tipo === 'base' ? 'base' : 'aplicador',
+      origem_base_id: item.localizacao_tipo === 'base' ? item.base_id : null,
+      origem_aplicador_id: item.localizacao_tipo === 'aplicador' ? item.aplicador_id : null,
+      observacao: obs,
+      criado_por: userId,
+    });
+
+    toast(`Estoque ajustado: ${diff > 0 ? '+' : ''}${diff} doses`, 'success');
+    cancelEdit();
+    load();
+  };
 
   const totalBases = items.filter(i => i.localizacao_tipo === 'base').reduce((s, i) => s + i.quantidade, 0);
   const totalAp = items.filter(i => i.localizacao_tipo === 'aplicador').reduce((s, i) => s + i.quantidade, 0);
@@ -2731,7 +2873,7 @@ function EstoquePage() {
       <div className="page-header">
         <div>
           <div className="page-title">Estoque</div>
-          <div className="page-subtitle">Posição atual de doses</div>
+          <div className="page-subtitle">Posição atual de doses{isAdmin && ' · Clique na quantidade para editar'}</div>
         </div>
         <button className="btn btn-primary" onClick={() => setShowEntrada(true)}>+ Entrada de Estoque</button>
       </div>
@@ -2754,6 +2896,12 @@ function EstoquePage() {
         </div>
       </div>
 
+      {isAdmin && (
+        <div style={{padding:'8px 14px',background:'var(--warning-bg)',border:'1px solid rgba(245,158,11,0.3)',borderRadius:'var(--radius-sm)',marginBottom:12,fontSize:12,color:'var(--warning)'}}>
+          ✏️ <strong>Modo Admin:</strong> Clique no valor de quantidade para editar diretamente. O ajuste será registrado em Movimentações.
+        </div>
+      )}
+
       <div className="card">
         <div className="table-wrap">
           <table>
@@ -2775,8 +2923,42 @@ function EstoquePage() {
                   </td>
                   <td>{i.vacinas?.nome || '—'}</td>
                   <td className="mono">{i.vacinas?.lote || '—'}</td>
-                  <td className="mono" style={{fontWeight:600,fontSize:15,color:i.quantidade<0?'var(--danger)':'var(--success)'}}>
-                    {i.quantidade.toLocaleString('pt-BR')}
+                  <td>
+                    {isAdmin && editingId === i.id ? (
+                      <div style={{display:'flex',gap:6,alignItems:'center'}}>
+                        <input
+                          type="number"
+                          value={editingVal}
+                          onChange={e => setEditingVal(e.target.value)}
+                          onKeyDown={e => { if (e.key === 'Enter') saveEdit(i); if (e.key === 'Escape') cancelEdit(); }}
+                          autoFocus
+                          style={{width:100,padding:'4px 8px',background:'var(--bg-input)',border:'1px solid var(--accent)',borderRadius:4,color:'var(--text-primary)',fontFamily:'JetBrains Mono',fontSize:14,fontWeight:600}}
+                        />
+                        <button className="btn btn-success btn-sm btn-icon" onClick={() => saveEdit(i)} title="Salvar">✓</button>
+                        <button className="btn btn-secondary btn-sm btn-icon" onClick={cancelEdit} title="Cancelar">✕</button>
+                      </div>
+                    ) : (
+                      <span
+                        className="mono"
+                        onClick={() => isAdmin && startEdit(i)}
+                        style={{
+                          fontWeight:600, fontSize:15,
+                          color: i.quantidade < 0 ? 'var(--danger)' : 'var(--success)',
+                          cursor: isAdmin ? 'pointer' : 'default',
+                          padding: isAdmin ? '3px 8px' : '0',
+                          borderRadius: isAdmin ? 4 : 0,
+                          border: isAdmin ? '1px dashed transparent' : 'none',
+                          display: 'inline-block',
+                          transition: 'all 0.15s',
+                        }}
+                        onMouseEnter={e => { if (isAdmin) { e.target.style.borderColor = 'var(--accent)'; e.target.style.background = 'var(--accent-subtle)'; }}}
+                        onMouseLeave={e => { if (isAdmin) { e.target.style.borderColor = 'transparent'; e.target.style.background = 'transparent'; }}}
+                        title={isAdmin ? 'Clique para editar' : ''}
+                      >
+                        {i.quantidade.toLocaleString('pt-BR')}
+                        {isAdmin && <span style={{fontSize:10,marginLeft:4,opacity:0.5}}>✏️</span>}
+                      </span>
+                    )}
                   </td>
                 </tr>
               ))}
