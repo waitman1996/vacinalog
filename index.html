@@ -4136,7 +4136,7 @@ function RoteirizacaoPage({ onBack }) {
 
       const pps = {};
       tutorList.forEach(t => { if (t.ponto_partida) pps[t.ponto_partida] = (pps[t.ponto_partida]||0)+1; });
-      setPontosPartida(Object.entries(pps).sort((a,b)=>b[1]-a[1]));
+      setPontosPartida(Object.entries(pps).sort((a,b) => a[0].localeCompare(b[0], 'pt-BR')));
     } catch (err) {
       console.error('Erro geral ao carregar escalas para rotas:', err);
       toast('Erro ao carregar escalas para rotas: ' + (err.message || err), 'error');
@@ -4149,8 +4149,23 @@ function RoteirizacaoPage({ onBack }) {
 
   useEffect(() => {
     let f = [...tutores];
-    const addedCPFs = new Set(paradas.map(p => p.cpf));
-    f = f.filter(t => !addedCPFs.has(t.cpf));
+
+    // Bug fix: não excluir tutor da lista por estar na rota
+    // Se filtro de status ativo, mostrar tutor mesmo que já esteja na rota com outro status
+    // (para poder adicionar tarefas de outro status do mesmo tutor)
+    if (!filterStatus) {
+      // Sem filtro: ocultar tutores já adicionados
+      const addedCPFs = new Set(paradas.map(p => p.cpf));
+      f = f.filter(t => !addedCPFs.has(t.cpf));
+    }
+    // Com filtro: só ocultar se o tutor está na rota COM esse mesmo status
+    if (filterStatus) {
+      const addedCPFsWithStatus = new Set(
+        paradas.filter(p => p.status_filtro === filterStatus).map(p => p.cpf)
+      );
+      f = f.filter(t => !addedCPFsWithStatus.has(t.cpf));
+    }
+
     // Ocultar já roteirizados por padrão
     if (!showJaRoteirizado) f = f.filter(t => !t.jaRoteirizado);
     if (filterPP) f = f.filter(t => t.ponto_partida === filterPP);
@@ -4434,18 +4449,32 @@ function RoteirizacaoPage({ onBack }) {
                 <option value="">Todos pontos de partida</option>
                 {pontosPartida.map(([pp,c]) => <option key={pp} value={pp}>{pp} ({c})</option>)}
               </select>
-              <select className="form-select" style={{padding:'5px 6px',fontSize:11,width:'100%',marginTop:4}} value={filterStatus} onChange={e=>{
-                if (paradas.length > 0 && e.target.value !== filterStatus) {
-                  if (!confirm('Mudar o filtro de status vai afetar apenas novos aplicadores adicionados. Paradas já adicionadas mantêm o status original. Continuar?')) return;
-                }
-                setFilterStatus(e.target.value);
-              }}>
-                <option value="">Todos os status</option>
-                <option value="aprovada">Aprovada</option>
-                <option value="em_validacao">Em Validação</option>
-                <option value="em_execucao">Em Execução</option>
-                <option value="pronta_faturamento">Pronta p/ Fat.</option>
-              </select>
+              <div style={{marginTop:4}}>
+                <div style={{fontSize:10,color:'var(--text-muted)',marginBottom:3,fontWeight:600}}>STATUS</div>
+                <div style={{display:'flex',flexWrap:'wrap',gap:4}}>
+                  {[
+                    {v:'aprovada', label:'Aprovada', color:'var(--success)'},
+                    {v:'em_validacao', label:'Em Valid.', color:'var(--warning)'},
+                    {v:'em_execucao', label:'Em Exec.', color:'var(--accent)'},
+                    {v:'pronta_faturamento', label:'Pronta Fat.', color:'var(--info)'},
+                  ].map(opt => (
+                    <label key={opt.v} style={{display:'flex',alignItems:'center',gap:4,cursor:'pointer',fontSize:10,padding:'3px 7px',borderRadius:4,border:`1px solid ${filterStatus === opt.v ? opt.color : 'var(--border)'}`,background: filterStatus === opt.v ? `${opt.color}22` : 'transparent',transition:'all 0.15s'}}>
+                      <input type="radio" name="filterStatus" value={opt.v}
+                        checked={filterStatus === opt.v}
+                        onChange={() => setFilterStatus(filterStatus === opt.v ? '' : opt.v)}
+                        style={{display:'none'}} />
+                      <span style={{color: filterStatus === opt.v ? opt.color : 'var(--text-muted)', fontWeight: filterStatus === opt.v ? 600 : 400}}>
+                        {filterStatus === opt.v ? '✓ ' : ''}{opt.label}
+                      </span>
+                    </label>
+                  ))}
+                  {filterStatus && (
+                    <button onClick={() => setFilterStatus('')} style={{fontSize:10,padding:'3px 6px',background:'none',border:'1px solid var(--border)',borderRadius:4,color:'var(--text-muted)',cursor:'pointer'}}>
+                      ✕ Limpar
+                    </button>
+                  )}
+                </div>
+              </div>
               <div style={{fontSize:10,color:'var(--text-muted)',marginTop:4,display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>
                 <span className="badge badge-blue" style={{fontSize:10}}>Disponíveis {filteredTutores.length}</span>
                 <span className="badge badge-green" style={{fontSize:10}}>Na rota {paradas.length}</span>
