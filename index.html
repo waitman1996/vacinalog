@@ -2975,7 +2975,7 @@ function TarefasPage({ profile }) {
         <div className="table-wrap">
           <table>
             <thead>
-              <tr><th>Código</th><th>Cliente</th><th>Cidade</th><th>UF</th><th>Data</th><th>Doses Prev.</th><th>Doses Aplic.</th><th>Status</th><th>Status Logística</th><th>Base</th></tr>
+              <tr><th>Código</th><th>Cliente</th><th>Cidade</th><th>UF</th><th>Data</th><th>Vacina</th><th>Doses Prev.</th><th>Doses Aplic.</th><th>Status</th><th>Status Logística</th><th>Base</th></tr>
             </thead>
             <tbody>
               {(items.data || []).map(t => (
@@ -2985,6 +2985,7 @@ function TarefasPage({ profile }) {
                   <td>{t.cidade_campanha}</td>
                   <td className="mono">{t.uf_campanha}</td>
                   <td>{t.data_inicio ? new Date(t.data_inicio+'T12:00:00').toLocaleDateString('pt-BR') : '—'}</td>
+                  <td><span style={{fontSize:11,fontWeight:600,color:'var(--accent)',whiteSpace:'nowrap'}}>{t.vacina || '—'}</span></td>
                   <td className="mono">{t.doses_previstas}</td>
                   <td className="mono">{t.doses_aplicadas}</td>
                   <td><span className={`badge ${STATUS_BADGES[t.status]||'badge-gray'}`}>{STATUS_LABELS[t.status]||t.status}</span></td>
@@ -3252,7 +3253,16 @@ function EstoquePage() {
                   <td>
                     {i.localizacao_tipo === 'base' ? `${i.bases?.cidade || ''} / ${i.bases?.uf || ''}` : `${i.aplicadores?.cidade || ''} / ${i.aplicadores?.uf || ''}`}
                   </td>
-                  <td>{i.vacinas?.nome || '—'}</td>
+                  <td>
+                    <span style={{
+                      fontSize:12, fontWeight:600, padding:'2px 8px', borderRadius:4,
+                      background: (i.vacinas?.nome||'').toLowerCase().includes('tetrav') ? 'rgba(37,99,235,0.15)' :
+                                  (i.vacinas?.nome||'').toLowerCase().includes('triv') ? 'rgba(16,185,129,0.15)' : 'var(--accent-subtle)',
+                      color: (i.vacinas?.nome||'').toLowerCase().includes('tetrav') ? 'var(--accent)' :
+                             (i.vacinas?.nome||'').toLowerCase().includes('triv') ? 'var(--success)' : 'var(--text-primary)',
+                      whiteSpace:'nowrap'
+                    }}>{i.vacinas?.nome || '—'}</span>
+                  </td>
                   <td className="mono">{i.vacinas?.lote || '—'}</td>
                   <td>
                     {isAdmin && editingId === i.id ? (
@@ -5543,7 +5553,15 @@ function MontagemPage() {
                     <tbody>
                       {(rem.remessa_itens||[]).map(it => (
                         <tr key={it.id} style={{borderTop:'1px solid var(--border)'}}>
-                          <td style={{padding:'5px 8px',fontSize:13,color:'var(--text-primary)',fontWeight:500}}>{it.vacinas?.nome||'—'}</td>
+                          <td style={{padding:'5px 8px'}}>
+                            <span style={{
+                              fontSize:12, fontWeight:700, padding:'2px 8px', borderRadius:4,
+                              background: (it.vacinas?.nome||'').toLowerCase().includes('tetrav') ? 'rgba(37,99,235,0.15)' :
+                                          (it.vacinas?.nome||'').toLowerCase().includes('triv') ? 'rgba(16,185,129,0.15)' : 'var(--accent-subtle)',
+                              color: (it.vacinas?.nome||'').toLowerCase().includes('tetrav') ? 'var(--accent)' :
+                                     (it.vacinas?.nome||'').toLowerCase().includes('triv') ? 'var(--success)' : 'var(--text-primary)'
+                            }}>{it.vacinas?.nome||'—'}</span>
+                          </td>
                           <td style={{padding:'5px 8px',fontSize:12,fontFamily:'JetBrains Mono',color:'var(--text-muted)'}}>{it.vacinas?.lote||'—'}</td>
                           <td style={{padding:'5px 8px',fontSize:14,fontFamily:'JetBrains Mono',fontWeight:700,textAlign:'right',color:'var(--success)'}}>{it.quantidade}</td>
                           <td style={{padding:'5px 4px'}}>
@@ -6361,8 +6379,14 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
                   {(rem.remessa_itens||[]).length > 0 && (
                     <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:8}}>
                       {(rem.remessa_itens||[]).map((it,i) => (
-                        <span key={i} style={{fontSize:11,background:'var(--bg-input)',padding:'2px 8px',borderRadius:4,color:'var(--text-secondary)'}}>
-                          {it.vacinas?.nome}: <strong>{it.quantidade}</strong>
+                        <span key={i} style={{
+                          fontSize:11, padding:'3px 10px', borderRadius:4, fontWeight:600,
+                          background: (it.vacinas?.nome||'').toLowerCase().includes('tetrav') ? 'rgba(37,99,235,0.2)' :
+                                      (it.vacinas?.nome||'').toLowerCase().includes('triv') ? 'rgba(16,185,129,0.2)' : 'var(--bg-input)',
+                          color: (it.vacinas?.nome||'').toLowerCase().includes('tetrav') ? 'var(--accent)' :
+                                 (it.vacinas?.nome||'').toLowerCase().includes('triv') ? 'var(--success)' : 'var(--text-secondary)',
+                        }}>
+                          💉 {it.vacinas?.nome}: <strong>{it.quantidade}</strong>
                         </span>
                       ))}
                     </div>
