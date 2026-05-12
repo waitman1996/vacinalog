@@ -3116,6 +3116,8 @@ function EstoquePage() {
   const [editingId, setEditingId] = useState(null);
   const [editingVal, setEditingVal] = useState('');
   const [profile, setProfile] = useState(null);
+  const [filterVacina, setFilterVacina] = useState('');
+  const [filterTipo, setFilterTipo] = useState('');
   const toast = useContext(ToastContext);
 
   const load = async () => {
@@ -3200,6 +3202,16 @@ function EstoquePage() {
   const totalBases = items.filter(i => i.localizacao_tipo === 'base').reduce((s, i) => s + i.quantidade, 0);
   const totalAp = items.filter(i => i.localizacao_tipo === 'aplicador').reduce((s, i) => s + i.quantidade, 0);
 
+  // Vacinas únicas para o filtro
+  const vacinasUnicas = [...new Set(items.map(i => i.vacinas?.nome).filter(Boolean))].sort();
+
+  // Aplicar filtros
+  const itemsFiltrados = items.filter(i => {
+    if (filterVacina && i.vacinas?.nome !== filterVacina) return false;
+    if (filterTipo && i.localizacao_tipo !== filterTipo) return false;
+    return true;
+  });
+
   return (
     <div>
       <div className="page-header">
@@ -3234,6 +3246,38 @@ function EstoquePage() {
         </div>
       )}
 
+      {/* Filtros */}
+      <div style={{display:'flex',gap:10,marginBottom:12,flexWrap:'wrap',alignItems:'flex-end'}}>
+        <div className="form-group" style={{marginBottom:0,minWidth:200}}>
+          <label className="form-label">Vacina</label>
+          <select className="form-select" style={{padding:'6px 10px',fontSize:13}} value={filterVacina} onChange={e=>setFilterVacina(e.target.value)}>
+            <option value="">Todas as vacinas</option>
+            {vacinasUnicas.map(v => (
+              <option key={v} value={v}>{v}</option>
+            ))}
+          </select>
+        </div>
+        <div className="form-group" style={{marginBottom:0}}>
+          <label className="form-label">Tipo</label>
+          <select className="form-select" style={{padding:'6px 10px',fontSize:13}} value={filterTipo} onChange={e=>setFilterTipo(e.target.value)}>
+            <option value="">Todos</option>
+            <option value="base">Base</option>
+            <option value="aplicador">Aplicador</option>
+          </select>
+        </div>
+        {(filterVacina || filterTipo) && (
+          <button className="btn btn-secondary btn-sm" style={{alignSelf:'flex-end'}} onClick={() => { setFilterVacina(''); setFilterTipo(''); }}>
+            ✕ Limpar filtros
+          </button>
+        )}
+        {(filterVacina || filterTipo) && (
+          <div style={{alignSelf:'flex-end',fontSize:12,color:'var(--text-muted)'}}>
+            Mostrando <strong style={{color:'var(--accent)'}}>{itemsFiltrados.length}</strong> de {items.length} registros
+            · Total: <strong style={{color:'var(--success)'}}>{itemsFiltrados.reduce((s,i)=>s+i.quantidade,0).toLocaleString('pt-BR')}</strong> doses
+          </div>
+        )}
+      </div>
+
       <div className="card">
         <div className="table-wrap">
           <table>
@@ -3241,10 +3285,10 @@ function EstoquePage() {
               <tr><th>Tipo</th><th>Localização</th><th>Cidade/UF</th><th>Vacina</th><th>Lote</th><th>Quantidade</th></tr>
             </thead>
             <tbody>
-              {items.length === 0 && (
-                <tr><td colSpan={6}><div className="empty-state"><div className="empty-icon">📦</div><div className="empty-text">Nenhum estoque registrado. Use "Entrada de Estoque" para começar.</div></div></td></tr>
+              {itemsFiltrados.length === 0 && (
+                <tr><td colSpan={6}><div className="empty-state"><div className="empty-icon">📦</div><div className="empty-text">{items.length === 0 ? 'Nenhum estoque registrado. Use "Entrada de Estoque" para começar.' : 'Nenhum resultado para os filtros selecionados.'}</div></div></td></tr>
               )}
-              {items.map(i => (
+              {itemsFiltrados.map(i => (
                 <tr key={i.id}>
                   <td><span className={`badge ${i.localizacao_tipo==='base'?'badge-blue':'badge-yellow'}`}>{i.localizacao_tipo==='base'?'Base':'Aplicador'}</span></td>
                   <td style={{color:'var(--text-primary)',fontWeight:500}}>
