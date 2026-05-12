@@ -833,6 +833,47 @@ function DashboardPage({ onNavigate }) {
     return resumo;
   };
 
+  const openEstoqueModal = async () => {
+    setModal('estoque_total'); setModalLoading(true);
+    try {
+      const { data } = await sb.from('estoque')
+        .select('quantidade, localizacao_tipo, bases(nome, cidade, uf), vacinas(nome, lote), aplicadores(nome, cidade, uf)')
+        .neq('quantidade', 0)
+        .order('localizacao_tipo');
+      // Agrupar por tipo
+      const grupos = { base: [], aplicador: [], clinica: [] };
+      const totais = { base: 0, aplicador: 0, clinica: 0 };
+      (data || []).forEach(r => {
+        const tipo = r.localizacao_tipo || 'base';
+        const entry = {
+          local: tipo === 'base' ? (r.bases?.nome || '—') : (r.aplicadores?.nome || '—'),
+          cidade: tipo === 'base' ? (r.bases?.cidade || '') : (r.aplicadores?.cidade || ''),
+          uf: tipo === 'base' ? (r.bases?.uf || '') : (r.aplicadores?.uf || ''),
+          vacina: r.vacinas?.nome || '—',
+          lote: r.vacinas?.lote || '—',
+          quantidade: Number(r.quantidade || 0),
+        };
+        if (tipo === 'base') { grupos.base.push(entry); totais.base += entry.quantidade; }
+        else if (tipo === 'aplicador') { grupos.aplicador.push(entry); totais.aplicador += entry.quantidade; }
+        else { grupos.clinica.push(entry); totais.clinica += entry.quantidade; }
+      });
+      setModalData({ grupos, totais });
+    } catch (err) { toast('Erro: ' + err.message, 'error'); }
+    setModalLoading(false);
+  };
+
+  const openTransitoModal = async () => {
+    setModal('transito'); setModalLoading(true);
+    try {
+      const { data } = await sb.from('rotas')
+        .select('codigo, data_prevista, status, veiculo, profiles!rotas_motorista_id_fkey(nome), remessas(id, status, ordem_entrega, observacao, updated_at)')
+        .in('status', ['pronta','em_transito','montagem'])
+        .order('data_prevista', { ascending: false });
+      setModalData(data || []);
+    } catch (err) { toast('Erro: ' + err.message, 'error'); }
+    setModalLoading(false);
+  };
+
   const openDosesModal = () => {
     setModal('doses');
     setModalLoading(false);
@@ -1054,6 +1095,23 @@ function DashboardPage({ onNavigate }) {
         <div className="kpi-card-compact"><div className="stat-icon kpi-icon" style={{background:'var(--info-bg)',color:'var(--info)'}}>📈</div><div className="kpi-value">{Number(stats.adesao || 0).toFixed(1).replace('.', ',')}%</div><div className="kpi-label">% Adesão</div></div>
         <div className="kpi-card-compact"><div className="stat-icon kpi-icon" style={{background:'var(--warning-bg)',color:'var(--warning)'}}>⚠️</div><div className="kpi-value">{Number(stats.dosesPerdidas || 0).toLocaleString('pt-BR')}</div><div className="kpi-label">Doses Perdidas</div></div>
         <div className="kpi-card-compact"><div className="stat-icon kpi-icon" style={{background:'var(--danger-bg)',color:'var(--danger)'}}>🚫</div><div className="kpi-value">{Number(stats.dosesDanificadas || 0).toLocaleString('pt-BR')}</div><div className="kpi-label">Doses Danificadas</div></div>
+        {/* Novos cards clicáveis */}
+        <div className="kpi-card-compact" onClick={openEstoqueModal}
+          style={{cursor:'pointer',borderColor:'var(--accent)',transition:'all 0.15s'}}
+          onMouseEnter={e=>e.currentTarget.style.background='var(--accent-subtle)'}
+          onMouseLeave={e=>e.currentTarget.style.background=''}>
+          <div className="stat-icon kpi-icon" style={{background:'var(--accent-subtle)',color:'var(--accent)'}}>📦</div>
+          <div className="kpi-value">{(Number(stats.dosesBase||0)+Number(stats.dosesAplicador||0)+Number(stats.dosesClinica||0)).toLocaleString('pt-BR')}</div>
+          <div className="kpi-label">Estoque Total <span style={{fontSize:9,color:'var(--accent)'}}>▼ ver detalhes</span></div>
+        </div>
+        <div className="kpi-card-compact" onClick={openTransitoModal}
+          style={{cursor:'pointer',borderColor:'var(--success)',transition:'all 0.15s'}}
+          onMouseEnter={e=>e.currentTarget.style.background='var(--success-bg)'}
+          onMouseLeave={e=>e.currentTarget.style.background=''}>
+          <div className="stat-icon kpi-icon" style={{background:'var(--success-bg)',color:'var(--success)'}}>🚚</div>
+          <div className="kpi-value">{Number(stats.dosesTransito||0).toLocaleString('pt-BR')}</div>
+          <div className="kpi-label">Em Trânsito <span style={{fontSize:9,color:'var(--success)'}}>▼ ver rotas</span></div>
+        </div>
       </div>
 
       <div className="card">
@@ -1125,9 +1183,96 @@ function DashboardPage({ onNavigate }) {
       )}
 
       {modal && (
-        <Modal title={modal === 'doses' ? 'Resumo de Doses' : modal === 'bases' ? 'Doses por Base' : modal === 'vacinas' ? 'Lista de Vacinas' : 'Doses por Aplicador'} onClose={() => setModal(null)} large>
+        <Modal title={
+          modal === 'doses' ? 'Resumo de Doses' :
+          modal === 'bases' ? 'Doses por Base' :
+          modal === 'vacinas' ? 'Lista de Vacinas' :
+          modal === 'aplicadores' ? 'Doses por Aplicador' :
+          modal === 'estoque_total' ? '📦 Estoque Total por Tipo' :
+          modal === 'transito' ? '🚚 Doses em Trânsito' : ''
+        } onClose={() => setModal(null)} large>
           {modalLoading ? <div className="empty-state"><div className="empty-text">Carregando...</div></div> : (
             <>
+              {modal === 'estoque_total' && modalData?.grupos && (() => {
+                const { grupos, totais } = modalData;
+                const tabs = [
+                  { key: 'base', label: '🏢 Bases', cor: 'var(--accent)', total: totais.base },
+                  { key: 'aplicador', label: '👤 Aplicadores', cor: 'var(--warning)', total: totais.aplicador },
+                  { key: 'clinica', label: '🏥 Clínicas', cor: 'var(--info)', total: totais.clinica },
+                ];
+                return (
+                  <>
+                    <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:10,marginBottom:16}}>
+                      {tabs.map(t => (
+                        <div key={t.key} className="stat-card" style={{borderColor: t.cor}}>
+                          <div className="stat-label">{t.label}</div>
+                          <div className="stat-value" style={{color: t.cor}}>{t.total.toLocaleString('pt-BR')}</div>
+                        </div>
+                      ))}
+                    </div>
+                    {tabs.map(t => grupos[t.key].length > 0 && (
+                      <div key={t.key} style={{marginBottom:16}}>
+                        <div style={{fontSize:13,fontWeight:600,color: t.cor,marginBottom:6}}>{t.label} — {t.total.toLocaleString('pt-BR')} doses</div>
+                        <div className="table-wrap"><table><thead><tr><th>Local</th><th>Cidade/UF</th><th>Vacina</th><th>Lote</th><th>Qtd</th></tr></thead><tbody>
+                          {grupos[t.key].sort((a,b)=>b.quantidade-a.quantidade).map((r,i)=>(
+                            <tr key={i}>
+                              <td style={{fontWeight:500}}>{r.local}</td>
+                              <td>{r.cidade}{r.uf?'/'+r.uf:''}</td>
+                              <td>{r.vacina}</td>
+                              <td className="mono">{r.lote}</td>
+                              <td className="mono" style={{fontWeight:700,color:r.quantidade>0?'var(--success)':'var(--danger)'}}>{r.quantidade.toLocaleString('pt-BR')}</td>
+                            </tr>
+                          ))}
+                        </tbody></table></div>
+                      </div>
+                    ))}
+                  </>
+                );
+              })()}
+              {modal === 'transito' && (
+                <>
+                  {modalData.length === 0
+                    ? <div className="empty-state"><div className="empty-icon">🚚</div><div className="empty-text">Nenhuma rota em trânsito no momento</div></div>
+                    : modalData.map(r => {
+                      const entregues = (r.remessas||[]).filter(rem => rem.status === 'concluida').length;
+                      const total = (r.remessas||[]).length;
+                      const ultimaEntrega = (r.remessas||[]).filter(rem=>rem.status==='concluida').sort((a,b)=>new Date(b.updated_at)-new Date(a.updated_at))[0];
+                      return (
+                        <div key={r.id} className="card" style={{marginBottom:10,padding:14}}>
+                          <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',flexWrap:'wrap',gap:8}}>
+                            <div>
+                              <div style={{fontFamily:'JetBrains Mono',fontSize:15,fontWeight:700,color:'var(--accent)'}}>{r.codigo}</div>
+                              <div style={{fontSize:12,color:'var(--text-secondary)',marginTop:3,display:'flex',gap:12,flexWrap:'wrap'}}>
+                                <span>👤 {r.profiles?.nome || '—'}</span>
+                                <span>🚗 {r.veiculo || '—'}</span>
+                                <span>📅 {r.data_prevista ? new Date(r.data_prevista+'T12:00:00').toLocaleDateString('pt-BR') : '—'}</span>
+                              </div>
+                            </div>
+                            <div style={{textAlign:'right'}}>
+                              <span className={`badge ${r.status==='em_transito'?'badge-green':r.status==='pronta'?'badge-cyan':'badge-yellow'}`}>
+                                {r.status==='em_transito'?'Em Trânsito':r.status==='pronta'?'Pronta':r.status}
+                              </span>
+                              <div style={{fontSize:12,color:'var(--text-muted)',marginTop:4}}>{entregues}/{total} entregas</div>
+                            </div>
+                          </div>
+                          {ultimaEntrega && (
+                            <div style={{marginTop:8,fontSize:11,color:'var(--text-muted)',borderTop:'1px solid var(--border)',paddingTop:6}}>
+                              Última entrega: {new Date(ultimaEntrega.updated_at).toLocaleString('pt-BR')}
+                              {ultimaEntrega.observacao && <span> · {ultimaEntrega.observacao.split('\n')[0].slice(0,60)}</span>}
+                            </div>
+                          )}
+                          {/* Barra de progresso */}
+                          <div style={{marginTop:8}}>
+                            <div style={{height:4,background:'var(--border)',borderRadius:2,overflow:'hidden'}}>
+                              <div style={{height:'100%',width:(total>0?entregues/total*100:0)+'%',background:'var(--success)',transition:'width 0.3s'}}/>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })
+                  }
+                </>
+              )}
               {modal === 'doses' && <>
                 <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(160px,1fr))',gap:12,marginBottom:16}}>
                   <div className="stat-card"><div className="stat-label">Total de Doses</div><div className="stat-value" style={{fontSize:24}}>{stats.doses}</div></div>
