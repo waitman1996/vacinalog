@@ -1818,12 +1818,24 @@ function ImportConsulta() {
       // defval:'' evita undefined, raw:true mantém valores originais
       const data = XLSX.utils.sheet_to_json(sheet, { raw: true, defval: '' });
 
-      // Detectar automaticamente coluna de doses — tolerante a espaços extras
+      // Detectar automaticamente coluna de doses — tolerante a variações de nome
       const firstRow = data[0] || {};
-      const dosesCol = Object.keys(firstRow).find(k =>
-        k.trim().toLowerCase().replace(/\s+/g, ' ').includes('doses prev') ||
-        k.trim().toLowerCase().replace(/\s+/g, ' ').includes('previstas')
-      ) || 'Doses Previstas';
+      const normKey = (k) => k.trim().toLowerCase().replace(/\s+/g, ' ');
+      const dosesCol = Object.keys(firstRow).find(k => {
+        const n = normKey(k);
+        return n === 'doses previstas' ||
+               n.includes('doses prev') ||
+               n === 'previstas' ||
+               n === 'doses agendadas' ||
+               n === 'total doses' ||
+               n === 'qtd doses' ||
+               n === 'doses';
+      }) || Object.keys(firstRow).find(k => normKey(k).includes('prev')) || 'Doses Previstas';
+
+      // Log para diagnóstico
+      console.log('[VacinaLog] Colunas disponíveis:', Object.keys(firstRow));
+      console.log('[VacinaLog] Coluna doses detectada:', dosesCol);
+      console.log('[VacinaLog] Amostra valor doses:', firstRow[dosesCol]);
 
       const filtered = data.filter(r => {
         const st = String(r['Status'] || '').trim();
@@ -2426,7 +2438,6 @@ function ImportEstoque() {
     if (!localizacao_tipo) erros.push('tipo inválido');
     if (!vacina) erros.push('vacina vazia');
     if (quantidade < 0) erros.push('quantidade negativa');
-    if (quantidade === 0) erros.push('quantidade zerada');
     if (localizacao_tipo === 'base' && !base && !local) erros.push('base/local vazio');
     if (localizacao_tipo === 'aplicador' && !aplicador && !cpf && !local) erros.push('aplicador/cpf/local vazio');
     if (localizacao_tipo === 'clinica') erros.push('clínica ainda não implementada no banco');
