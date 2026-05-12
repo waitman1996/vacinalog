@@ -3120,10 +3120,25 @@ function EstoquePage() {
   const load = async () => {
     const { data, error } = await sb.from('estoque')
       .select('*, vacinas(nome, lote), bases(nome, cidade, uf), aplicadores(nome, cpf, cidade, uf)')
-      .neq('quantidade', 0)
       .order('localizacao_tipo');
-    if (error) toast(error.message, 'error');
-    else setItems(data || []);
+    if (error) { toast(error.message, 'error'); return; }
+
+    // Consolidar registros duplicados: agrupar por tipo + local + vacina
+    const map = {};
+    (data || []).forEach(row => {
+      const localId = row.base_id || row.aplicador_id || '';
+      const key = `${row.localizacao_tipo}|${localId}|${row.vacina_id}`;
+      if (!map[key]) {
+        map[key] = { ...row, _ids: [row.id] };
+      } else {
+        map[key].quantidade += Number(row.quantidade || 0);
+        map[key]._ids.push(row.id);
+      }
+    });
+
+    // Filtrar zeros após consolidação
+    const consolidated = Object.values(map).filter(i => i.quantidade !== 0);
+    setItems(consolidated);
   };
 
   useEffect(() => {
@@ -3148,14 +3163,19 @@ function EstoquePage() {
     if (novaQtd === item.quantidade) { cancelEdit(); return; }
 
     const diff = novaQtd - item.quantidade;
-    const tipo = diff > 0 ? 'ajuste' : 'ajuste';
     const locNome = item.localizacao_tipo === 'base' ? item.bases?.nome : item.aplicadores?.nome;
     const obs = `Ajuste manual ADM: ${item.quantidade} → ${novaQtd} (${diff > 0 ? '+' : ''}${diff}) em ${locNome}`;
 
-    // Atualizar estoque diretamente
-    const { error: estErr } = await sb.from('estoque')
-      .update({ quantidade: novaQtd })
-      .eq('id', item.id);
+    // Se há múltiplos IDs duplicados: zerar os secundários e colocar tudo no primeiro
+    const ids = item._ids || [item.id];
+    if (ids.length > 1) {
+      // Zerar todos exceto o primeiro
+      for (let i = 1; i < ids.length; i++) {
+        await sb.from('estoque').update({ quantidade: 0 }).eq('id', ids[i]);
+      }
+    }
+    // Atualizar o primeiro com o valor total
+    const { error: estErr } = await sb.from('estoque').update({ quantidade: novaQtd }).eq('id', ids[0]);
     if (estErr) { toast(estErr.message, 'error'); return; }
 
     // Registrar movimentação de ajuste
@@ -3167,11 +3187,11 @@ function EstoquePage() {
       origem_tipo: item.localizacao_tipo === 'base' ? 'base' : 'aplicador',
       origem_base_id: item.localizacao_tipo === 'base' ? item.base_id : null,
       origem_aplicador_id: item.localizacao_tipo === 'aplicador' ? item.aplicador_id : null,
-      observacao: obs,
+      observacao: obs + (ids.length > 1 ? ` (consolidado ${ids.length} registros)` : ''),
       criado_por: userId,
     });
 
-    toast(`Estoque ajustado: ${diff > 0 ? '+' : ''}${diff} doses`, 'success');
+    toast(`Estoque ajustado: ${diff > 0 ? '+' : ''}${diff} doses${ids.length > 1 ? ` (${ids.length} registros consolidados)` : ''}`, 'success');
     cancelEdit();
     load();
   };
@@ -3300,14 +3320,62 @@ function EntradaEstoqueModal({ onClose }) {
       toast('Preencha todos os campos obrigatórios', 'error'); return;
     }
     setSaving(true);
-    const { error } = await sb.rpc('entrada_estoque', {
+    const qtd = parseInt(form.quantidade);
+
+    // Tentar via RPC primeiro
+    const { error: rpcErr } = await sb.rpc('entrada_estoque', {
       p_vacina_id: form.vacina_id,
       p_base_id: form.base_id,
-      p_quantidade: parseInt(form.quantidade),
+      p_quantidade: qtd,
       p_observacao: form.observacao || null
     });
-    if (error) toast(error.message, 'error');
-    else { toast('Entrada registrada com sucesso!', 'success'); onClose(); }
+
+    if (rpcErr) {
+      // Fallback: UPSERT direto na tabela (soma se já existe, cria se não)
+      const { data: existing } = await sb.from('estoque')
+        .select('id, quantidade')
+        .eq('vacina_id', form.vacina_id)
+        .eq('base_id', form.base_id)
+        .eq('localizacao_tipo', 'base')
+        .is('aplicador_id', null)
+        .maybeSingle();
+
+      let dbErr;
+      if (existing) {
+        // Já existe — somar
+        const { error } = await sb.from('estoque')
+          .update({ quantidade: existing.quantidade + qtd })
+          .eq('id', existing.id);
+        dbErr = error;
+      } else {
+        // Não existe — criar
+        const { error } = await sb.from('estoque').insert({
+          vacina_id: form.vacina_id,
+          base_id: form.base_id,
+          localizacao_tipo: 'base',
+          quantidade: qtd
+        });
+        dbErr = error;
+      }
+
+      if (dbErr) { toast(dbErr.message, 'error'); setSaving(false); return; }
+
+      // Registrar movimentação
+      const userId = (await sb.auth.getUser()).data.user.id;
+      await sb.from('movimentacoes').insert({
+        tipo: 'entrada',
+        vacina_id: form.vacina_id,
+        quantidade: qtd,
+        origem_tipo: 'base',
+        destino_tipo: 'base',
+        destino_base_id: form.base_id,
+        observacao: form.observacao || null,
+        criado_por: userId
+      });
+    }
+
+    toast('Entrada registrada com sucesso!', 'success');
+    onClose();
     setSaving(false);
   };
 
