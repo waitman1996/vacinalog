@@ -6089,6 +6089,81 @@ function MotoristaPage() {
   );
 }
 
+// Fallback: transferência direta sem RPC (para quando constraint não existe)
+async function transferirEstoqueDireto({ vacina_id, quantidade, origem_base_id, destino_aplicador_id, remessa_id, observacao }) {
+  try {
+    // 1. Debitar da base
+    const { data: origemRows } = await sb.from('estoque')
+      .select('id, quantidade')
+      .eq('vacina_id', vacina_id)
+      .eq('base_id', origem_base_id)
+      .eq('localizacao_tipo', 'base');
+
+    if (!origemRows || origemRows.length === 0) {
+      console.error('Origem não encontrada no estoque');
+      return false;
+    }
+
+    // Somar todos os registros da origem (podem ser duplicados)
+    const totalOrigem = origemRows.reduce((s, r) => s + Number(r.quantidade || 0), 0);
+    if (totalOrigem < quantidade) {
+      console.error(`Saldo insuficiente: ${totalOrigem} < ${quantidade}`);
+      return false;
+    }
+
+    // Debitar do primeiro registro com saldo
+    let restante = quantidade;
+    for (const row of origemRows) {
+      if (restante <= 0) break;
+      const debitar = Math.min(restante, Number(row.quantidade || 0));
+      await sb.from('estoque').update({ quantidade: row.quantidade - debitar }).eq('id', row.id);
+      restante -= debitar;
+    }
+
+    // 2. Creditar no aplicador (UPSERT manual)
+    const { data: destRows } = await sb.from('estoque')
+      .select('id, quantidade')
+      .eq('vacina_id', vacina_id)
+      .eq('aplicador_id', destino_aplicador_id)
+      .eq('localizacao_tipo', 'aplicador');
+
+    if (destRows && destRows.length > 0) {
+      // Já existe — somar no primeiro
+      await sb.from('estoque')
+        .update({ quantidade: destRows[0].quantidade + quantidade })
+        .eq('id', destRows[0].id);
+    } else {
+      // Não existe — criar
+      await sb.from('estoque').insert({
+        vacina_id,
+        aplicador_id: destino_aplicador_id,
+        localizacao_tipo: 'aplicador',
+        quantidade
+      });
+    }
+
+    // 3. Registrar movimentação
+    const { data: { user } } = await sb.auth.getUser();
+    await sb.from('movimentacoes').insert({
+      tipo: 'envio_aplicador',
+      vacina_id,
+      quantidade,
+      origem_tipo: 'base',
+      origem_base_id,
+      destino_tipo: 'aplicador',
+      destino_aplicador_id,
+      remessa_id,
+      observacao,
+      criado_por: user?.id
+    });
+
+    return true;
+  } catch (err) {
+    console.error('transferirEstoqueDireto error:', err);
+    return false;
+  }
+}
+
 function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
   const [rota, setRota] = useState(rotaInit);
   const [remessas, setRemessas] = useState([]);
@@ -6214,10 +6289,22 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
           p_remessa_id: remId,
           p_observacao: obs
         });
+
         if (error) {
-          console.error('Erro transferência:', error.message);
-          erros++;
-          toast('Aviso: erro ao transferir ' + (item.vacinas?.nome||'') + ': ' + error.message, 'error');
+          // Fallback: fazer transferência diretamente via queries
+          console.warn('RPC falhou, usando fallback direto:', error.message);
+          const transferOk = await transferirEstoqueDireto({
+            vacina_id: item.vacina_id,
+            quantidade: item.quantidade,
+            origem_base_id: rota.base_origem_id,
+            destino_aplicador_id: destId,
+            remessa_id: remId,
+            observacao: obs
+          });
+          if (!transferOk) {
+            erros++;
+            toast('Erro ao transferir ' + (item.vacinas?.nome||'') + ': verifique o estoque', 'error');
+          }
         }
       }
       if (erros === 0) toast('Estoque transferido para o aplicador ✓', 'success');
