@@ -1195,30 +1195,56 @@ function DashboardPage({ onNavigate }) {
             <>
               {modal === 'estoque_total' && modalData?.grupos && (() => {
                 const { grupos, totais } = modalData;
+                // Vacinas únicas para filtro dentro do modal
+                const todasVacinas = [...new Set([
+                  ...grupos.base.map(r=>r.vacina),
+                  ...grupos.aplicador.map(r=>r.vacina),
+                  ...grupos.clinica.map(r=>r.vacina)
+                ].filter(Boolean))].sort();
+                const [filtroVacinaModal, setFiltroVacinaModal] = React.useState('');
+                const filtrar = (arr) => filtroVacinaModal ? arr.filter(r => r.vacina === filtroVacinaModal) : arr;
+                const totalFiltrado = (key) => filtrar(grupos[key]).reduce((s,r)=>s+r.quantidade,0);
                 const tabs = [
-                  { key: 'base', label: '🏢 Bases', cor: 'var(--accent)', total: totais.base },
-                  { key: 'aplicador', label: '👤 Aplicadores', cor: 'var(--warning)', total: totais.aplicador },
-                  { key: 'clinica', label: '🏥 Clínicas', cor: 'var(--info)', total: totais.clinica },
+                  { key: 'base', label: '🏢 Bases', cor: 'var(--accent)' },
+                  { key: 'aplicador', label: '👤 Aplicadores', cor: 'var(--warning)' },
+                  { key: 'clinica', label: '🏥 Clínicas', cor: 'var(--info)' },
                 ];
                 return (
                   <>
+                    {/* Filtro de vacina */}
+                    <div style={{display:'flex',gap:10,alignItems:'center',marginBottom:14,flexWrap:'wrap'}}>
+                      <div style={{fontSize:12,color:'var(--text-muted)',fontWeight:600}}>Filtrar por vacina:</div>
+                      {todasVacinas.map(v => (
+                        <button key={v} onClick={() => setFiltroVacinaModal(filtroVacinaModal===v?'':v)}
+                          className={`btn btn-sm ${filtroVacinaModal===v?'btn-primary':'btn-secondary'}`}
+                          style={{fontSize:11}}>
+                          {v}
+                        </button>
+                      ))}
+                      {filtroVacinaModal && <button className="btn btn-secondary btn-sm" style={{fontSize:11}} onClick={()=>setFiltroVacinaModal('')}>✕ Todos</button>}
+                    </div>
+                    {/* Cards com totais filtrados */}
                     <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:10,marginBottom:16}}>
                       {tabs.map(t => (
                         <div key={t.key} className="stat-card" style={{borderColor: t.cor}}>
                           <div className="stat-label">{t.label}</div>
-                          <div className="stat-value" style={{color: t.cor}}>{t.total.toLocaleString('pt-BR')}</div>
+                          <div className="stat-value" style={{color: t.cor}}>{totalFiltrado(t.key).toLocaleString('pt-BR')}</div>
                         </div>
                       ))}
                     </div>
-                    {tabs.map(t => grupos[t.key].length > 0 && (
+                    {/* Tabelas filtradas */}
+                    {tabs.map(t => filtrar(grupos[t.key]).length > 0 && (
                       <div key={t.key} style={{marginBottom:16}}>
-                        <div style={{fontSize:13,fontWeight:600,color: t.cor,marginBottom:6}}>{t.label} — {t.total.toLocaleString('pt-BR')} doses</div>
+                        <div style={{fontSize:13,fontWeight:600,color: t.cor,marginBottom:6}}>{t.label} — {totalFiltrado(t.key).toLocaleString('pt-BR')} doses</div>
                         <div className="table-wrap"><table><thead><tr><th>Local</th><th>Cidade/UF</th><th>Vacina</th><th>Lote</th><th>Qtd</th></tr></thead><tbody>
-                          {grupos[t.key].sort((a,b)=>b.quantidade-a.quantidade).map((r,i)=>(
+                          {filtrar(grupos[t.key]).sort((a,b)=>b.quantidade-a.quantidade).map((r,i)=>(
                             <tr key={i}>
                               <td style={{fontWeight:500}}>{r.local}</td>
                               <td>{r.cidade}{r.uf?'/'+r.uf:''}</td>
-                              <td>{r.vacina}</td>
+                              <td><span style={{fontSize:11,fontWeight:600,padding:'2px 7px',borderRadius:4,
+                                background:(r.vacina||'').toLowerCase().includes('tetrav')?'rgba(37,99,235,0.15)':(r.vacina||'').toLowerCase().includes('triv')?'rgba(16,185,129,0.15)':'var(--bg-input)',
+                                color:(r.vacina||'').toLowerCase().includes('tetrav')?'var(--accent)':(r.vacina||'').toLowerCase().includes('triv')?'var(--success)':'var(--text-primary)'
+                              }}>{r.vacina}</span></td>
                               <td className="mono">{r.lote}</td>
                               <td className="mono" style={{fontWeight:700,color:r.quantidade>0?'var(--success)':'var(--danger)'}}>{r.quantidade.toLocaleString('pt-BR')}</td>
                             </tr>
@@ -3199,8 +3225,8 @@ function EstoquePage() {
     load();
   };
 
-  const totalBases = items.filter(i => i.localizacao_tipo === 'base').reduce((s, i) => s + i.quantidade, 0);
-  const totalAp = items.filter(i => i.localizacao_tipo === 'aplicador').reduce((s, i) => s + i.quantidade, 0);
+  const totalBases = itemsFiltrados.filter(i => i.localizacao_tipo === 'base').reduce((s, i) => s + i.quantidade, 0);
+  const totalAp = itemsFiltrados.filter(i => i.localizacao_tipo === 'aplicador').reduce((s, i) => s + i.quantidade, 0);
 
   // Vacinas únicas para o filtro
   const vacinasUnicas = [...new Set(items.map(i => i.vacinas?.nome).filter(Boolean))].sort();
