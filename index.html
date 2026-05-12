@@ -1818,10 +1818,11 @@ function ImportConsulta() {
       // defval:'' evita undefined, raw:true mantém valores originais
       const data = XLSX.utils.sheet_to_json(sheet, { raw: true, defval: '' });
 
-      // Detectar automaticamente coluna de doses
+      // Detectar automaticamente coluna de doses — tolerante a espaços extras
       const firstRow = data[0] || {};
       const dosesCol = Object.keys(firstRow).find(k =>
-        k.toLowerCase().includes('doses prev') || k.toLowerCase().includes('previstas')
+        k.trim().toLowerCase().replace(/\s+/g, ' ').includes('doses prev') ||
+        k.trim().toLowerCase().replace(/\s+/g, ' ').includes('previstas')
       ) || 'Doses Previstas';
 
       const filtered = data.filter(r => {
@@ -1918,7 +1919,15 @@ function ImportConsulta() {
           const horaInicio = excelTimeToString(r['Horas']);
           const horaTermino = excelTimeToString(r['Horas_1'] || r['Horas.1']);
           const dosesAplicadas = Math.round(parseFloat(r['Doses Aplicadas'])) || 0;
-          const dosesPrevistas = Math.round(parseFloat(r[preview.dosesCol] || r['Doses Previstas'])) || 0;
+          // Helper para buscar valor da coluna ignorando espaços extras
+          const getCol = (row, key) => {
+            if (row[key] !== undefined) return row[key];
+            // Tentar match por nome normalizado
+            const normKey = key.trim().toLowerCase().replace(/\s+/g, ' ');
+            const found = Object.keys(row).find(k => k.trim().toLowerCase().replace(/\s+/g, ' ') === normKey);
+            return found ? row[found] : undefined;
+          };
+          const dosesPrevistas = Math.round(parseFloat(getCol(r, preview.dosesCol) ?? getCol(r, 'Doses Previstas'))) || 0;
 
           const payload = {
             codigo,
