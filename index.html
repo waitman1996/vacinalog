@@ -4984,11 +4984,11 @@ function RoteirizacaoPage({ onBack }) {
                           {statusCounts['pronta_faturamento'] && <span style={{color:'var(--info)',marginLeft:4}}>💰{statusCounts['pronta_faturamento']}</span>}
                           {statusCounts['em_execucao'] && <span style={{color:'var(--accent)',marginLeft:4}}>▶{statusCounts['em_execucao']}</span>}
                           {/* Vacinas distintas do tutor */}
-                          {[...new Set(t.tarefas.map(e => e._vacina_nome || e._tarefa?.vacina).filter(Boolean))].map(v => (
+                          {[...new Set(t.tarefas.map(e => e._vacina_nome || e.vacina_nome || e._tarefa?.vacina).filter(Boolean))].map(v => (
                             <span key={v} style={{marginLeft:4,fontSize:9,fontWeight:600,padding:'1px 4px',borderRadius:3,
                               background:v.toLowerCase().includes('tetrav')?'rgba(37,99,235,0.2)':v.toLowerCase().includes('triv')?'rgba(16,185,129,0.2)':'var(--bg-input)',
                               color:v.toLowerCase().includes('tetrav')?'var(--accent)':v.toLowerCase().includes('triv')?'var(--success)':'var(--text-muted)'
-                            }}>💉{v.replace('Influenza ','').replace('Tetra','Tetra').replace('Tri','Tri')}</span>
+                            }}>💉{v.replace('Influenza ','')}</span>
                           ))}
                         </div>
                       </div>
@@ -5044,12 +5044,12 @@ function RoteirizacaoPage({ onBack }) {
                               <div style={{fontFamily:'JetBrains Mono',fontSize:9,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{e.codigo_tarefa || e._tarefa?.codigo}</div>
                               <div style={{display:'flex',gap:4,alignItems:'center',marginTop:2,flexWrap:'wrap'}}>
                                 <span className={`badge ${STATUS_BADGES[e._status || e.status]||'badge-gray'}`} style={{fontSize:9,padding:'1px 5px'}}>{STATUS_LABELS[e._status || e.status]||(e._status || e.status)}</span>
-                                {(e._vacina_nome || e._tarefa?.vacina || e.vacina_nome) && (
+                                {(e._vacina_nome || e.vacina_nome || e._tarefa?.vacina) && (
                                   <span style={{fontSize:9,fontWeight:600,padding:'1px 5px',borderRadius:3,
-                                    background:(e._vacina_nome||e._tarefa?.vacina||'').toLowerCase().includes('tetrav')?'rgba(37,99,235,0.2)':(e._vacina_nome||e._tarefa?.vacina||'').toLowerCase().includes('triv')?'rgba(16,185,129,0.2)':'var(--bg-input)',
-                                    color:(e._vacina_nome||e._tarefa?.vacina||'').toLowerCase().includes('tetrav')?'var(--accent)':(e._vacina_nome||e._tarefa?.vacina||'').toLowerCase().includes('triv')?'var(--success)':'var(--text-muted)'
+                                    background:(e._vacina_nome||e.vacina_nome||e._tarefa?.vacina||'').toLowerCase().includes('tetrav')?'rgba(37,99,235,0.2)':(e._vacina_nome||e.vacina_nome||e._tarefa?.vacina||'').toLowerCase().includes('triv')?'rgba(16,185,129,0.2)':'var(--bg-input)',
+                                    color:(e._vacina_nome||e.vacina_nome||e._tarefa?.vacina||'').toLowerCase().includes('tetrav')?'var(--accent)':(e._vacina_nome||e.vacina_nome||e._tarefa?.vacina||'').toLowerCase().includes('triv')?'var(--success)':'var(--text-muted)'
                                   }}>
-                                    {e._vacina_nome || e._tarefa?.vacina}
+                                    {(e._vacina_nome || e.vacina_nome || e._tarefa?.vacina || '').replace('Influenza ','')}
                                   </span>
                                 )}
                                 {doseRota < originalDose && <span style={{color:'var(--warning)',fontSize:9}}>Parcial: falta {originalDose - doseRota}</span>}
