@@ -3224,9 +3224,6 @@ function EstoquePage() {
     load();
   };
 
-  const totalBases = itemsFiltrados.filter(i => i.localizacao_tipo === 'base').reduce((s, i) => s + i.quantidade, 0);
-  const totalAp = itemsFiltrados.filter(i => i.localizacao_tipo === 'aplicador').reduce((s, i) => s + i.quantidade, 0);
-
   // Vacinas únicas para o filtro
   const vacinasUnicas = [...new Set(items.map(i => i.vacinas?.nome).filter(Boolean))].sort();
 
@@ -3236,6 +3233,9 @@ function EstoquePage() {
     if (filterTipo && i.localizacao_tipo !== filterTipo) return false;
     return true;
   });
+
+  const totalBases = itemsFiltrados.filter(i => i.localizacao_tipo === 'base').reduce((s, i) => s + i.quantidade, 0);
+  const totalAp = itemsFiltrados.filter(i => i.localizacao_tipo === 'aplicador').reduce((s, i) => s + i.quantidade, 0);
 
   return (
     <div>
