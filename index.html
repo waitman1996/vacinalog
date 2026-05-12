@@ -729,6 +729,7 @@ function DashboardPage({ onNavigate }) {
   const [modal, setModal] = useState(null);
   const [modalData, setModalData] = useState([]);
   const [modalLoading, setModalLoading] = useState(false);
+  const [filtroVacinaModal, setFiltroVacinaModal] = useState('');
   const [weekData, setWeekData] = useState([]);
   const [weekModal, setWeekModal] = useState(null);
   const [apFilters, setApFilters] = useState({ ponto: '', uf: '', cidade: '', nome: '' });
@@ -834,7 +835,7 @@ function DashboardPage({ onNavigate }) {
   };
 
   const openEstoqueModal = async () => {
-    setModal('estoque_total'); setModalLoading(true);
+    setModal('estoque_total'); setModalLoading(true); setFiltroVacinaModal('');
     try {
       const { data } = await sb.from('estoque')
         .select('quantidade, localizacao_tipo, bases(nome, cidade, uf), vacinas(nome, lote), aplicadores(nome, cidade, uf)')
@@ -1195,13 +1196,11 @@ function DashboardPage({ onNavigate }) {
             <>
               {modal === 'estoque_total' && modalData?.grupos && (() => {
                 const { grupos, totais } = modalData;
-                // Vacinas únicas para filtro dentro do modal
                 const todasVacinas = [...new Set([
                   ...grupos.base.map(r=>r.vacina),
                   ...grupos.aplicador.map(r=>r.vacina),
                   ...grupos.clinica.map(r=>r.vacina)
                 ].filter(Boolean))].sort();
-                const [filtroVacinaModal, setFiltroVacinaModal] = React.useState('');
                 const filtrar = (arr) => filtroVacinaModal ? arr.filter(r => r.vacina === filtroVacinaModal) : arr;
                 const totalFiltrado = (key) => filtrar(grupos[key]).reduce((s,r)=>s+r.quantidade,0);
                 const tabs = [
