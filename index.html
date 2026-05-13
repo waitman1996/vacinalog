@@ -703,7 +703,7 @@ function Sidebar({ profile, currentPage, onNavigate, open, onClose, collapsed, o
         {!collapsed && (
           <div style={{fontSize:9,color:'var(--text-muted)',textAlign:'center',marginTop:6,padding:'4px 0',borderTop:'1px solid var(--border)',opacity:0.6}}>
             {'🕐 Atualizado em'}<br/>
-            <span style={{fontFamily:'JetBrains Mono',fontSize:9}}>{'13/05/2026 às 14:51'}</span>
+            <span style={{fontFamily:'JetBrains Mono',fontSize:9}}>{'13/05/2026 às 14:55'}</span>
           </div>
         )}
       </div>
@@ -7289,53 +7289,71 @@ function MovimentacoesPage() {
       const origemTipo = tiposValidos.includes(mov.origem_tipo) ? mov.origem_tipo : null;
       const destinoTipo = tiposValidos.includes(mov.destino_tipo) ? mov.destino_tipo : null;
 
-      // Para estorno de entrada (origem externa/fornecedor), usar o destino como saída
-      const estornoOrigemTipo = destinoTipo || origemTipo || localSel.tipo;
-      const estornoDestinoTipo = origemTipo || destinoTipo || localSel.tipo;
+      // Para estorno: se era entrada (local = destino) → estorno é saída (local = origem)
+      //               se era saída (local = origem) → estorno é entrada (local = destino)
+      let estornoOrigemTipo, estornoOrigemBaseId, estornoOrigemApId;
+      let estornoDestinoTipo, estornoDestinoBaseId, estornoDestinoApId;
+
+      if (mov.direcao === 'entrada') {
+        // Estorno de entrada = saída do local para lugar nenhum (ajuste)
+        estornoOrigemTipo = localSel.tipo;
+        estornoOrigemBaseId = localSel.tipo === 'base' ? localSel.id : null;
+        estornoOrigemApId = localSel.tipo === 'aplicador' ? localSel.id : null;
+        estornoDestinoTipo = localSel.tipo;
+        estornoDestinoBaseId = localSel.tipo === 'base' ? localSel.id : null;
+        estornoDestinoApId = localSel.tipo === 'aplicador' ? localSel.id : null;
+      } else {
+        // Estorno de saída = entrada de volta no local
+        estornoOrigemTipo = tiposValidos.includes(mov.destino_tipo) ? mov.destino_tipo : localSel.tipo;
+        estornoOrigemBaseId = mov.destino_base_id || null;
+        estornoOrigemApId = mov.destino_aplicador_id || null;
+        estornoDestinoTipo = localSel.tipo;
+        estornoDestinoBaseId = localSel.tipo === 'base' ? localSel.id : null;
+        estornoDestinoApId = localSel.tipo === 'aplicador' ? localSel.id : null;
+      }
 
       const { error } = await sb.from('movimentacoes').insert({
         tipo: 'ajuste',
         vacina_id: mov.vacina_id,
         quantidade: mov.quantidade,
         origem_tipo: estornoOrigemTipo,
-        origem_base_id: estornoOrigemTipo === 'base' ? (mov.destino_base_id || mov.origem_base_id || (localSel.tipo === 'base' ? localSel.id : null)) : null,
-        origem_aplicador_id: estornoOrigemTipo === 'aplicador' ? (mov.destino_aplicador_id || mov.origem_aplicador_id || (localSel.tipo === 'aplicador' ? localSel.id : null)) : null,
+        origem_base_id: estornoOrigemBaseId,
+        origem_aplicador_id: estornoOrigemApId,
         destino_tipo: estornoDestinoTipo,
-        destino_base_id: estornoDestinoTipo === 'base' ? (mov.origem_base_id || mov.destino_base_id || (localSel.tipo === 'base' ? localSel.id : null)) : null,
-        destino_aplicador_id: estornoDestinoTipo === 'aplicador' ? (mov.origem_aplicador_id || mov.destino_aplicador_id || (localSel.tipo === 'aplicador' ? localSel.id : null)) : null,
+        destino_base_id: estornoDestinoBaseId,
+        destino_aplicador_id: estornoDestinoApId,
         observacao: `ESTORNO do lançamento ${mov.id.slice(0,8)} de ${new Date(mov.created_at).toLocaleString('pt-BR')} (${mov.quantidade} doses) — Cancelado por ${userId}`,
         criado_por: userId,
       });
       if (error) { toast(error.message, 'error'); setCancelando(null); return; }
 
       // Ajustar estoque fisicamente
-      // Reverter: se era entrada (destino = local), debitar; se era saída (origem = local), creditar
+      // Lógica simples: se era entrada no local selecionado → debitar; se era saída → creditar
+      const ajustarEstoque = async (delta) => {
+        // delta = -N para debitar, +N para creditar
+        if (localSel.tipo === 'base') {
+          const { data: rows } = await sb.from('estoque').select('id,quantidade')
+            .eq('vacina_id', mov.vacina_id).eq('base_id', localSel.id).eq('localizacao_tipo','base');
+          if (rows?.length) {
+            await sb.from('estoque').update({ quantidade: rows[0].quantidade + delta }).eq('id', rows[0].id);
+          } else if (delta > 0) {
+            await sb.from('estoque').insert({ vacina_id: mov.vacina_id, base_id: localSel.id, localizacao_tipo: 'base', quantidade: delta });
+          }
+        } else {
+          const { data: rows } = await sb.from('estoque').select('id,quantidade')
+            .eq('vacina_id', mov.vacina_id).eq('aplicador_id', localSel.id).eq('localizacao_tipo','aplicador');
+          if (rows?.length) {
+            await sb.from('estoque').update({ quantidade: rows[0].quantidade + delta }).eq('id', rows[0].id);
+          } else if (delta > 0) {
+            await sb.from('estoque').insert({ vacina_id: mov.vacina_id, aplicador_id: localSel.id, localizacao_tipo: 'aplicador', quantidade: delta });
+          }
+        }
+      };
+
       if (mov.direcao === 'entrada') {
-        // Era entrada no local selecionado → debitar
-        if (localSel.tipo === 'base') {
-          const { data: rows } = await sb.from('estoque').select('id,quantidade').eq('vacina_id', mov.vacina_id).eq('base_id', localSel.id).eq('localizacao_tipo','base');
-          if (rows?.length) await sb.from('estoque').update({ quantidade: rows[0].quantidade - mov.quantidade }).eq('id', rows[0].id);
-        } else {
-          const { data: rows } = await sb.from('estoque').select('id,quantidade').eq('vacina_id', mov.vacina_id).eq('aplicador_id', localSel.id).eq('localizacao_tipo','aplicador');
-          if (rows?.length) await sb.from('estoque').update({ quantidade: rows[0].quantidade - mov.quantidade }).eq('id', rows[0].id);
-        }
+        await ajustarEstoque(-mov.quantidade); // era entrada → debitar
       } else if (mov.direcao === 'saida') {
-        // Era saída do local selecionado → creditar de volta
-        if (localSel.tipo === 'base') {
-          const { data: rows } = await sb.from('estoque').select('id,quantidade').eq('vacina_id', mov.vacina_id).eq('base_id', localSel.id).eq('localizacao_tipo','base');
-          if (rows?.length) {
-            await sb.from('estoque').update({ quantidade: rows[0].quantidade + mov.quantidade }).eq('id', rows[0].id);
-          } else {
-            await sb.from('estoque').insert({ vacina_id: mov.vacina_id, base_id: localSel.id, localizacao_tipo: 'base', quantidade: mov.quantidade });
-          }
-        } else {
-          const { data: rows } = await sb.from('estoque').select('id,quantidade').eq('vacina_id', mov.vacina_id).eq('aplicador_id', localSel.id).eq('localizacao_tipo','aplicador');
-          if (rows?.length) {
-            await sb.from('estoque').update({ quantidade: rows[0].quantidade + mov.quantidade }).eq('id', rows[0].id);
-          } else {
-            await sb.from('estoque').insert({ vacina_id: mov.vacina_id, aplicador_id: localSel.id, localizacao_tipo: 'aplicador', quantidade: mov.quantidade });
-          }
-        }
+        await ajustarEstoque(+mov.quantidade); // era saída → creditar de volta
       }
 
       toast(`Lançamento estornado! ${mov.quantidade.toLocaleString('pt-BR')} doses revertidas. ✓`, 'success');
