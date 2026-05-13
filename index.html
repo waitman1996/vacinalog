@@ -2183,7 +2183,7 @@ function ImportConsulta() {
         // UPDATE para tarefas existentes + abatimento se houver novas doses
         for (const t of paraAtualizar) {
           const { id, dosesAntigas, dosesNovas, escala, ...fields } = t;
-          delete fields.importacao_id; // não sobrescrever importacao_id original
+          delete fields.importacao_id;
 
           const { error: updErr } = await sb.from('tarefas')
             .update({
@@ -2200,13 +2200,19 @@ function ImportConsulta() {
           } else {
             atualizados++;
 
+            // Atualizar doses_aplicadas na escala vinculada também
+            if (escala?.id && dosesNovas >= 0) {
+              await sb.from('escalas')
+                .update({ doses_aplicadas: dosesNovas })
+                .eq('id', escala.id);
+            }
+
             // Debitar doses aplicadas do estoque do aplicador
             // SOMENTE se a tarefa tiver data_inicio >= dataCorte (data de corte)
             const dataInicio = fields.data_inicio || '';
-            const dentroDoCorte = dataCorte ? dataInicio >= dataCorte : true;
+            const dentroDoCorte = dataCorte ? dataInicio >= dataCorte : false;
 
             if (dosesNovas > 0 && dentroDoCorte && escala?.aplicador_id && escala?.vacina_id) {
-              // Debitar direto no estoque do aplicador (doses_aplicadas = o que consumiu)
               const { data: estoqueAp } = await sb.from('estoque')
                 .select('id, quantidade')
                 .eq('vacina_id', escala.vacina_id)
@@ -2219,7 +2225,6 @@ function ImportConsulta() {
                   .update({ quantidade: estoqueAp.quantidade - dosesNovas })
                   .eq('id', estoqueAp.id);
 
-                // Registrar movimentação
                 await sb.from('movimentacoes').insert({
                   tipo: 'aplicacao',
                   vacina_id: escala.vacina_id,
