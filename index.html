@@ -703,7 +703,7 @@ function Sidebar({ profile, currentPage, onNavigate, open, onClose, collapsed, o
         {!collapsed && (
           <div style={{fontSize:9,color:'var(--text-muted)',textAlign:'center',marginTop:6,padding:'4px 0',borderTop:'1px solid var(--border)',opacity:0.6}}>
             {'🕐 Atualizado em'}<br/>
-            <span style={{fontFamily:'JetBrains Mono',fontSize:9}}>{'13/05/2026 às 14:38'}</span>
+            <span style={{fontFamily:'JetBrains Mono',fontSize:9}}>{'13/05/2026 às 14:51'}</span>
           </div>
         )}
       </div>
@@ -7284,17 +7284,25 @@ function MovimentacoesPage() {
       const userId = (await sb.auth.getUser()).data.user.id;
 
       // Lançamento inverso: origem e destino trocados
+      // Só usar tipos válidos para o banco: 'base' ou 'aplicador'
+      const tiposValidos = ['base', 'aplicador'];
+      const origemTipo = tiposValidos.includes(mov.origem_tipo) ? mov.origem_tipo : null;
+      const destinoTipo = tiposValidos.includes(mov.destino_tipo) ? mov.destino_tipo : null;
+
+      // Para estorno de entrada (origem externa/fornecedor), usar o destino como saída
+      const estornoOrigemTipo = destinoTipo || origemTipo || localSel.tipo;
+      const estornoDestinoTipo = origemTipo || destinoTipo || localSel.tipo;
+
       const { error } = await sb.from('movimentacoes').insert({
         tipo: 'ajuste',
         vacina_id: mov.vacina_id,
         quantidade: mov.quantidade,
-        // Inverter origem/destino
-        origem_tipo: mov.destino_tipo || mov.origem_tipo,
-        origem_base_id: mov.destino_base_id || null,
-        origem_aplicador_id: mov.destino_aplicador_id || null,
-        destino_tipo: mov.origem_tipo,
-        destino_base_id: mov.origem_base_id || null,
-        destino_aplicador_id: mov.origem_aplicador_id || null,
+        origem_tipo: estornoOrigemTipo,
+        origem_base_id: estornoOrigemTipo === 'base' ? (mov.destino_base_id || mov.origem_base_id || (localSel.tipo === 'base' ? localSel.id : null)) : null,
+        origem_aplicador_id: estornoOrigemTipo === 'aplicador' ? (mov.destino_aplicador_id || mov.origem_aplicador_id || (localSel.tipo === 'aplicador' ? localSel.id : null)) : null,
+        destino_tipo: estornoDestinoTipo,
+        destino_base_id: estornoDestinoTipo === 'base' ? (mov.origem_base_id || mov.destino_base_id || (localSel.tipo === 'base' ? localSel.id : null)) : null,
+        destino_aplicador_id: estornoDestinoTipo === 'aplicador' ? (mov.origem_aplicador_id || mov.destino_aplicador_id || (localSel.tipo === 'aplicador' ? localSel.id : null)) : null,
         observacao: `ESTORNO do lançamento ${mov.id.slice(0,8)} de ${new Date(mov.created_at).toLocaleString('pt-BR')} (${mov.quantidade} doses) — Cancelado por ${userId}`,
         criado_por: userId,
       });
