@@ -708,7 +708,7 @@ function Sidebar({ profile, currentPage, onNavigate, open, onClose, collapsed, o
         {!collapsed && (
           <div style={{fontSize:9,color:'var(--text-muted)',textAlign:'center',marginTop:6,padding:'4px 0',borderTop:'1px solid var(--border)',opacity:0.6}}>
             {'🕐 Atualizado em'}<br/>
-            <span style={{fontFamily:'JetBrains Mono',fontSize:9}}>{'13/05/2026 às 15:16'}</span>
+            <span style={{fontFamily:'JetBrains Mono',fontSize:9}}>{'13/05/2026 às 15:40'}</span>
           </div>
         )}
       </div>
@@ -7449,6 +7449,11 @@ function MovimentacoesPage() {
           <div className="page-title">Extrato de Estoque</div>
           <div className="page-subtitle">Histórico de movimentações por base ou aplicador</div>
         </div>
+        {localSel && (
+          <button className="btn btn-secondary" onClick={() => loadExtrato(localSel, filtroVacina)} disabled={loading}>
+            {loading ? '⟳ Carregando...' : '↻ Atualizar'}
+          </button>
+        )}
       </div>
 
       {/* Seletor de local */}
