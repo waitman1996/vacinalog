@@ -703,7 +703,7 @@ function Sidebar({ profile, currentPage, onNavigate, open, onClose, collapsed, o
         {!collapsed && (
           <div style={{fontSize:9,color:'var(--text-muted)',textAlign:'center',marginTop:6,padding:'4px 0',borderTop:'1px solid var(--border)',opacity:0.6}}>
             {'🕐 Atualizado em'}<br/>
-            <span style={{fontFamily:'JetBrains Mono',fontSize:9}}>{'13/05/2026 às 12:02'}</span>
+            <span style={{fontFamily:'JetBrains Mono',fontSize:9}}>{'13/05/2026 às 14:27'}</span>
           </div>
         )}
       </div>
@@ -7101,68 +7101,200 @@ function PlaceholderPage({ title, icon, description }) {
 // MOVIMENTAÇÕES
 // ═══════════════════════════════════════════════
 function MovimentacoesPage() {
-  const [items, setItems] = useState([]);
+  const [bases, setBases] = useState([]);
+  const [aplicadores, setAplicadores] = useState([]);
+  const [localSel, setLocalSel] = useState(null); // { tipo: 'base'|'aplicador', id, nome }
+  const [vacinas, setVacinas] = useState([]);
+  const [filtroVacina, setFiltroVacina] = useState('');
+  const [extrato, setExtrato] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [saldoAtual, setSaldoAtual] = useState(0);
   const toast = useContext(ToastContext);
 
   useEffect(() => {
-    sb.from('movimentacoes')
-      .select('*, vacinas(nome), profiles(nome), remessas(codigo_rastreio, rota_id, rotas(codigo))')
-      .order('created_at', { ascending: false })
-      .limit(200)
-      .then(({ data, error }) => {
-        if (error) toast(error.message, 'error');
-        else setItems(data || []);
-      });
+    Promise.all([
+      sb.from('bases').select('id, nome, cidade, uf').order('nome'),
+      sb.from('aplicadores').select('id, nome, cpf, cidade, uf').order('nome'),
+      sb.from('vacinas').select('id, nome').order('nome'),
+    ]).then(([b, a, v]) => {
+      setBases(b.data || []);
+      setAplicadores(a.data || []);
+      setVacinas(v.data || []);
+    });
   }, []);
 
-  const TIPO_LABELS = {
-    entrada: { label: 'Entrada', badge: 'badge-green' },
-    saida: { label: 'Saída', badge: 'badge-red' },
-    transferencia: { label: 'Transferência', badge: 'badge-blue' },
-    envio_aplicador: { label: 'Envio → Aplicador', badge: 'badge-yellow' },
-    devolucao: { label: 'Devolução', badge: 'badge-cyan' },
-    aplicacao: { label: 'Aplicação', badge: 'badge-green' },
-    perda: { label: 'Perda', badge: 'badge-red' },
-    dano: { label: 'Dano', badge: 'badge-red' },
-    ajuste: { label: 'Ajuste', badge: 'badge-gray' },
+  const loadExtrato = async (local, vacinaId) => {
+    if (!local) return;
+    setLoading(true);
+    setExtrato([]);
+
+    // Buscar todas as movimentações onde este local é origem ou destino
+    const campo_origem = local.tipo === 'base' ? 'origem_base_id' : 'origem_aplicador_id';
+    const campo_destino = local.tipo === 'base' ? 'destino_base_id' : 'destino_aplicador_id';
+
+    let q1 = sb.from('movimentacoes')
+      .select('*, vacinas(nome), profiles(nome), bases_orig:bases!movimentacoes_origem_base_id_fkey(nome), bases_dest:bases!movimentacoes_destino_base_id_fkey(nome), aplic_orig:aplicadores!movimentacoes_origem_aplicador_id_fkey(nome), aplic_dest:aplicadores!movimentacoes_destino_aplicador_id_fkey(nome)')
+      .or(`${campo_origem}.eq.${local.id},${campo_destino}.eq.${local.id}`)
+      .order('created_at', { ascending: true })
+      .limit(500);
+
+    if (vacinaId) q1 = q1.eq('vacina_id', vacinaId);
+
+    const { data, error } = await q1;
+    if (error) { toast(error.message, 'error'); setLoading(false); return; }
+
+    // Calcular saldo progressivo
+    let saldo = 0;
+    const rows = (data || []).map(m => {
+      const ehOrigem = (local.tipo === 'base' ? m.origem_base_id : m.origem_aplicador_id) === local.id;
+      const ehDestino = (local.tipo === 'base' ? m.destino_base_id : m.destino_aplicador_id) === local.id;
+
+      let direcao, sinal;
+      if (ehDestino && !ehOrigem) {
+        direcao = 'entrada'; sinal = +1;
+      } else if (ehOrigem && !ehDestino) {
+        direcao = 'saida'; sinal = -1;
+      } else {
+        direcao = 'interno'; sinal = 0;
+      }
+
+      saldo += sinal * m.quantidade;
+
+      // Montar texto de origem/destino
+      const origemNome = m.bases_orig?.nome || m.aplic_orig?.nome || '—';
+      const destinoNome = m.bases_dest?.nome || m.aplic_dest?.nome || '—';
+
+      const tipoLabel = {
+        entrada: 'Entrada', saida: 'Saída', transferencia: 'Transferência',
+        envio_aplicador: 'Envio → Aplicador', devolucao: 'Devolução',
+        aplicacao: 'Aplicação', perda: 'Perda', dano: 'Dano', ajuste: 'Ajuste'
+      }[m.tipo] || m.tipo;
+
+      return { ...m, direcao, sinal, saldoPos: saldo, origemNome, destinoNome, tipoLabel };
+    });
+
+    setSaldoAtual(saldo);
+    setExtrato(rows);
+    setLoading(false);
   };
+
+  useEffect(() => {
+    if (localSel) loadExtrato(localSel, filtroVacina);
+  }, [localSel, filtroVacina]);
 
   return (
     <div>
       <div className="page-header">
-        <div className="page-title">Movimentações</div>
-      </div>
-      <div className="card">
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr><th>Data</th><th>Tipo</th><th>Vacina</th><th>Qtd</th><th>Rota</th><th>Remessa</th><th>Usuário</th><th>Obs</th></tr>
-            </thead>
-            <tbody>
-              {items.length === 0 && (
-                <tr><td colSpan={8}><div className="empty-state"><div className="empty-text">Nenhuma movimentação registrada</div></div></td></tr>
-              )}
-              {items.map(m => {
-                const t = TIPO_LABELS[m.tipo] || { label: m.tipo, badge: 'badge-gray' };
-                const rotaCodigo = m.remessas?.rotas?.codigo || '—';
-                const remessaCodigo = m.remessas?.codigo_rastreio || '—';
-                return (
-                  <tr key={m.id}>
-                    <td style={{fontSize:11}}>{new Date(m.created_at).toLocaleString('pt-BR')}</td>
-                    <td><span className={`badge ${t.badge}`}>{t.label}</span></td>
-                    <td>{m.vacinas?.nome || '—'}</td>
-                    <td className="mono" style={{fontWeight:600}}>{m.quantidade}</td>
-                    <td className="mono" style={{fontSize:11,color:'var(--accent)'}}>{rotaCodigo}</td>
-                    <td className="mono" style={{fontSize:10,color:'var(--text-muted)'}}>{remessaCodigo}</td>
-                    <td style={{fontSize:12}}>{m.profiles?.nome || '—'}</td>
-                    <td style={{maxWidth:180,overflow:'hidden',textOverflow:'ellipsis',fontSize:11,color:'var(--text-muted)'}}>{m.observacao || '—'}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+        <div>
+          <div className="page-title">Extrato de Estoque</div>
+          <div className="page-subtitle">Histórico de movimentações por base ou aplicador</div>
         </div>
       </div>
+
+      {/* Seletor de local */}
+      <div className="card" style={{marginBottom:16,padding:14}}>
+        <div style={{display:'flex',gap:12,flexWrap:'wrap',alignItems:'flex-end'}}>
+          <div className="form-group" style={{marginBottom:0,minWidth:220}}>
+            <label className="form-label">Base ou Aplicador</label>
+            <select className="form-select" style={{padding:'6px 10px'}}
+              value={localSel ? `${localSel.tipo}|${localSel.id}` : ''}
+              onChange={e => {
+                if (!e.target.value) { setLocalSel(null); setExtrato([]); return; }
+                const [tipo, id] = e.target.value.split('|');
+                const lista = tipo === 'base' ? bases : aplicadores;
+                const item = lista.find(x => x.id === id);
+                setLocalSel({ tipo, id, nome: item?.nome || '' });
+              }}>
+              <option value="">Selecione...</option>
+              <optgroup label="🏢 Bases">
+                {bases.map(b => <option key={b.id} value={`base|${b.id}`}>{b.nome} — {b.cidade}/{b.uf}</option>)}
+              </optgroup>
+              <optgroup label="👤 Aplicadores">
+                {aplicadores.map(a => <option key={a.id} value={`aplicador|${a.id}`}>{a.nome}</option>)}
+              </optgroup>
+            </select>
+          </div>
+          <div className="form-group" style={{marginBottom:0,minWidth:180}}>
+            <label className="form-label">Vacina</label>
+            <select className="form-select" style={{padding:'6px 10px'}}
+              value={filtroVacina} onChange={e => setFiltroVacina(e.target.value)}>
+              <option value="">Todas</option>
+              {vacinas.map(v => <option key={v.id} value={v.id}>{v.nome}</option>)}
+            </select>
+          </div>
+          {localSel && (
+            <div style={{marginLeft:'auto',textAlign:'right'}}>
+              <div style={{fontSize:11,color:'var(--text-muted)'}}>Saldo atual</div>
+              <div style={{fontSize:24,fontWeight:700,fontFamily:'JetBrains Mono',color: saldoAtual >= 0 ? 'var(--success)' : 'var(--danger)'}}>
+                {saldoAtual.toLocaleString('pt-BR')}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Extrato */}
+      {!localSel && (
+        <div className="card"><div className="empty-state"><div className="empty-icon">📋</div><div className="empty-text">Selecione uma base ou aplicador para ver o extrato</div></div></div>
+      )}
+
+      {loading && <div className="card"><div className="empty-state"><div className="empty-text">Carregando...</div></div></div>}
+
+      {localSel && !loading && extrato.length === 0 && (
+        <div className="card"><div className="empty-state"><div className="empty-icon">📋</div><div className="empty-text">Nenhuma movimentação encontrada para {localSel.nome}</div></div></div>
+      )}
+
+      {extrato.length > 0 && (
+        <div className="card">
+          <div style={{padding:'10px 14px',borderBottom:'1px solid var(--border)',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+            <div style={{fontSize:14,fontWeight:600}}>{localSel.nome}</div>
+            <div style={{fontSize:12,color:'var(--text-muted)'}}>{extrato.length} lançamentos</div>
+          </div>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Data</th>
+                  <th>Tipo</th>
+                  <th>Vacina</th>
+                  <th>Origem</th>
+                  <th>Destino</th>
+                  <th style={{textAlign:'right'}}>Valor</th>
+                  <th style={{textAlign:'right'}}>Saldo</th>
+                  <th>Usuário</th>
+                  <th>Obs</th>
+                </tr>
+              </thead>
+              <tbody>
+                {[...extrato].reverse().map((m, idx) => (
+                  <tr key={m.id} style={{background: idx === 0 ? 'var(--accent-subtle)' : ''}}>
+                    <td style={{fontSize:11,whiteSpace:'nowrap'}}>{new Date(m.created_at).toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',year:'2-digit',hour:'2-digit',minute:'2-digit'})}</td>
+                    <td>
+                      <span className={`badge ${m.direcao==='entrada'?'badge-green':m.direcao==='saida'?'badge-red':'badge-gray'}`} style={{fontSize:10}}>
+                        {m.direcao==='entrada'?'↓ Entrada':m.direcao==='saida'?'↑ Saída':'↔ Interno'}
+                      </span>
+                      <div style={{fontSize:9,color:'var(--text-muted)',marginTop:2}}>{m.tipoLabel}</div>
+                    </td>
+                    <td style={{fontSize:12}}>{m.vacinas?.nome || '—'}</td>
+                    <td style={{fontSize:12,maxWidth:140,overflow:'hidden',textOverflow:'ellipsis'}}>{m.origemNome}</td>
+                    <td style={{fontSize:12,maxWidth:140,overflow:'hidden',textOverflow:'ellipsis'}}>{m.destinoNome}</td>
+                    <td style={{textAlign:'right',fontFamily:'JetBrains Mono',fontWeight:700,
+                      color: m.sinal > 0 ? 'var(--success)' : m.sinal < 0 ? 'var(--danger)' : 'var(--text-muted)'}}>
+                      {m.sinal > 0 ? '+' : m.sinal < 0 ? '-' : ''}{m.quantidade.toLocaleString('pt-BR')}
+                    </td>
+                    <td style={{textAlign:'right',fontFamily:'JetBrains Mono',fontWeight:600,
+                      color: m.saldoPos >= 0 ? 'var(--text-primary)' : 'var(--danger)'}}>
+                      {m.saldoPos.toLocaleString('pt-BR')}
+                    </td>
+                    <td style={{fontSize:11}}>{m.profiles?.nome || '—'}</td>
+                    <td style={{fontSize:10,color:'var(--text-muted)',maxWidth:160,overflow:'hidden',textOverflow:'ellipsis'}}>{m.observacao || '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
