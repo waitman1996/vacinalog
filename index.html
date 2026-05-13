@@ -703,7 +703,7 @@ function Sidebar({ profile, currentPage, onNavigate, open, onClose, collapsed, o
         {!collapsed && (
           <div style={{fontSize:9,color:'var(--text-muted)',textAlign:'center',marginTop:6,padding:'4px 0',borderTop:'1px solid var(--border)',opacity:0.6}}>
             {'🕐 Atualizado em'}<br/>
-            <span style={{fontFamily:'JetBrains Mono',fontSize:9}}>{'13/05/2026 às 14:27'}</span>
+            <span style={{fontFamily:'JetBrains Mono',fontSize:9}}>{'13/05/2026 às 14:38'}</span>
           </div>
         )}
       </div>
@@ -4218,6 +4218,137 @@ function DemandaOfertaPage({ profile }) {
 }
 
 // ═══════════════════════════════════════════════
+// Modal de informações do tutor/aplicador
+function TutorInfoModal({ tutor, onClose }) {
+  const [estoque, setEstoque] = useState([]);
+  const [tarefaInfo, setTarefaInfo] = useState(null);
+  const toast = useContext(ToastContext);
+
+  useEffect(() => {
+    if (!tutor) return;
+    // Buscar estoque do aplicador
+    if (tutor.aplicador_id) {
+      sb.from('estoque')
+        .select('quantidade, vacinas(nome)')
+        .eq('aplicador_id', tutor.aplicador_id)
+        .eq('localizacao_tipo', 'aplicador')
+        .then(({ data }) => setEstoque(data || []));
+    }
+    // Buscar particularidades da primeira tarefa
+    const codigoTarefa = tutor.tarefas?.[0]?.codigo_tarefa || tutor.codigo_tarefa;
+    if (codigoTarefa) {
+      sb.from('tarefas')
+        .select('codigo, cliente, particularidade, endereco, cidade_campanha, uf_campanha, doses_previstas, doses_aplicadas, vacina')
+        .eq('codigo', codigoTarefa)
+        .single()
+        .then(({ data }) => { if (data) setTarefaInfo(data); });
+    }
+  }, [tutor]);
+
+  if (!tutor) return null;
+
+  const nomVacina = (v) => {
+    const s = String(v||'').toLowerCase();
+    if (!s || s === 'gripe' || s.includes('tetrav')) return 'Influenza Tetravalente';
+    if (s.includes('triv') || s === 'gripe trivalente') return 'Influenza Trivalente';
+    return v;
+  };
+
+  const totalEstoque = estoque.reduce((s, e) => s + Number(e.quantidade||0), 0);
+  const tarefas = tutor.tarefas || [];
+  const totalDoses = tutor.total_doses || tarefas.reduce((s,t) => s + Number(t._doses || t.doses_necessarias || 0), 0);
+  const endereco = tutor.endereco || tarefaInfo?.endereco || '';
+  const cidade = tutor.cidade || tarefaInfo?.cidade_campanha || '';
+  const uf = tutor.uf || tarefaInfo?.uf_campanha || '';
+  const endCompleto = [endereco, cidade && uf ? `${cidade}/${uf}` : cidade || uf].filter(Boolean).join(', ');
+
+  return (
+    <Modal title="Informações do Aplicador" onClose={onClose}>
+      <div style={{display:'flex',flexDirection:'column',gap:14}}>
+
+        {/* Identificação */}
+        <div style={{padding:12,background:'var(--bg-input)',borderRadius:'var(--radius-sm)'}}>
+          <div style={{fontSize:16,fontWeight:700,color:'var(--text-primary)',marginBottom:4}}>{tutor.nome}</div>
+          <div style={{fontSize:12,color:'var(--text-muted)',fontFamily:'JetBrains Mono'}}>{tutor.cpf}</div>
+        </div>
+
+        {/* Endereço */}
+        <div>
+          <div style={{fontSize:10,color:'var(--text-muted)',textTransform:'uppercase',marginBottom:4}}>📍 Endereço</div>
+          <div style={{fontSize:13}}>{endCompleto || '—'}</div>
+        </div>
+
+        {/* Vacina */}
+        {tarefas.length > 0 && (() => {
+          const vacinas = [...new Set(tarefas.map(t => nomVacina(t.tipo_vacina || t.vacina_nome || '')).filter(Boolean))];
+          return vacinas.length > 0 ? (
+            <div>
+              <div style={{fontSize:10,color:'var(--text-muted)',textTransform:'uppercase',marginBottom:4}}>💉 Vacina</div>
+              <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+                {vacinas.map(v => (
+                  <span key={v} style={{padding:'4px 10px',borderRadius:4,fontWeight:600,fontSize:12,
+                    background:v.includes('Tetrav')?'rgba(37,99,235,0.2)':'rgba(16,185,129,0.2)',
+                    color:v.includes('Tetrav')?'var(--accent)':'var(--success)'}}>
+                    {v}
+                  </span>
+                ))}
+              </div>
+            </div>
+          ) : null;
+        })()}
+
+        {/* Tarefas */}
+        <div>
+          <div style={{fontSize:10,color:'var(--text-muted)',textTransform:'uppercase',marginBottom:6}}>📋 Tarefas ({tarefas.length})</div>
+          <div style={{display:'flex',flexDirection:'column',gap:4,maxHeight:160,overflowY:'auto'}}>
+            {tarefas.map((t, i) => (
+              <div key={i} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'5px 8px',background:'var(--bg-input)',borderRadius:4,fontSize:12}}>
+                <span style={{fontFamily:'JetBrains Mono',fontSize:11,color:'var(--accent)'}}>{t.codigo_tarefa || t._tarefa?.codigo || '—'}</span>
+                <span style={{color:'var(--text-muted)'}}>{Number(t._doses||t.doses_necessarias||0)} doses</span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Doses e Estoque */}
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10}}>
+          <div style={{padding:10,background:'var(--bg-input)',borderRadius:'var(--radius-sm)',textAlign:'center'}}>
+            <div style={{fontSize:10,color:'var(--text-muted)',marginBottom:2}}>💊 Doses Necessárias</div>
+            <div style={{fontSize:22,fontWeight:700,color:'var(--accent)',fontFamily:'JetBrains Mono'}}>{totalDoses.toLocaleString('pt-BR')}</div>
+          </div>
+          <div style={{padding:10,background:'var(--bg-input)',borderRadius:'var(--radius-sm)',textAlign:'center'}}>
+            <div style={{fontSize:10,color:'var(--text-muted)',marginBottom:2}}>📦 Estoque Atual</div>
+            <div style={{fontSize:22,fontWeight:700,fontFamily:'JetBrains Mono',
+              color: totalEstoque >= totalDoses ? 'var(--success)' : totalEstoque > 0 ? 'var(--warning)' : 'var(--danger)'}}>
+              {totalEstoque.toLocaleString('pt-BR')}
+            </div>
+          </div>
+        </div>
+
+        {/* Estoque detalhe por vacina */}
+        {estoque.length > 0 && (
+          <div style={{fontSize:11,color:'var(--text-muted)'}}>
+            {estoque.map((e,i) => (
+              <span key={i}>{e.vacinas?.nome}: <strong>{e.quantidade}</strong>{i < estoque.length-1 ? ' · ' : ''}</span>
+            ))}
+          </div>
+        )}
+
+        {/* Particularidades */}
+        {(tarefaInfo?.particularidade || tutor.particularidade) && (
+          <div style={{padding:10,background:'rgba(245,158,11,0.1)',border:'1px solid rgba(245,158,11,0.3)',borderRadius:'var(--radius-sm)'}}>
+            <div style={{fontSize:10,color:'var(--warning)',textTransform:'uppercase',fontWeight:600,marginBottom:4}}>⚠ Particularidades</div>
+            <div style={{fontSize:12,color:'var(--text-secondary)'}}>{tarefaInfo?.particularidade || tutor.particularidade}</div>
+          </div>
+        )}
+      </div>
+      <div className="modal-actions">
+        <button className="btn btn-secondary" onClick={onClose}>Fechar</button>
+      </div>
+    </Modal>
+  );
+}
+
 // MÓDULO PLANEJADOR — ROTEIRIZAÇÃO COMPLETA
 // ═══════════════════════════════════════════════
 
@@ -4399,6 +4530,7 @@ function RoteirizacaoPage({ onBack }) {
   const [leftOpen, setLeftOpen] = useState(true);
   const [rightOpen, setRightOpen] = useState(true);
   const [expandedTutor, setExpandedTutor] = useState(null);
+  const [infoTutor, setInfoTutor] = useState(null);
 
   const [baseOrigem, setBaseOrigem] = useState('');
   const [filterPP, setFilterPP] = useState('');
@@ -5041,6 +5173,10 @@ function RoteirizacaoPage({ onBack }) {
                           <span style={{fontSize:9,color:'var(--text-muted)'}}>{isExpanded?'▼':'▶'}</span>
                           <span style={{fontWeight:600,color:'var(--text-primary)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{t.nome}</span>
                           {t.jaRoteirizado && <span style={{fontSize:9,color:'var(--warning)',flexShrink:0}}>🚚 em rota</span>}
+                          <button
+                            onClick={ev => { ev.stopPropagation(); setInfoTutor(t); }}
+                            style={{background:'none',border:'1px solid var(--border)',borderRadius:'50%',width:16,height:16,cursor:'pointer',fontSize:9,color:'var(--text-muted)',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,padding:0}}
+                            title="Ver informações">ⓘ</button>
                         </div>
                         <div style={{color:'var(--text-muted)',fontSize:10,marginLeft:12}}>
                           {t.ponto_partida||t.cidade} · {filterStatus ? t.tarefas.filter(e=>(e._status || e.status)===filterStatus).length : t.tarefas.length} tar.
@@ -5184,6 +5320,7 @@ function RoteirizacaoPage({ onBack }) {
           </div>
         )}
       </div>
+      {infoTutor && <TutorInfoModal tutor={infoTutor} onClose={() => setInfoTutor(null)} />}
     </div>
   );
 }
@@ -5573,6 +5710,7 @@ function MontagemPage() {
   const [vacinas, setVacinas] = useState([]);
   const [loadingRemessas, setLoadingRemessas] = useState(false);
   const [etiquetaRem, setEtiquetaRem] = useState(null);
+  const [infoTutor, setInfoTutor] = useState(null);
   const toast = useContext(ToastContext);
 
   const REM_STATUS = {
@@ -5745,6 +5883,32 @@ function MontagemPage() {
                 <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>
                   <span className={`badge ${REM_BADGE[rem.status]||'badge-gray'}`}>{REM_STATUS[rem.status]||rem.status}</span>
                   <span className="badge badge-cyan">{totalDoses} doses</span>
+                  {/* Badge de vacina da remessa */}
+                  {(rem.remessa_itens||[]).length > 0 && [...new Set((rem.remessa_itens||[]).map(it => it.vacinas?.nome).filter(Boolean))].map(v => (
+                    <span key={v} style={{fontSize:11,fontWeight:600,padding:'2px 8px',borderRadius:4,
+                      background:v.toLowerCase().includes('tetrav')?'rgba(37,99,235,0.2)':'rgba(16,185,129,0.2)',
+                      color:v.toLowerCase().includes('tetrav')?'var(--accent)':'var(--success)'}}>
+                      💉{v.replace('Influenza ','').replace('Influenza','')}
+                    </span>
+                  ))}
+                  {/* Botão info */}
+                  <button onClick={() => {
+                    // Montar objeto tutor a partir da remessa
+                    const obs = rem.observacao || '';
+                    const mNome = obs.match(/^([^(|]+)/);
+                    const mCPF = obs.match(/\(([^)]+)\)/);
+                    const mTarefas = obs.match(/\| (.+)$/);
+                    setInfoTutor({
+                      nome: destNome || (mNome ? mNome[1].trim() : '—'),
+                      cpf: destCPF || (mCPF ? mCPF[1].trim() : '—'),
+                      endereco: destEnd || '',
+                      cidade: destCidade,
+                      aplicador_id: rem.destino_aplicador_id,
+                      total_doses: totalDoses || dosesSugeridas,
+                      tarefas: (mTarefas ? mTarefas[1].split(',').map(c => ({ codigo_tarefa: c.trim(), _doses: 0 })) : []),
+                    });
+                  }} style={{background:'none',border:'1px solid var(--border)',borderRadius:'50%',width:22,height:22,cursor:'pointer',fontSize:12,color:'var(--text-muted)',display:'flex',alignItems:'center',justifyContent:'center',padding:0}}
+                  title="Ver informações">ⓘ</button>
                   <button className="btn btn-secondary btn-sm" onClick={() => setEtiquetaRem(rem)}>🏷️ Etiqueta</button>
                   {!isPronta && <button className="btn btn-success btn-sm" onClick={() => marcarPronta(rem)}>✓ Marcar Pronta</button>}
                   {isPronta && <button className="btn btn-secondary btn-sm" onClick={() => marcarMontagem(rem.id)}>↩ Reabrir</button>}
@@ -5809,6 +5973,7 @@ function MontagemPage() {
       {etiquetaRem && (
         <EtiquetaModal remessa={etiquetaRem} rota={rotaSel} onClose={() => setEtiquetaRem(null)} totalParadas={remessas.length} />
       )}
+      {infoTutor && <TutorInfoModal tutor={infoTutor} onClose={() => setInfoTutor(null)} />}
     </div>
   );
 }
@@ -7109,7 +7274,69 @@ function MovimentacoesPage() {
   const [extrato, setExtrato] = useState([]);
   const [loading, setLoading] = useState(false);
   const [saldoAtual, setSaldoAtual] = useState(0);
+  const [cancelando, setCancelando] = useState(null);
   const toast = useContext(ToastContext);
+
+  const estornar = async (mov) => {
+    if (!confirm(`Confirmar cancelamento do lançamento de ${mov.quantidade.toLocaleString('pt-BR')} doses?\n\nIsso vai gerar um lançamento inverso (estorno) com registro do cancelamento.`)) return;
+    setCancelando(mov.id);
+    try {
+      const userId = (await sb.auth.getUser()).data.user.id;
+
+      // Lançamento inverso: origem e destino trocados
+      const { error } = await sb.from('movimentacoes').insert({
+        tipo: 'ajuste',
+        vacina_id: mov.vacina_id,
+        quantidade: mov.quantidade,
+        // Inverter origem/destino
+        origem_tipo: mov.destino_tipo || mov.origem_tipo,
+        origem_base_id: mov.destino_base_id || null,
+        origem_aplicador_id: mov.destino_aplicador_id || null,
+        destino_tipo: mov.origem_tipo,
+        destino_base_id: mov.origem_base_id || null,
+        destino_aplicador_id: mov.origem_aplicador_id || null,
+        observacao: `ESTORNO do lançamento ${mov.id.slice(0,8)} de ${new Date(mov.created_at).toLocaleString('pt-BR')} (${mov.quantidade} doses) — Cancelado por ${userId}`,
+        criado_por: userId,
+      });
+      if (error) { toast(error.message, 'error'); setCancelando(null); return; }
+
+      // Ajustar estoque fisicamente
+      // Reverter: se era entrada (destino = local), debitar; se era saída (origem = local), creditar
+      if (mov.direcao === 'entrada') {
+        // Era entrada no local selecionado → debitar
+        if (localSel.tipo === 'base') {
+          const { data: rows } = await sb.from('estoque').select('id,quantidade').eq('vacina_id', mov.vacina_id).eq('base_id', localSel.id).eq('localizacao_tipo','base');
+          if (rows?.length) await sb.from('estoque').update({ quantidade: rows[0].quantidade - mov.quantidade }).eq('id', rows[0].id);
+        } else {
+          const { data: rows } = await sb.from('estoque').select('id,quantidade').eq('vacina_id', mov.vacina_id).eq('aplicador_id', localSel.id).eq('localizacao_tipo','aplicador');
+          if (rows?.length) await sb.from('estoque').update({ quantidade: rows[0].quantidade - mov.quantidade }).eq('id', rows[0].id);
+        }
+      } else if (mov.direcao === 'saida') {
+        // Era saída do local selecionado → creditar de volta
+        if (localSel.tipo === 'base') {
+          const { data: rows } = await sb.from('estoque').select('id,quantidade').eq('vacina_id', mov.vacina_id).eq('base_id', localSel.id).eq('localizacao_tipo','base');
+          if (rows?.length) {
+            await sb.from('estoque').update({ quantidade: rows[0].quantidade + mov.quantidade }).eq('id', rows[0].id);
+          } else {
+            await sb.from('estoque').insert({ vacina_id: mov.vacina_id, base_id: localSel.id, localizacao_tipo: 'base', quantidade: mov.quantidade });
+          }
+        } else {
+          const { data: rows } = await sb.from('estoque').select('id,quantidade').eq('vacina_id', mov.vacina_id).eq('aplicador_id', localSel.id).eq('localizacao_tipo','aplicador');
+          if (rows?.length) {
+            await sb.from('estoque').update({ quantidade: rows[0].quantidade + mov.quantidade }).eq('id', rows[0].id);
+          } else {
+            await sb.from('estoque').insert({ vacina_id: mov.vacina_id, aplicador_id: localSel.id, localizacao_tipo: 'aplicador', quantidade: mov.quantidade });
+          }
+        }
+      }
+
+      toast(`Lançamento estornado! ${mov.quantidade.toLocaleString('pt-BR')} doses revertidas. ✓`, 'success');
+      loadExtrato(localSel, filtroVacina);
+    } catch(err) {
+      toast('Erro: ' + err.message, 'error');
+    }
+    setCancelando(null);
+  };
 
   useEffect(() => {
     Promise.all([
@@ -7263,6 +7490,7 @@ function MovimentacoesPage() {
                   <th style={{textAlign:'right'}}>Saldo</th>
                   <th>Usuário</th>
                   <th>Obs</th>
+                  <th></th>
                 </tr>
               </thead>
               <tbody>
@@ -7288,6 +7516,21 @@ function MovimentacoesPage() {
                     </td>
                     <td style={{fontSize:11}}>{m.profiles?.nome || '—'}</td>
                     <td style={{fontSize:10,color:'var(--text-muted)',maxWidth:160,overflow:'hidden',textOverflow:'ellipsis'}}>{m.observacao || '—'}</td>
+                    <td>
+                      {!m.observacao?.includes('ESTORNO') && (
+                        <button
+                          className="btn btn-secondary btn-sm"
+                          style={{fontSize:10,padding:'2px 8px',color:'var(--danger)',borderColor:'var(--danger)'}}
+                          disabled={cancelando === m.id}
+                          onClick={() => estornar(m)}
+                          title="Estornar este lançamento">
+                          {cancelando === m.id ? '...' : '↩ Estornar'}
+                        </button>
+                      )}
+                      {m.observacao?.includes('ESTORNO') && (
+                        <span style={{fontSize:9,color:'var(--text-muted)',fontStyle:'italic'}}>estorno</span>
+                      )}
+                    </td>
                   </tr>
                 ))}
               </tbody>
