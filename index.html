@@ -242,7 +242,7 @@ td.mono { font-family: 'JetBrains Mono', monospace; font-size: 12px; }
 .modal-overlay {
   position: fixed; inset: 0; background: rgba(0,0,0,0.6);
   display: flex; align-items: center; justify-content: center;
-  z-index: 100; backdrop-filter: blur(4px);
+  z-index: 10000; backdrop-filter: blur(4px);
 }
 .modal {
   background: var(--bg-card); border: 1px solid var(--border);
@@ -253,6 +253,11 @@ td.mono { font-family: 'JetBrains Mono', monospace; font-size: 12px; }
 .modal-lg { max-width: 800px; }
 .modal-title { font-size: 18px; font-weight: 700; margin-bottom: 16px; }
 .modal-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 20px; }
+
+/* Garantir que o mapa Leaflet fique abaixo dos modais */
+.leaflet-pane, .leaflet-top, .leaflet-bottom { z-index: 400 !important; }
+.leaflet-control { z-index: 800 !important; }
+.leaflet-popup { z-index: 900 !important; }
 
 /* Login */
 .login-container {
@@ -703,7 +708,7 @@ function Sidebar({ profile, currentPage, onNavigate, open, onClose, collapsed, o
         {!collapsed && (
           <div style={{fontSize:9,color:'var(--text-muted)',textAlign:'center',marginTop:6,padding:'4px 0',borderTop:'1px solid var(--border)',opacity:0.6}}>
             {'🕐 Atualizado em'}<br/>
-            <span style={{fontFamily:'JetBrains Mono',fontSize:9}}>{'13/05/2026 às 14:55'}</span>
+            <span style={{fontFamily:'JetBrains Mono',fontSize:9}}>{'13/05/2026 às 15:02'}</span>
           </div>
         )}
       </div>
@@ -7381,52 +7386,54 @@ function MovimentacoesPage() {
     setLoading(true);
     setExtrato([]);
 
-    // Buscar todas as movimentações onde este local é origem ou destino
     const campo_origem = local.tipo === 'base' ? 'origem_base_id' : 'origem_aplicador_id';
     const campo_destino = local.tipo === 'base' ? 'destino_base_id' : 'destino_aplicador_id';
 
-    let q1 = sb.from('movimentacoes')
+    // Buscar saldo real do banco (fonte da verdade)
+    const estoqueQuery = local.tipo === 'base'
+      ? sb.from('estoque').select('quantidade, vacinas(nome)').eq('base_id', local.id).eq('localizacao_tipo', 'base')
+      : sb.from('estoque').select('quantidade, vacinas(nome)').eq('aplicador_id', local.id).eq('localizacao_tipo', 'aplicador');
+    if (vacinaId) estoqueQuery.eq('vacina_id', vacinaId);
+    const { data: estoqueRows } = await estoqueQuery;
+    const saldoReal = (estoqueRows || []).reduce((s, r) => s + Number(r.quantidade||0), 0);
+    setSaldoAtual(saldoReal);
+
+    let q = sb.from('movimentacoes')
       .select('*, vacinas(nome), profiles(nome), bases_orig:bases!movimentacoes_origem_base_id_fkey(nome), bases_dest:bases!movimentacoes_destino_base_id_fkey(nome), aplic_orig:aplicadores!movimentacoes_origem_aplicador_id_fkey(nome), aplic_dest:aplicadores!movimentacoes_destino_aplicador_id_fkey(nome)')
       .or(`${campo_origem}.eq.${local.id},${campo_destino}.eq.${local.id}`)
       .order('created_at', { ascending: true })
       .limit(500);
+    if (vacinaId) q = q.eq('vacina_id', vacinaId);
 
-    if (vacinaId) q1 = q1.eq('vacina_id', vacinaId);
-
-    const { data, error } = await q1;
+    const { data, error } = await q;
     if (error) { toast(error.message, 'error'); setLoading(false); return; }
 
-    // Calcular saldo progressivo
+    // Calcular saldo progressivo a partir das movimentações
     let saldo = 0;
     const rows = (data || []).map(m => {
       const ehOrigem = (local.tipo === 'base' ? m.origem_base_id : m.origem_aplicador_id) === local.id;
       const ehDestino = (local.tipo === 'base' ? m.destino_base_id : m.destino_aplicador_id) === local.id;
 
       let direcao, sinal;
-      if (ehDestino && !ehOrigem) {
-        direcao = 'entrada'; sinal = +1;
-      } else if (ehOrigem && !ehDestino) {
-        direcao = 'saida'; sinal = -1;
-      } else {
-        direcao = 'interno'; sinal = 0;
-      }
+      if (ehDestino && !ehOrigem) { direcao = 'entrada'; sinal = +1; }
+      else if (ehOrigem && !ehDestino) { direcao = 'saida'; sinal = -1; }
+      else { direcao = 'interno'; sinal = 0; }
 
       saldo += sinal * m.quantidade;
 
-      // Montar texto de origem/destino
-      const origemNome = m.bases_orig?.nome || m.aplic_orig?.nome || '—';
+      const origemNome = m.bases_orig?.nome || m.aplic_orig?.nome || (m.origem_tipo && !['base','aplicador'].includes(m.origem_tipo) ? m.origem_tipo : '—');
       const destinoNome = m.bases_dest?.nome || m.aplic_dest?.nome || '—';
-
-      const tipoLabel = {
-        entrada: 'Entrada', saida: 'Saída', transferencia: 'Transferência',
-        envio_aplicador: 'Envio → Aplicador', devolucao: 'Devolução',
-        aplicacao: 'Aplicação', perda: 'Perda', dano: 'Dano', ajuste: 'Ajuste'
-      }[m.tipo] || m.tipo;
+      const tipoLabel = { entrada:'Entrada', saida:'Saída', transferencia:'Transferência', envio_aplicador:'Envio → Aplicador', devolucao:'Devolução', aplicacao:'Aplicação', perda:'Perda', dano:'Dano', ajuste:'Ajuste' }[m.tipo] || m.tipo;
 
       return { ...m, direcao, sinal, saldoPos: saldo, origemNome, destinoNome, tipoLabel };
     });
 
-    setSaldoAtual(saldo);
+    // Mostrar aviso se saldo calculado diverge do real
+    const diff = saldoReal - saldo;
+    if (Math.abs(diff) > 0) {
+      console.warn(`Extrato: saldo calculado (${saldo}) ≠ estoque real (${saldoReal}). Diferença: ${diff}`);
+    }
+
     setExtrato(rows);
     setLoading(false);
   };
@@ -7497,7 +7504,15 @@ function MovimentacoesPage() {
         <div className="card"><div className="empty-state"><div className="empty-icon">📋</div><div className="empty-text">Nenhuma movimentação encontrada para {localSel.nome}</div></div></div>
       )}
 
-      {extrato.length > 0 && (
+      {extrato.length > 0 && (() => {
+        const saldoCalculado = extrato[extrato.length-1]?.saldoPos || 0;
+        const diff = saldoAtual - saldoCalculado;
+        return Math.abs(diff) > 0 ? (
+          <div style={{padding:'8px 14px',background:'rgba(245,158,11,0.1)',border:'1px solid rgba(245,158,11,0.3)',borderRadius:'var(--radius-sm)',marginBottom:10,fontSize:12,color:'var(--warning)'}}>
+            ⚠ O saldo calculado pelo extrato ({saldoCalculado.toLocaleString('pt-BR')}) difere do estoque real ({saldoAtual.toLocaleString('pt-BR')}) em <strong>{Math.abs(diff).toLocaleString('pt-BR')} doses</strong>. Isso pode indicar lançamentos sem movimentação registrada (ex: ajustes manuais diretos no banco ou estornos com sinal incorreto).
+          </div>
+        ) : null;
+      })()}
         <div className="card">
           <div style={{padding:'10px 14px',borderBottom:'1px solid var(--border)',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
             <div style={{fontSize:14,fontWeight:600}}>{localSel.nome}</div>
