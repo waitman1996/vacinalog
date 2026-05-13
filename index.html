@@ -700,6 +700,12 @@ function Sidebar({ profile, currentPage, onNavigate, open, onClose, collapsed, o
           <button title="Sair" onClick={async () => { await sb.auth.signOut(); window.location.reload(); }}
             style={{background:'none',border:'none',color:'var(--danger)',cursor:'pointer',fontSize:18,marginTop:8,width:'100%',textAlign:'center'}}>⏻</button>
         )}
+        {!collapsed && (
+          <div style={{fontSize:9,color:'var(--text-muted)',textAlign:'center',marginTop:6,padding:'4px 0',borderTop:'1px solid var(--border)',opacity:0.6}}>
+            {'🕐 Atualizado em'}<br/>
+            <span style={{fontFamily:'JetBrains Mono',fontSize:9}}>{'13/05/2026 às 11:05'}</span>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -1975,6 +1981,9 @@ function ImportConsulta() {
   const [importing, setImporting] = useState(false);
   const [progress, setProgress] = useState(0);
   const [result, setResult] = useState(null);
+  // Data de corte: só debita estoque para tarefas com data_inicio >= dataCorte
+  const hoje = new Date().toISOString().slice(0, 10);
+  const [dataCorte, setDataCorte] = useState(hoje);
   const toast = useContext(ToastContext);
   const fileRef = useRef();
 
@@ -2191,22 +2200,39 @@ function ImportConsulta() {
           } else {
             atualizados++;
 
-            // Calcular incremento de doses aplicadas
-            const incremento = dosesNovas - dosesAntigas;
-            if (incremento > 0 && escala?.aplicador_id && escala?.vacina_id) {
-              // Registrar abatimento automático
-              const { error: abErr } = await sb.from('abatimentos').insert({
-                escala_id: escala.id,
-                aplicador_id: escala.aplicador_id,
-                vacina_id: escala.vacina_id,
-                tarefa_id: id,
-                tipo: 'vacinados',
-                quantidade: incremento,
-                observacao: `Importação Consulta: +${incremento} doses (${dosesAntigas} → ${dosesNovas})`,
-                criado_por: userId,
-              });
-              if (!abErr) abatimentos++;
-              else console.warn('Erro ao registrar abatimento:', abErr.message);
+            // Debitar doses aplicadas do estoque do aplicador
+            // SOMENTE se a tarefa tiver data_inicio >= dataCorte (data de corte)
+            const dataInicio = fields.data_inicio || '';
+            const dentroDoCorte = dataCorte ? dataInicio >= dataCorte : true;
+
+            if (dosesNovas > 0 && dentroDoCorte && escala?.aplicador_id && escala?.vacina_id) {
+              // Debitar direto no estoque do aplicador (doses_aplicadas = o que consumiu)
+              const { data: estoqueAp } = await sb.from('estoque')
+                .select('id, quantidade')
+                .eq('vacina_id', escala.vacina_id)
+                .eq('aplicador_id', escala.aplicador_id)
+                .eq('localizacao_tipo', 'aplicador')
+                .maybeSingle();
+
+              if (estoqueAp && estoqueAp.quantidade >= dosesNovas) {
+                await sb.from('estoque')
+                  .update({ quantidade: estoqueAp.quantidade - dosesNovas })
+                  .eq('id', estoqueAp.id);
+
+                // Registrar movimentação
+                await sb.from('movimentacoes').insert({
+                  tipo: 'aplicacao',
+                  vacina_id: escala.vacina_id,
+                  quantidade: dosesNovas,
+                  origem_tipo: 'aplicador',
+                  origem_aplicador_id: escala.aplicador_id,
+                  observacao: `Importação Consulta: ${dosesNovas} doses aplicadas | Tarefa ${codigo} | Data corte: ${dataCorte}`,
+                  criado_por: userId,
+                });
+                abatimentos++;
+              } else {
+                console.warn(`Saldo insuficiente para ${codigo}: disponível ${estoqueAp?.quantidade || 0}, necessário ${dosesNovas}`);
+              }
             }
           }
         }
@@ -2303,6 +2329,30 @@ function ImportConsulta() {
               </div>
             </div>
           )}
+
+          {/* Data de corte para débito de estoque */}
+          <div style={{padding:14,background:'var(--bg-input)',borderRadius:'var(--radius-sm)',border:'1px solid var(--border)',marginBottom:12}}>
+            <div style={{fontSize:13,fontWeight:600,marginBottom:6}}>💉 Débito de Estoque do Aplicador</div>
+            <div style={{fontSize:12,color:'var(--text-muted)',marginBottom:10}}>
+              Somente tarefas com <strong>data de início a partir de</strong> esta data terão as doses aplicadas debitadas do estoque do aplicador. Tarefas anteriores serão atualizadas normalmente, mas <strong>sem debitar o estoque</strong>.
+            </div>
+            <div style={{display:'flex',alignItems:'center',gap:10,flexWrap:'wrap'}}>
+              <label style={{fontSize:12,fontWeight:600}}>Data de corte:</label>
+              <input type="date" className="form-input" style={{width:160,padding:'5px 8px',fontSize:13}}
+                value={dataCorte} onChange={e => setDataCorte(e.target.value)} />
+              <button className="btn btn-secondary btn-sm" onClick={() => setDataCorte(hoje)}>Hoje</button>
+              <button className="btn btn-secondary btn-sm" onClick={() => setDataCorte('')}>Sem corte (não debitar)</button>
+            </div>
+            {dataCorte ? (
+              <div style={{marginTop:8,fontSize:11,color:'var(--success)'}}>
+                ✓ Vai debitar estoque apenas das tarefas com data ≥ {new Date(dataCorte+'T12:00:00').toLocaleDateString('pt-BR')}
+              </div>
+            ) : (
+              <div style={{marginTop:8,fontSize:11,color:'var(--warning)'}}>
+                ⚠ Nenhuma data de corte definida — não vai debitar nenhum estoque nesta importação
+              </div>
+            )}
+          </div>
 
           <button className="btn btn-primary" onClick={doImport} disabled={importing || preview.filtered === 0}>
             {importing ? 'Importando...' : `Importar ${preview.filtered} tarefas`}
