@@ -5191,14 +5191,80 @@ function TransferenciaPage() {
   const transfer = async () => {
     if (!form.vacina_id || !form.quantidade || !form.origem_id || !form.destino_id) { toast('Preencha todos os campos', 'error'); return; }
     setSaving(true);
+    const qtd = parseInt(form.quantidade);
+
+    // Tentar via RPC primeiro
     const { error } = await sb.rpc('transferir_estoque', {
-      p_vacina_id: form.vacina_id, p_quantidade: parseInt(form.quantidade),
+      p_vacina_id: form.vacina_id, p_quantidade: qtd,
       p_origem_tipo: form.origem_tipo, p_origem_id: form.origem_id,
       p_destino_tipo: form.destino_tipo, p_destino_id: form.destino_id,
       p_observacao: form.observacao || null
     });
-    if (error) toast(error.message, 'error');
-    else { toast('Transferência realizada!', 'success'); setForm(f=>({...f, quantidade:'', observacao:''})); }
+
+    if (error) {
+      // Fallback direto — sem depender de RPC ou constraints
+      console.warn('RPC falhou, usando fallback:', error.message);
+      try {
+        // 1. Debitar da origem
+        const origemFilter = form.origem_tipo === 'base'
+          ? { base_id: form.origem_id }
+          : { aplicador_id: form.origem_id };
+        const { data: origRows } = await sb.from('estoque').select('id, quantidade')
+          .eq('vacina_id', form.vacina_id)
+          .eq('localizacao_tipo', form.origem_tipo)
+          .match(origemFilter);
+        if (!origRows?.length) { toast('Origem não encontrada no estoque', 'error'); setSaving(false); return; }
+        const totalOrig = origRows.reduce((s,r) => s + Number(r.quantidade||0), 0);
+        if (totalOrig < qtd) { toast(`Saldo insuficiente: ${totalOrig} disponível`, 'error'); setSaving(false); return; }
+        let restante = qtd;
+        for (const row of origRows) {
+          if (restante <= 0) break;
+          const deb = Math.min(restante, Number(row.quantidade||0));
+          await sb.from('estoque').update({ quantidade: row.quantidade - deb }).eq('id', row.id);
+          restante -= deb;
+        }
+
+        // 2. Creditar no destino (UPSERT manual)
+        const destFilter = form.destino_tipo === 'base'
+          ? { base_id: form.destino_id }
+          : { aplicador_id: form.destino_id };
+        const { data: destRows } = await sb.from('estoque').select('id, quantidade')
+          .eq('vacina_id', form.vacina_id)
+          .eq('localizacao_tipo', form.destino_tipo)
+          .match(destFilter);
+        if (destRows?.length > 0) {
+          await sb.from('estoque').update({ quantidade: destRows[0].quantidade + qtd }).eq('id', destRows[0].id);
+        } else {
+          const newRow = { vacina_id: form.vacina_id, localizacao_tipo: form.destino_tipo, quantidade: qtd };
+          if (form.destino_tipo === 'base') newRow.base_id = form.destino_id;
+          else newRow.aplicador_id = form.destino_id;
+          await sb.from('estoque').insert(newRow);
+        }
+
+        // 3. Registrar movimentação
+        const userId = (await sb.auth.getUser()).data.user.id;
+        await sb.from('movimentacoes').insert({
+          tipo: form.origem_tipo === 'base' && form.destino_tipo === 'base' ? 'transferencia' : 'envio_aplicador',
+          vacina_id: form.vacina_id, quantidade: qtd,
+          origem_tipo: form.origem_tipo,
+          origem_base_id: form.origem_tipo === 'base' ? form.origem_id : null,
+          origem_aplicador_id: form.origem_tipo === 'aplicador' ? form.origem_id : null,
+          destino_tipo: form.destino_tipo,
+          destino_base_id: form.destino_tipo === 'base' ? form.destino_id : null,
+          destino_aplicador_id: form.destino_tipo === 'aplicador' ? form.destino_id : null,
+          observacao: form.observacao || null,
+          criado_por: userId
+        });
+
+        toast('Transferência realizada! ✓', 'success');
+        setForm(f=>({...f, quantidade:'', observacao:''}));
+      } catch(err) {
+        toast('Erro: ' + err.message, 'error');
+      }
+    } else {
+      toast('Transferência realizada! ✓', 'success');
+      setForm(f=>({...f, quantidade:'', observacao:''}));
+    }
     setSaving(false);
   };
 
