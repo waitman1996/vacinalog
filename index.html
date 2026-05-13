@@ -708,7 +708,7 @@ function Sidebar({ profile, currentPage, onNavigate, open, onClose, collapsed, o
         {!collapsed && (
           <div style={{fontSize:9,color:'var(--text-muted)',textAlign:'center',marginTop:6,padding:'4px 0',borderTop:'1px solid var(--border)',opacity:0.6}}>
             {'🕐 Atualizado em'}<br/>
-            <span style={{fontFamily:'JetBrains Mono',fontSize:9}}>{'13/05/2026 às 15:02'}</span>
+            <span style={{fontFamily:'JetBrains Mono',fontSize:9}}>{'13/05/2026 às 15:16'}</span>
           </div>
         )}
       </div>
@@ -7390,11 +7390,11 @@ function MovimentacoesPage() {
     const campo_destino = local.tipo === 'base' ? 'destino_base_id' : 'destino_aplicador_id';
 
     // Buscar saldo real do banco (fonte da verdade)
-    const estoqueQuery = local.tipo === 'base'
+    let estoqueQ = local.tipo === 'base'
       ? sb.from('estoque').select('quantidade, vacinas(nome)').eq('base_id', local.id).eq('localizacao_tipo', 'base')
       : sb.from('estoque').select('quantidade, vacinas(nome)').eq('aplicador_id', local.id).eq('localizacao_tipo', 'aplicador');
-    if (vacinaId) estoqueQuery.eq('vacina_id', vacinaId);
-    const { data: estoqueRows } = await estoqueQuery;
+    if (vacinaId) estoqueQ = estoqueQ.eq('vacina_id', vacinaId);
+    const { data: estoqueRows } = await estoqueQ;
     const saldoReal = (estoqueRows || []).reduce((s, r) => s + Number(r.quantidade||0), 0);
     setSaldoAtual(saldoReal);
 
@@ -7504,20 +7504,22 @@ function MovimentacoesPage() {
         <div className="card"><div className="empty-state"><div className="empty-icon">📋</div><div className="empty-text">Nenhuma movimentação encontrada para {localSel.nome}</div></div></div>
       )}
 
-      {extrato.length > 0 && (() => {
-        const saldoCalculado = extrato[extrato.length-1]?.saldoPos || 0;
-        const diff = saldoAtual - saldoCalculado;
-        return Math.abs(diff) > 0 ? (
-          <div style={{padding:'8px 14px',background:'rgba(245,158,11,0.1)',border:'1px solid rgba(245,158,11,0.3)',borderRadius:'var(--radius-sm)',marginBottom:10,fontSize:12,color:'var(--warning)'}}>
-            ⚠ O saldo calculado pelo extrato ({saldoCalculado.toLocaleString('pt-BR')}) difere do estoque real ({saldoAtual.toLocaleString('pt-BR')}) em <strong>{Math.abs(diff).toLocaleString('pt-BR')} doses</strong>. Isso pode indicar lançamentos sem movimentação registrada (ex: ajustes manuais diretos no banco ou estornos com sinal incorreto).
-          </div>
-        ) : null;
-      })()}
-        <div className="card">
-          <div style={{padding:'10px 14px',borderBottom:'1px solid var(--border)',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
-            <div style={{fontSize:14,fontWeight:600}}>{localSel.nome}</div>
-            <div style={{fontSize:12,color:'var(--text-muted)'}}>{extrato.length} lançamentos</div>
-          </div>
+      {extrato.length > 0 && (
+        <>
+          {(() => {
+            const saldoCalculado = extrato[extrato.length-1]?.saldoPos || 0;
+            const diff = saldoAtual - saldoCalculado;
+            return Math.abs(diff) > 0 ? (
+              <div style={{padding:'8px 14px',background:'rgba(245,158,11,0.1)',border:'1px solid rgba(245,158,11,0.3)',borderRadius:'var(--radius-sm)',marginBottom:10,fontSize:12,color:'var(--warning)'}}>
+                ⚠ O saldo calculado pelo extrato ({saldoCalculado.toLocaleString('pt-BR')}) difere do estoque real ({saldoAtual.toLocaleString('pt-BR')}) em <strong>{Math.abs(diff).toLocaleString('pt-BR')} doses</strong>.
+              </div>
+            ) : null;
+          })()}
+          <div className="card">
+            <div style={{padding:'10px 14px',borderBottom:'1px solid var(--border)',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+              <div style={{fontSize:14,fontWeight:600}}>{localSel?.nome}</div>
+              <div style={{fontSize:12,color:'var(--text-muted)'}}>{extrato.length} lançamentos</div>
+            </div>
           <div className="table-wrap">
             <table>
               <thead>
@@ -7578,6 +7580,7 @@ function MovimentacoesPage() {
             </table>
           </div>
         </div>
+        </>
       )}
     </div>
   );
@@ -7703,6 +7706,135 @@ function InfoRow({ label, value, mono, accent, bold, badge }) {
   );
 }
 
+// ═══════════════════════════════════════════════
+// MOTORISTA — APP MOBILE DEDICADO
+// ═══════════════════════════════════════════════
+function MotoristaAppMobile({ profile }) {
+  const [page, setPage] = useState('rotas'); // 'rotas' | 'rota_detail'
+  const [rotaSel, setRotaSel] = useState(null);
+  const [userId, setUserId] = useState(null);
+
+  useEffect(() => {
+    sb.auth.getUser().then(({ data }) => {
+      if (data?.user) setUserId(data.user.id);
+    });
+  }, []);
+
+  const sair = async () => { await sb.auth.signOut(); window.location.reload(); };
+
+  return (
+    <div style={{
+      minHeight: '100vh', background: 'var(--bg-deep)', color: 'var(--text-primary)',
+      fontFamily: 'inherit', maxWidth: 480, margin: '0 auto',
+      display: 'flex', flexDirection: 'column'
+    }}>
+      {/* Header mobile */}
+      <div style={{
+        background: 'var(--bg-card)', borderBottom: '1px solid var(--border)',
+        padding: '14px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+        position: 'sticky', top: 0, zIndex: 100
+      }}>
+        <div style={{display:'flex',alignItems:'center',gap:10}}>
+          {page === 'rota_detail' && (
+            <button onClick={() => { setPage('rotas'); setRotaSel(null); }}
+              style={{background:'none',border:'none',color:'var(--accent)',cursor:'pointer',fontSize:20,padding:0}}>←</button>
+          )}
+          <div>
+            <div style={{fontSize:16,fontWeight:700,color:'var(--accent)'}}>🚚 VacinaLog</div>
+            <div style={{fontSize:11,color:'var(--text-muted)'}}>{profile?.nome || 'Motorista'}</div>
+          </div>
+        </div>
+        <button onClick={sair} style={{background:'none',border:'1px solid var(--border)',borderRadius:6,color:'var(--danger)',cursor:'pointer',padding:'6px 10px',fontSize:12}}>Sair</button>
+      </div>
+
+      {/* Conteúdo */}
+      <div style={{flex:1, padding:'16px 14px', overflowY:'auto'}}>
+        {page === 'rotas' && userId && (
+          <MotoristaRotasMobile userId={userId} onSelectRota={(r) => { setRotaSel(r); setPage('rota_detail'); }} />
+        )}
+        {page === 'rota_detail' && rotaSel && (
+          <MotoristaRota rota={rotaSel} onBack={() => { setPage('rotas'); setRotaSel(null); }} isAdmin={false} />
+        )}
+      </div>
+    </div>
+  );
+}
+
+function MotoristaRotasMobile({ userId, onSelectRota }) {
+  const [rotas, setRotas] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const toast = useContext(ToastContext);
+
+  const load = async () => {
+    setLoading(true);
+    const { data } = await sb.from('rotas')
+      .select('*, bases!rotas_base_origem_id_fkey(nome, cidade, uf), veiculos(placa, modelo)')
+      .eq('motorista_id', userId)
+      .in('status', ['pronta', 'em_transito', 'montagem'])
+      .order('data_prevista', { ascending: true });
+    setRotas(data || []);
+    setLoading(false);
+  };
+
+  useEffect(() => { if (userId) load(); }, [userId]);
+
+  const ST = { pronta:'Pronta p/ Saída', em_transito:'Em Trânsito', montagem:'Em Montagem' };
+  const SB = { pronta:'badge-cyan', em_transito:'badge-green', montagem:'badge-yellow' };
+
+  if (loading) return (
+    <div style={{textAlign:'center',padding:60,color:'var(--text-muted)'}}>
+      <div style={{fontSize:32,marginBottom:10}}>🚚</div>
+      <div>Carregando rotas...</div>
+    </div>
+  );
+
+  if (rotas.length === 0) return (
+    <div style={{textAlign:'center',padding:60,color:'var(--text-muted)'}}>
+      <div style={{fontSize:48,marginBottom:12}}>✅</div>
+      <div style={{fontSize:16,fontWeight:600}}>Nenhuma rota pendente</div>
+      <div style={{fontSize:13,marginTop:6}}>Você está em dia!</div>
+      <button className="btn btn-secondary" style={{marginTop:20}} onClick={load}>↻ Atualizar</button>
+    </div>
+  );
+
+  return (
+    <div>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16}}>
+        <div style={{fontSize:18,fontWeight:700}}>Minhas Rotas</div>
+        <button className="btn btn-secondary btn-sm" onClick={load}>↻</button>
+      </div>
+      <div style={{display:'flex',flexDirection:'column',gap:12}}>
+        {rotas.map(r => {
+          const emTransito = r.status === 'em_transito';
+          return (
+            <div key={r.id} onClick={() => onSelectRota(r)} style={{
+              background: 'var(--bg-card)',
+              border: `2px solid ${emTransito ? 'var(--success)' : 'var(--border)'}`,
+              borderRadius: 12, padding: 16, cursor: 'pointer',
+              boxShadow: emTransito ? '0 0 12px rgba(16,185,129,0.2)' : 'none'
+            }}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:10}}>
+                <div style={{fontFamily:'JetBrains Mono',fontSize:18,fontWeight:700,color:'var(--accent)'}}>{r.codigo}</div>
+                <span className={`badge ${SB[r.status]||'badge-gray'}`} style={{fontSize:12,padding:'4px 10px'}}>{ST[r.status]||r.status}</span>
+              </div>
+              <div style={{display:'flex',flexDirection:'column',gap:6,fontSize:14,color:'var(--text-secondary)'}}>
+                <div>📅 {r.data_prevista ? new Date(r.data_prevista+'T12:00:00').toLocaleDateString('pt-BR',{weekday:'short',day:'2-digit',month:'2-digit'}) : '—'}</div>
+                <div>🏢 {r.bases?.nome} — {r.bases?.cidade}/{r.bases?.uf}</div>
+                <div>🚗 {r.veiculos ? r.veiculos.modelo+' · '+r.veiculos.placa : (r.veiculo||'—')}</div>
+              </div>
+              <div style={{marginTop:12,padding:'10px 0',borderTop:'1px solid var(--border)',display:'flex',justifyContent:'center'}}>
+                <span style={{fontSize:14,fontWeight:600,color: emTransito ? 'var(--success)' : 'var(--accent)'}}>
+                  {emTransito ? '▶ Ver Rota em Andamento' : '▶ Iniciar Rota'} →
+                </span>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function App() {
   const [session, setSession] = useState(undefined); // undefined = loading
   const [profile, setProfile] = useState(null);
@@ -7784,6 +7916,17 @@ function App() {
   const effectiveRole = viewAs || profile?.role;
   const effectiveProfile = viewAs ? { ...profile, role: viewAs } : profile;
   const isAdmin = profile?.role === 'admin';
+  const isMotorista = effectiveRole === 'motorista';
+
+  // Motorista tem layout mobile dedicado
+  if (isMotorista && !isAdmin) {
+    return <MotoristaAppMobile profile={profile} />;
+  }
+
+  // Redirecionar motorista admin (viewAs) para minhas-rotas se tentar acessar dashboard
+  if (isMotorista && currentPage === 'dashboard') {
+    setTimeout(() => setCurrentPage('minhas-rotas'), 0);
+  }
 
   return (
     <div className="app-layout">
@@ -7793,7 +7936,6 @@ function App() {
         open={sidebarOpen} onClose={() => setSidebarOpen(false)}
         collapsed={sidebarCollapsed} onToggleCollapse={() => setSidebarCollapsed(c => !c)} />
       <div className={`main-content ${sidebarCollapsed ? 'collapsed' : ''}`}>
-        {/* Seletor de visão — só aparece para admin */}
         {isAdmin && (
           <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:16,padding:'8px 14px',background:'var(--bg-card)',borderRadius:'var(--radius-sm)',border:'1px solid var(--border)',flexWrap:'wrap'}}>
             <span style={{fontSize:12,color:'var(--text-muted)',fontWeight:600}}>👁 Visualizar como:</span>
@@ -7806,15 +7948,11 @@ function App() {
             ].map(opt => (
               <button key={opt.key||'admin'} className={`btn btn-sm ${effectiveRole===(opt.key||'admin') ? 'btn-primary' : 'btn-secondary'}`}
                 style={{padding:'4px 10px',fontSize:11}}
-                onClick={() => { setViewAs(opt.key); setCurrentPage('dashboard'); }}>
+                onClick={() => { setViewAs(opt.key); setCurrentPage(opt.key === 'motorista' ? 'minhas-rotas' : 'dashboard'); }}>
                 {opt.label}
               </button>
             ))}
-            {viewAs && (
-              <span style={{fontSize:11,color:'var(--warning)',marginLeft:4}}>
-                ⚠ Modo visualização ativo
-              </span>
-            )}
+            {viewAs && <span style={{fontSize:11,color:'var(--warning)',marginLeft:4}}>⚠ Modo visualização ativo</span>}
           </div>
         )}
         {renderPage()}
