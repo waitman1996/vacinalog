@@ -712,7 +712,7 @@ function Sidebar({ profile, currentPage, onNavigate, open, onClose, collapsed, o
         {!collapsed && (
           <div style={{fontSize:9,color:'var(--text-muted)',textAlign:'center',marginTop:6,padding:'4px 0',borderTop:'1px solid var(--border)',opacity:0.6}}>
             {'🕐 Atualizado em'}<br/>
-            <span style={{fontFamily:'JetBrains Mono',fontSize:9}}>{'13/05/2026 às 16:57'}</span>
+            <span style={{fontFamily:'JetBrains Mono',fontSize:9}}>{'13/05/2026 às 17:58'}</span>
           </div>
         )}
       </div>
@@ -5370,13 +5370,403 @@ function MapaRota({ paradas, bases, baseOrigemId }) {
 function TransferenciaPage() {
   const [bases, setBases] = useState([]);
   const [vacinas, setVacinas] = useState([]);
-  const [form, setForm] = useState({ vacina_id:'', quantidade:'', origem_tipo:'base', origem_id:'', destino_tipo:'aplicador', destino_id:'', observacao:'' });
+  const [modo, setModo] = useState('transferencia'); // 'transferencia' | 'entrega_doses' | 'devolucao'
+  const [form, setForm] = useState({
+    vacina_id:'', quantidade:'', origem_tipo:'base', origem_id:'',
+    destino_tipo:'aplicador', destino_id:'', observacao:'',
+    // Devolução com danificadas
+    tem_danificadas: false, qtd_danificadas: '',
+    // Entrega de doses (para tarefa)
+    tarefa_codigo: '', tarefa_cliente: '', tarefa_doses: '',
+  });
   const [searchOrig, setSearchOrig] = useState('');
   const [searchDest, setSearchDest] = useState('');
   const [origResults, setOrigResults] = useState([]);
   const [destResults, setDestResults] = useState([]);
   const [saving, setSaving] = useState(false);
+  const [tarefaBusca, setTarefaBusca] = useState('');
+  const [tarefaResultados, setTarefaResultados] = useState([]);
+  const [tarefaSel, setTarefaSel] = useState(null);
+  const [historicoDescarte, setHistoricoDescarte] = useState([]);
   const toast = useContext(ToastContext);
+
+  useEffect(() => {
+    sb.from('bases').select('id, nome').eq('ativa', true).order('nome').then(r => setBases(r.data||[]));
+    sb.from('vacinas').select('id, nome, lote').eq('ativa', true).order('nome').then(r => setVacinas(r.data||[]));
+    carregarDescarte();
+  }, []);
+
+  const carregarDescarte = async () => {
+    const { data } = await sb.from('movimentacoes')
+      .select('*, vacinas(nome), profiles(nome), aplic_orig:aplicadores!movimentacoes_origem_aplicador_id_fkey(nome), bases_orig:bases!movimentacoes_origem_base_id_fkey(nome)')
+      .eq('tipo', 'descarte')
+      .order('created_at', { ascending: false })
+      .limit(50);
+    setHistoricoDescarte(data || []);
+  };
+
+  const searchAp = async (term, setter) => {
+    if (term.length < 2) { setter([]); return; }
+    const { data } = await sb.from('aplicadores').select('id, nome, cpf').or(`nome.ilike.%${term}%,cpf.ilike.%${term}%`).eq('ativo', true).limit(10);
+    setter(data || []);
+  };
+
+  const buscarTarefa = async (term) => {
+    if (term.length < 5) { setTarefaResultados([]); return; }
+    const { data } = await sb.from('tarefas')
+      .select('id, codigo, cliente, cidade_campanha, uf_campanha, doses_previstas, vacina')
+      .ilike('codigo', `%${term}%`)
+      .limit(8);
+    setTarefaResultados(data || []);
+  };
+
+  // Helper: debitar estoque
+  const debitarEstoque = async (vacina_id, origem_tipo, origem_id, qtd) => {
+    const filter = origem_tipo === 'base' ? { base_id: origem_id } : { aplicador_id: origem_id };
+    const { data: rows } = await sb.from('estoque').select('id,quantidade')
+      .eq('vacina_id', vacina_id).eq('localizacao_tipo', origem_tipo).match(filter);
+    if (!rows?.length) throw new Error('Origem não encontrada no estoque');
+    const total = rows.reduce((s,r) => s+Number(r.quantidade||0), 0);
+    if (total < qtd) throw new Error(`Saldo insuficiente: ${total} disponível, ${qtd} necessário`);
+    let restante = qtd;
+    for (const row of rows) {
+      if (restante <= 0) break;
+      const deb = Math.min(restante, Number(row.quantidade||0));
+      await sb.from('estoque').update({ quantidade: row.quantidade - deb }).eq('id', row.id);
+      restante -= deb;
+    }
+  };
+
+  // Helper: creditar estoque
+  const creditarEstoque = async (vacina_id, destino_tipo, destino_id, qtd) => {
+    const filter = destino_tipo === 'base' ? { base_id: destino_id } : { aplicador_id: destino_id };
+    const { data: rows } = await sb.from('estoque').select('id,quantidade')
+      .eq('vacina_id', vacina_id).eq('localizacao_tipo', destino_tipo).match(filter);
+    if (rows?.length) {
+      await sb.from('estoque').update({ quantidade: rows[0].quantidade + qtd }).eq('id', rows[0].id);
+    } else {
+      const row = { vacina_id, localizacao_tipo: destino_tipo, quantidade: qtd };
+      if (destino_tipo === 'base') row.base_id = destino_id;
+      else row.aplicador_id = destino_id;
+      await sb.from('estoque').insert(row);
+    }
+  };
+
+  const executarTransferencia = async () => {
+    if (!form.vacina_id || !form.quantidade || !form.origem_id || !form.destino_id) {
+      toast('Preencha todos os campos obrigatórios', 'error'); return;
+    }
+    setSaving(true);
+    const qtd = parseInt(form.quantidade);
+    const userId = (await sb.auth.getUser()).data.user.id;
+    try {
+      // Tentar RPC
+      const { error } = await sb.rpc('transferir_estoque', {
+        p_vacina_id: form.vacina_id, p_quantidade: qtd,
+        p_origem_tipo: form.origem_tipo, p_origem_id: form.origem_id,
+        p_destino_tipo: form.destino_tipo, p_destino_id: form.destino_id,
+        p_observacao: form.observacao || null
+      });
+      if (error) {
+        await debitarEstoque(form.vacina_id, form.origem_tipo, form.origem_id, qtd);
+        await creditarEstoque(form.vacina_id, form.destino_tipo, form.destino_id, qtd);
+        await sb.from('movimentacoes').insert({
+          tipo: 'transferencia', vacina_id: form.vacina_id, quantidade: qtd,
+          origem_tipo: form.origem_tipo,
+          origem_base_id: form.origem_tipo==='base' ? form.origem_id : null,
+          origem_aplicador_id: form.origem_tipo==='aplicador' ? form.origem_id : null,
+          destino_tipo: form.destino_tipo,
+          destino_base_id: form.destino_tipo==='base' ? form.destino_id : null,
+          destino_aplicador_id: form.destino_tipo==='aplicador' ? form.destino_id : null,
+          observacao: form.observacao || null, criado_por: userId
+        });
+      }
+      toast('Transferência realizada! ✓', 'success');
+      setForm(f=>({...f, quantidade:'', observacao:''}));
+    } catch(err) { toast(err.message, 'error'); }
+    setSaving(false);
+  };
+
+  const executarEntregaDoses = async () => {
+    if (!form.vacina_id || !form.quantidade || !form.origem_id || !tarefaSel) {
+      toast('Preencha todos os campos e selecione a tarefa', 'error'); return;
+    }
+    setSaving(true);
+    const qtd = parseInt(form.quantidade);
+    const userId = (await sb.auth.getUser()).data.user.id;
+    try {
+      // 1. Debitar da origem (base ou aplicador)
+      await debitarEstoque(form.vacina_id, form.origem_tipo, form.origem_id, qtd);
+      // 2. NÃO creditar em nenhum estoque interno — doses saem do sistema
+      // 3. Registrar movimentação de entrega externa
+      await sb.from('movimentacoes').insert({
+        tipo: 'saida', vacina_id: form.vacina_id, quantidade: qtd,
+        origem_tipo: form.origem_tipo,
+        origem_base_id: form.origem_tipo==='base' ? form.origem_id : null,
+        origem_aplicador_id: form.origem_tipo==='aplicador' ? form.origem_id : null,
+        destino_tipo: 'base', // campo obrigatório — usamos como marcador
+        observacao: `Entrega de Doses p/ Tarefa: ${tarefaSel.codigo} | Cliente: ${tarefaSel.cliente} | ${qtd} doses | ${form.observacao||''}`,
+        criado_por: userId
+      });
+      // 4. Atualizar doses_previstas da tarefa (opcional)
+      await sb.from('tarefas').update({ doses_previstas: qtd }).eq('id', tarefaSel.id);
+      toast(`Entrega de ${qtd} doses registrada para ${tarefaSel.codigo} ✓`, 'success');
+      setForm(f=>({...f, quantidade:'', observacao:'', tarefa_codigo:''}));
+      setTarefaSel(null); setTarefaBusca('');
+    } catch(err) { toast(err.message, 'error'); }
+    setSaving(false);
+  };
+
+  const executarDevolucao = async () => {
+    if (!form.vacina_id || !form.quantidade || !form.origem_id || !form.destino_id) {
+      toast('Preencha todos os campos', 'error'); return;
+    }
+    const qtdTotal = parseInt(form.quantidade);
+    const qtdDanif = form.tem_danificadas ? parseInt(form.qtd_danificadas||0) : 0;
+    const qtdBoa = qtdTotal - qtdDanif;
+    if (qtdDanif >= qtdTotal) { toast('Doses danificadas não pode ser maior ou igual ao total', 'error'); return; }
+    setSaving(true);
+    const userId = (await sb.auth.getUser()).data.user.id;
+    try {
+      // 1. Debitar total do aplicador
+      await debitarEstoque(form.vacina_id, 'aplicador', form.origem_id, qtdTotal);
+      // 2. Creditar doses boas na base
+      if (qtdBoa > 0) {
+        await creditarEstoque(form.vacina_id, 'base', form.destino_id, qtdBoa);
+        await sb.from('movimentacoes').insert({
+          tipo: 'devolucao', vacina_id: form.vacina_id, quantidade: qtdBoa,
+          origem_tipo: 'aplicador', origem_aplicador_id: form.origem_id,
+          destino_tipo: 'base', destino_base_id: form.destino_id,
+          observacao: `Devolução: ${qtdBoa} boas + ${qtdDanif} danificadas = ${qtdTotal} total | ${form.observacao||''}`,
+          criado_por: userId
+        });
+      }
+      // 3. Registrar descarte (danificadas somem do estoque — não creditam em lugar algum)
+      if (qtdDanif > 0) {
+        await sb.from('movimentacoes').insert({
+          tipo: 'descarte', vacina_id: form.vacina_id, quantidade: qtdDanif,
+          origem_tipo: 'aplicador', origem_aplicador_id: form.origem_id,
+          destino_tipo: 'base', destino_base_id: form.destino_id,
+          observacao: `DESCARTE: ${qtdDanif} doses danificadas de ${qtdTotal} devolvidas | ${form.observacao||''}`,
+          criado_por: userId
+        });
+      }
+      toast(`Devolução registrada: ${qtdBoa} para estoque${qtdDanif>0?` + ${qtdDanif} descartadas`:''} ✓`, 'success');
+      setForm(f=>({...f, quantidade:'', observacao:'', tem_danificadas:false, qtd_danificadas:''}));
+      carregarDescarte();
+    } catch(err) { toast(err.message, 'error'); }
+    setSaving(false);
+  };
+
+  const MODOS = [
+    { id:'transferencia', label:'↔ Transferência', desc:'Mover doses entre bases e aplicadores' },
+    { id:'entrega_doses', label:'📦 Entrega de Doses', desc:'Entregar doses para uma tarefa (sai do estoque)' },
+    { id:'devolucao', label:'↩ Devolução', desc:'Receber doses de volta de um aplicador' },
+  ];
+
+  return (
+    <div>
+      <div className="page-header">
+        <div><div className="page-title">Transferência de Estoque</div><div className="page-subtitle">Movimentações manuais de doses</div></div>
+      </div>
+
+      {/* Seletor de modo */}
+      <div style={{display:'flex',gap:10,marginBottom:16,flexWrap:'wrap'}}>
+        {MODOS.map(m => (
+          <div key={m.id} onClick={() => setModo(m.id)} style={{
+            flex:1, minWidth:180, padding:'12px 16px', borderRadius:'var(--radius-sm)',
+            border:`2px solid ${modo===m.id?'var(--accent)':'var(--border)'}`,
+            background: modo===m.id?'var(--accent-subtle)':'var(--bg-card)',
+            cursor:'pointer', transition:'all 0.15s'
+          }}>
+            <div style={{fontWeight:600,fontSize:14,color:modo===m.id?'var(--accent)':'var(--text-primary)'}}>{m.label}</div>
+            <div style={{fontSize:11,color:'var(--text-muted)',marginTop:2}}>{m.desc}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* TRANSFERÊNCIA */}
+      {modo === 'transferencia' && (
+        <div className="card">
+          <div className="form-grid">
+            <div className="form-group"><label className="form-label">Vacina *</label>
+              <select className="form-select" value={form.vacina_id} onChange={e=>setForm(f=>({...f,vacina_id:e.target.value}))}>
+                <option value="">Selecione...</option>{vacinas.map(v=><option key={v.id} value={v.id}>{v.nome} {v.lote?`(${v.lote})`:''}</option>)}
+              </select></div>
+            <div className="form-group"><label className="form-label">Quantidade *</label>
+              <input className="form-input" type="number" min="1" value={form.quantidade} onChange={e=>setForm(f=>({...f,quantidade:e.target.value}))} /></div>
+            <div className="form-group"><label className="form-label">Tipo Origem</label>
+              <select className="form-select" value={form.origem_tipo} onChange={e=>setForm(f=>({...f,origem_tipo:e.target.value,origem_id:''}))}>
+                <option value="base">Base</option><option value="aplicador">Aplicador</option>
+              </select></div>
+            <div className="form-group"><label className="form-label">Origem *</label>
+              {form.origem_tipo==='base' ? (
+                <select className="form-select" value={form.origem_id} onChange={e=>setForm(f=>({...f,origem_id:e.target.value}))}>
+                  <option value="">Selecione...</option>{bases.map(b=><option key={b.id} value={b.id}>{b.nome}</option>)}
+                </select>
+              ) : (
+                <div><input className="form-input" value={searchOrig} onChange={e=>{setSearchOrig(e.target.value);setForm(f=>({...f,origem_id:''}));searchAp(e.target.value,setOrigResults)}} placeholder="Buscar aplicador..." />
+                  {origResults.length>0 && !form.origem_id && <div style={{maxHeight:120,overflow:'auto',marginTop:2,border:'1px solid var(--border)',borderRadius:4,background:'var(--bg-card)'}}>{origResults.map(a=><div key={a.id} style={{padding:'6px 10px',fontSize:12,cursor:'pointer'}} onMouseEnter={e=>e.target.style.background='var(--bg-input)'} onMouseLeave={e=>e.target.style.background=''} onClick={()=>{setForm(f=>({...f,origem_id:a.id}));setSearchOrig(a.nome);setOrigResults([])}}>{a.nome} · {a.cpf}</div>)}</div>}
+                </div>
+              )}</div>
+            <div className="form-group"><label className="form-label">Tipo Destino</label>
+              <select className="form-select" value={form.destino_tipo} onChange={e=>setForm(f=>({...f,destino_tipo:e.target.value,destino_id:''}))}>
+                <option value="base">Base</option><option value="aplicador">Aplicador</option>
+              </select></div>
+            <div className="form-group"><label className="form-label">Destino *</label>
+              {form.destino_tipo==='base' ? (
+                <select className="form-select" value={form.destino_id} onChange={e=>setForm(f=>({...f,destino_id:e.target.value}))}>
+                  <option value="">Selecione...</option>{bases.map(b=><option key={b.id} value={b.id}>{b.nome}</option>)}
+                </select>
+              ) : (
+                <div><input className="form-input" value={searchDest} onChange={e=>{setSearchDest(e.target.value);setForm(f=>({...f,destino_id:''}));searchAp(e.target.value,setDestResults)}} placeholder="Buscar aplicador..." />
+                  {destResults.length>0 && !form.destino_id && <div style={{maxHeight:120,overflow:'auto',marginTop:2,border:'1px solid var(--border)',borderRadius:4,background:'var(--bg-card)'}}>{destResults.map(a=><div key={a.id} style={{padding:'6px 10px',fontSize:12,cursor:'pointer'}} onMouseEnter={e=>e.target.style.background='var(--bg-input)'} onMouseLeave={e=>e.target.style.background=''} onClick={()=>{setForm(f=>({...f,destino_id:a.id}));setSearchDest(a.nome);setDestResults([])}}>{a.nome} · {a.cpf}</div>)}</div>}
+                </div>
+              )}</div>
+            <div className="form-group" style={{gridColumn:'1/-1'}}><label className="form-label">Observação</label>
+              <input className="form-input" value={form.observacao} onChange={e=>setForm(f=>({...f,observacao:e.target.value}))} /></div>
+          </div>
+          <div style={{marginTop:16}}>
+            <button className="btn btn-primary" onClick={executarTransferencia} disabled={saving}>{saving?'Transferindo...':'↔ Transferir Estoque'}</button>
+          </div>
+        </div>
+      )}
+
+      {/* ENTREGA DE DOSES */}
+      {modo === 'entrega_doses' && (
+        <div className="card">
+          <div style={{padding:'10px 14px',background:'rgba(37,99,235,0.08)',border:'1px solid rgba(37,99,235,0.2)',borderRadius:'var(--radius-sm)',marginBottom:16,fontSize:12,color:'var(--accent)'}}>
+            📦 As doses <strong>saem do seu estoque</strong> e são entregues diretamente ao cliente. Não aparecem mais no saldo interno.
+          </div>
+          <div className="form-grid">
+            <div className="form-group"><label className="form-label">Vacina *</label>
+              <select className="form-select" value={form.vacina_id} onChange={e=>setForm(f=>({...f,vacina_id:e.target.value}))}>
+                <option value="">Selecione...</option>{vacinas.map(v=><option key={v.id} value={v.id}>{v.nome} {v.lote?`(${v.lote})`:''}</option>)}
+              </select></div>
+            <div className="form-group"><label className="form-label">Quantidade *</label>
+              <input className="form-input" type="number" min="1" value={form.quantidade} onChange={e=>setForm(f=>({...f,quantidade:e.target.value}))} /></div>
+            <div className="form-group"><label className="form-label">Origem *</label>
+              <select className="form-select" value={form.origem_tipo} onChange={e=>setForm(f=>({...f,origem_tipo:e.target.value,origem_id:''}))}>
+                <option value="base">Base</option><option value="aplicador">Aplicador</option>
+              </select>
+              {form.origem_tipo==='base' ? (
+                <select className="form-select" style={{marginTop:6}} value={form.origem_id} onChange={e=>setForm(f=>({...f,origem_id:e.target.value}))}>
+                  <option value="">Selecione a base...</option>{bases.map(b=><option key={b.id} value={b.id}>{b.nome}</option>)}
+                </select>
+              ) : (
+                <div style={{marginTop:6}}><input className="form-input" value={searchOrig} onChange={e=>{setSearchOrig(e.target.value);setForm(f=>({...f,origem_id:''}));searchAp(e.target.value,setOrigResults)}} placeholder="Buscar aplicador..." />
+                  {origResults.length>0 && !form.origem_id && <div style={{maxHeight:120,overflow:'auto',marginTop:2,border:'1px solid var(--border)',borderRadius:4,background:'var(--bg-card)'}}>{origResults.map(a=><div key={a.id} style={{padding:'6px 10px',fontSize:12,cursor:'pointer'}} onClick={()=>{setForm(f=>({...f,origem_id:a.id}));setSearchOrig(a.nome);setOrigResults([])}}>{a.nome} · {a.cpf}</div>)}</div>}
+                </div>
+              )}</div>
+            <div className="form-group"><label className="form-label">Tarefa Destino *</label>
+              <input className="form-input" value={tarefaBusca} onChange={e=>{setTarefaBusca(e.target.value);setTarefaSel(null);buscarTarefa(e.target.value)}} placeholder="Código da tarefa (ex: CG2026.SYG...)" />
+              {tarefaResultados.length>0 && !tarefaSel && (
+                <div style={{maxHeight:150,overflow:'auto',marginTop:2,border:'1px solid var(--border)',borderRadius:4,background:'var(--bg-card)'}}>
+                  {tarefaResultados.map(t => (
+                    <div key={t.id} style={{padding:'8px 10px',fontSize:12,cursor:'pointer',borderBottom:'1px solid var(--border)'}} onMouseEnter={e=>e.currentTarget.style.background='var(--bg-input)'} onMouseLeave={e=>e.currentTarget.style.background=''} onClick={()=>{setTarefaSel(t);setTarefaBusca(t.codigo);setTarefaResultados([])}}>
+                      <div style={{fontFamily:'JetBrains Mono',fontSize:11,color:'var(--accent)'}}>{t.codigo}</div>
+                      <div style={{color:'var(--text-muted)'}}>{t.cliente} · {t.cidade_campanha}/{t.uf_campanha} · {t.doses_previstas} doses previstas</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {tarefaSel && (
+                <div style={{marginTop:6,padding:'8px 10px',background:'var(--success-bg)',border:'1px solid rgba(16,185,129,0.3)',borderRadius:4,fontSize:12}}>
+                  ✓ <strong>{tarefaSel.codigo}</strong> · {tarefaSel.cliente}
+                  <button onClick={()=>{setTarefaSel(null);setTarefaBusca('');}} style={{marginLeft:8,background:'none',border:'none',color:'var(--danger)',cursor:'pointer',fontSize:12}}>✕</button>
+                </div>
+              )}
+            </div>
+            <div className="form-group" style={{gridColumn:'1/-1'}}><label className="form-label">Observação</label>
+              <input className="form-input" value={form.observacao} onChange={e=>setForm(f=>({...f,observacao:e.target.value}))} placeholder="Ex: Entrega direta ao cliente conforme pedido #123" /></div>
+          </div>
+          <div style={{marginTop:16}}>
+            <button className="btn btn-primary" onClick={executarEntregaDoses} disabled={saving||!tarefaSel}>
+              {saving?'Registrando...':'📦 Registrar Entrega de Doses'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* DEVOLUÇÃO */}
+      {modo === 'devolucao' && (
+        <div className="card">
+          <div style={{padding:'10px 14px',background:'rgba(16,185,129,0.08)',border:'1px solid rgba(16,185,129,0.2)',borderRadius:'var(--radius-sm)',marginBottom:16,fontSize:12,color:'var(--success)'}}>
+            ↩ O total de doses sai do aplicador. As doses boas voltam para a base. Doses danificadas vão para Descarte (sem aparecer no estoque operacional).
+          </div>
+          <div className="form-grid">
+            <div className="form-group"><label className="form-label">Vacina *</label>
+              <select className="form-select" value={form.vacina_id} onChange={e=>setForm(f=>({...f,vacina_id:e.target.value}))}>
+                <option value="">Selecione...</option>{vacinas.map(v=><option key={v.id} value={v.id}>{v.nome} {v.lote?`(${v.lote})`:''}</option>)}
+              </select></div>
+            <div className="form-group"><label className="form-label">Total devolvido *</label>
+              <input className="form-input" type="number" min="1" value={form.quantidade} onChange={e=>setForm(f=>({...f,quantidade:e.target.value}))} placeholder="Ex: 100" /></div>
+            <div className="form-group"><label className="form-label">Aplicador (origem) *</label>
+              <input className="form-input" value={searchOrig} onChange={e=>{setSearchOrig(e.target.value);setForm(f=>({...f,origem_id:''}));searchAp(e.target.value,setOrigResults)}} placeholder="Buscar aplicador..." />
+              {origResults.length>0 && !form.origem_id && <div style={{maxHeight:120,overflow:'auto',marginTop:2,border:'1px solid var(--border)',borderRadius:4,background:'var(--bg-card)'}}>{origResults.map(a=><div key={a.id} style={{padding:'6px 10px',fontSize:12,cursor:'pointer'}} onClick={()=>{setForm(f=>({...f,origem_id:a.id}));setSearchOrig(a.nome);setOrigResults([])}}>{a.nome} · {a.cpf}</div>)}</div>}
+            </div>
+            <div className="form-group"><label className="form-label">Base destino (doses boas) *</label>
+              <select className="form-select" value={form.destino_id} onChange={e=>setForm(f=>({...f,destino_id:e.target.value}))}>
+                <option value="">Selecione...</option>{bases.map(b=><option key={b.id} value={b.id}>{b.nome}</option>)}
+              </select></div>
+            {/* Danificadas */}
+            <div className="form-group" style={{gridColumn:'1/-1'}}>
+              <label style={{display:'flex',alignItems:'center',gap:8,cursor:'pointer',fontSize:13,fontWeight:600}}>
+                <input type="checkbox" checked={form.tem_danificadas} onChange={e=>setForm(f=>({...f,tem_danificadas:e.target.checked,qtd_danificadas:''}))} style={{width:16,height:16}} />
+                Tem doses danificadas? (irão para Descarte)
+              </label>
+            </div>
+            {form.tem_danificadas && (
+              <div className="form-group">
+                <label className="form-label">Quantidade danificadas *</label>
+                <input className="form-input" type="number" min="1" max={form.quantidade||999} value={form.qtd_danificadas} onChange={e=>setForm(f=>({...f,qtd_danificadas:e.target.value}))} placeholder="Ex: 10" />
+                {form.quantidade && form.qtd_danificadas && (
+                  <div style={{marginTop:6,fontSize:12,display:'flex',gap:12}}>
+                    <span style={{color:'var(--success)'}}>✓ Para base: <strong>{parseInt(form.quantidade)-parseInt(form.qtd_danificadas||0)}</strong></span>
+                    <span style={{color:'var(--danger)'}}>🗑 Descarte: <strong>{form.qtd_danificadas}</strong></span>
+                  </div>
+                )}
+              </div>
+            )}
+            <div className="form-group" style={{gridColumn:'1/-1'}}><label className="form-label">Observação</label>
+              <input className="form-input" value={form.observacao} onChange={e=>setForm(f=>({...f,observacao:e.target.value}))} placeholder="Ex: Devolução campanha 12/05 — embalagem danificada" /></div>
+          </div>
+          <div style={{marginTop:16}}>
+            <button className="btn btn-primary" onClick={executarDevolucao} disabled={saving}>
+              {saving?'Registrando...':'↩ Registrar Devolução'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* HISTÓRICO DE DESCARTE */}
+      {historicoDescarte.length > 0 && (
+        <div className="card" style={{marginTop:16}}>
+          <div className="card-header">
+            <div className="card-title">🗑 Histórico de Descarte</div>
+          </div>
+          <div className="table-wrap">
+            <table>
+              <thead><tr><th>Data</th><th>Vacina</th><th>Qtd</th><th>Aplicador Origem</th><th>Usuário</th><th>Observação</th></tr></thead>
+              <tbody>
+                {historicoDescarte.map(h => (
+                  <tr key={h.id}>
+                    <td style={{fontSize:11}}>{new Date(h.created_at).toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',year:'2-digit',hour:'2-digit',minute:'2-digit'})}</td>
+                    <td>{h.vacinas?.nome||'—'}</td>
+                    <td className="mono" style={{fontWeight:700,color:'var(--danger)'}}>{h.quantidade}</td>
+                    <td>{h.aplic_orig?.nome||h.bases_orig?.nome||'—'}</td>
+                    <td style={{fontSize:11}}>{h.profiles?.nome||'—'}</td>
+                    <td style={{fontSize:10,color:'var(--text-muted)',maxWidth:200,overflow:'hidden',textOverflow:'ellipsis'}}>{h.observacao||'—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
   useEffect(() => {
     sb.from('bases').select('id, nome').eq('ativa', true).order('nome').then(r => setBases(r.data||[]));
@@ -5468,43 +5858,6 @@ function TransferenciaPage() {
     }
     setSaving(false);
   };
-
-  return (
-    <div>
-      <div className="page-header"><div><div className="page-title">Transferência de Estoque</div><div className="page-subtitle">Mover doses entre bases e aplicadores</div></div></div>
-      <div className="card">
-        <div className="form-grid">
-          <div className="form-group"><label className="form-label">Vacina *</label>
-            <select className="form-select" value={form.vacina_id} onChange={e=>setForm(f=>({...f,vacina_id:e.target.value}))}><option value="">Selecione...</option>{vacinas.map(v=><option key={v.id} value={v.id}>{v.nome} {v.lote?`(${v.lote})`:''}</option>)}</select></div>
-          <div className="form-group"><label className="form-label">Quantidade *</label>
-            <input className="form-input" type="number" min="1" value={form.quantidade} onChange={e=>setForm(f=>({...f,quantidade:e.target.value}))} /></div>
-          <div className="form-group"><label className="form-label">Tipo Origem</label>
-            <select className="form-select" value={form.origem_tipo} onChange={e=>setForm(f=>({...f,origem_tipo:e.target.value,origem_id:''}))}><option value="base">Base</option><option value="aplicador">Aplicador</option></select></div>
-          <div className="form-group"><label className="form-label">Origem *</label>
-            {form.origem_tipo==='base' ? (
-              <select className="form-select" value={form.origem_id} onChange={e=>setForm(f=>({...f,origem_id:e.target.value}))}><option value="">Selecione...</option>{bases.map(b=><option key={b.id} value={b.id}>{b.nome}</option>)}</select>
-            ) : (
-              <div><input className="form-input" value={searchOrig} onChange={e=>{setSearchOrig(e.target.value);searchAp(e.target.value,setOrigResults)}} placeholder="Buscar..." />
-                {origResults.length>0 && !form.origem_id && <div style={{maxHeight:100,overflow:'auto',marginTop:2,border:'1px solid var(--border)',borderRadius:4}}>{origResults.map(a=><div key={a.id} style={{padding:6,fontSize:12,cursor:'pointer'}} onClick={()=>{setForm(f=>({...f,origem_id:a.id}));setSearchOrig(a.nome);setOrigResults([])}}>{a.nome} ({a.cpf})</div>)}</div>}</div>
-            )}</div>
-          <div className="form-group"><label className="form-label">Tipo Destino</label>
-            <select className="form-select" value={form.destino_tipo} onChange={e=>setForm(f=>({...f,destino_tipo:e.target.value,destino_id:''}))}><option value="base">Base</option><option value="aplicador">Aplicador</option></select></div>
-          <div className="form-group"><label className="form-label">Destino *</label>
-            {form.destino_tipo==='base' ? (
-              <select className="form-select" value={form.destino_id} onChange={e=>setForm(f=>({...f,destino_id:e.target.value}))}><option value="">Selecione...</option>{bases.map(b=><option key={b.id} value={b.id}>{b.nome}</option>)}</select>
-            ) : (
-              <div><input className="form-input" value={searchDest} onChange={e=>{setSearchDest(e.target.value);searchAp(e.target.value,setDestResults)}} placeholder="Buscar..." />
-                {destResults.length>0 && !form.destino_id && <div style={{maxHeight:100,overflow:'auto',marginTop:2,border:'1px solid var(--border)',borderRadius:4}}>{destResults.map(a=><div key={a.id} style={{padding:6,fontSize:12,cursor:'pointer'}} onClick={()=>{setForm(f=>({...f,destino_id:a.id}));setSearchDest(a.nome);setDestResults([])}}>{a.nome} ({a.cpf})</div>)}</div>}</div>
-            )}</div>
-          <div className="form-group" style={{gridColumn:'1/-1'}}><label className="form-label">Observação</label>
-            <input className="form-input" value={form.observacao} onChange={e=>setForm(f=>({...f,observacao:e.target.value}))} /></div>
-        </div>
-        <div style={{marginTop:16}}><button className="btn btn-primary" onClick={transfer} disabled={saving}>{saving ? 'Transferindo...' : '↔ Transferir Estoque'}</button></div>
-      </div>
-    </div>
-  );
-}
-
 
 // ═══════════════════════════════════════════════
 // PLACEHOLDER PAGES
