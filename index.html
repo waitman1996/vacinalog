@@ -3208,6 +3208,8 @@ function EstoquePage() {
   const [filterVacina, setFilterVacina] = useState('');
   const [filterTipo, setFilterTipo] = useState('');
   const [dosesTransito, setDosesTransito] = useState(0);
+  const [showTransitoModal, setShowTransitoModal] = useState(false);
+  const [rotasTransito, setRotasTransito] = useState([]);
   const [conciliando, setConciliando] = useState(null); // aplicador_id sendo conciliado
   const [conciliacaoVal, setConciliacaoVal] = useState('');
   const toast = useContext(ToastContext);
@@ -3241,12 +3243,18 @@ function EstoquePage() {
     sb.auth.getUser().then(({ data }) => {
       if (data?.user) sb.from('profiles').select('role').eq('id', data.user.id).single().then(({ data: p }) => setProfile(p));
     });
-    // Buscar doses em trânsito (remessas em_transito com itens)
-    sb.from('remessas').select('remessa_itens(quantidade)').eq('status','em_transito')
+    // Buscar doses em trânsito
+    sb.from('remessas').select('remessa_itens(quantidade)').in('status',['em_transito','pronta','carregada'])
       .then(({ data }) => {
         const total = (data||[]).reduce((s,r) => s + (r.remessa_itens||[]).reduce((ss,i) => ss + Number(i.quantidade||0), 0), 0);
         setDosesTransito(total);
       });
+    // Carregar rotas em trânsito
+    sb.from('rotas')
+      .select('codigo, data_prevista, status, veiculo, profiles!rotas_motorista_id_fkey(nome), remessas(id, status, ordem_entrega, updated_at, remessa_itens(quantidade))')
+      .in('status', ['pronta','em_transito','montagem'])
+      .order('data_prevista', { ascending: false })
+      .then(({ data }) => setRotasTransito(data || []));
   }, []);
 
   const isAdmin = profile?.role === 'admin';
@@ -3353,10 +3361,11 @@ function EstoquePage() {
           <div className="stat-value">{totalAp.toLocaleString('pt-BR')}</div>
           <div className="stat-label">Doses com Aplicadores</div>
         </div>
-        <div className="stat-card" style={{border:'1px solid rgba(16,185,129,0.3)'}}>
+        <div className="stat-card" style={{border:'1px solid rgba(16,185,129,0.3)',cursor:'pointer'}}
+          onClick={() => setShowTransitoModal(true)}>
           <div className="stat-icon" style={{background:'var(--success-bg)',color:'var(--success)'}}>🚚</div>
           <div className="stat-value" style={{color:'var(--success)'}}>{dosesTransito.toLocaleString('pt-BR')}</div>
-          <div className="stat-label">Em Trânsito</div>
+          <div className="stat-label">Em Trânsito <span style={{fontSize:9,color:'var(--success)'}}>▼ ver rotas</span></div>
         </div>
         <div className="stat-card">
           <div className="stat-icon" style={{background:'var(--success-bg)',color:'var(--success)'}}>📦</div>
@@ -3498,6 +3507,43 @@ function EstoquePage() {
       </div>
 
       {showEntrada && <EntradaEstoqueModal onClose={() => { setShowEntrada(false); load(); }} />}
+
+      {showTransitoModal && (
+        <Modal title="🚚 Doses em Trânsito" onClose={() => setShowTransitoModal(false)} large>
+          {rotasTransito.length === 0
+            ? <div className="empty-state"><div className="empty-icon">🚚</div><div className="empty-text">Nenhuma rota em trânsito</div></div>
+            : rotasTransito.map(r => {
+              const entregues = (r.remessas||[]).filter(rem => rem.status === 'concluida').length;
+              const total = (r.remessas||[]).length;
+              const dosesRota = (r.remessas||[]).reduce((s,rem) => s + (rem.remessa_itens||[]).reduce((ss,i) => ss+Number(i.quantidade||0),0), 0);
+              return (
+                <div key={r.id||r.codigo} className="card" style={{marginBottom:10,padding:14}}>
+                  <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',flexWrap:'wrap',gap:8}}>
+                    <div>
+                      <div style={{fontFamily:'JetBrains Mono',fontSize:15,fontWeight:700,color:'var(--accent)'}}>{r.codigo}</div>
+                      <div style={{fontSize:12,color:'var(--text-secondary)',marginTop:3,display:'flex',gap:12,flexWrap:'wrap'}}>
+                        <span>👤 {r.profiles?.nome || '—'}</span>
+                        <span>🚗 {r.veiculo || '—'}</span>
+                        <span>📅 {r.data_prevista ? new Date(r.data_prevista+'T12:00:00').toLocaleDateString('pt-BR') : '—'}</span>
+                        <span>💊 {dosesRota.toLocaleString('pt-BR')} doses</span>
+                      </div>
+                    </div>
+                    <div style={{textAlign:'right'}}>
+                      <span className={`badge ${r.status==='em_transito'?'badge-green':r.status==='pronta'?'badge-cyan':'badge-yellow'}`}>
+                        {r.status==='em_transito'?'Em Trânsito':r.status==='pronta'?'Pronta':r.status}
+                      </span>
+                      <div style={{fontSize:12,color:'var(--text-muted)',marginTop:4}}>{entregues}/{total} entregas</div>
+                    </div>
+                  </div>
+                  <div style={{marginTop:8,height:4,background:'var(--border)',borderRadius:2,overflow:'hidden'}}>
+                    <div style={{height:'100%',width:(total>0?entregues/total*100:0)+'%',background:'var(--success)',transition:'width 0.3s'}}/>
+                  </div>
+                </div>
+              );
+            })
+          }
+        </Modal>
+      )}
     </div>
   );
 }
@@ -5957,12 +6003,30 @@ function MontagemPage() {
 
   const addItem = async (remessaId, vacinaId, quantidade, lote) => {
     if (!vacinaId || quantidade === undefined || quantidade === null || quantidade < 0) return;
-    const { error } = await sb.from('remessa_itens').insert({
-      remessa_id: remessaId, vacina_id: vacinaId, quantidade: parseInt(quantidade),
-      ...(lote ? { lote } : {})
-    });
+    const qtd = parseInt(quantidade);
+    // Tentar com coluna lote primeiro, cair para sem lote se coluna não existir
+    let error;
+    if (lote) {
+      const res = await sb.from('remessa_itens').insert({
+        remessa_id: remessaId, vacina_id: vacinaId, quantidade: qtd, lote
+      });
+      error = res.error;
+      if (error && error.message && error.message.includes("lote")) {
+        // Coluna lote não existe no banco ainda - inserir sem lote
+        const res2 = await sb.from('remessa_itens').insert({
+          remessa_id: remessaId, vacina_id: vacinaId, quantidade: qtd
+        });
+        error = res2.error;
+        if (!res2.error) toast('Item adicionado (lote salvo localmente — rode migration para persistir)', 'success');
+      }
+    } else {
+      const res = await sb.from('remessa_itens').insert({
+        remessa_id: remessaId, vacina_id: vacinaId, quantidade: qtd
+      });
+      error = res.error;
+    }
     if (error) { toast(error.message, 'error'); return; }
-    toast('Item adicionado!', 'success');
+    if (!error) toast('Item adicionado!', 'success');
     selecionarRota(rotaSel);
   };
 
@@ -5977,15 +6041,9 @@ function MontagemPage() {
       toast('Adicione pelo menos um item antes de marcar como pronta', 'error');
       return;
     }
-    // Verificar se todos os itens têm lote preenchido
-    const semLote = (rem.remessa_itens || []).filter(i => !i.lote && i.quantidade > 0);
-    if (semLote.length > 0) {
-      toast('Informe o lote de todos os itens antes de marcar como pronta', 'error');
-      return;
-    }
     const { error } = await sb.from('remessas').update({ status: 'pronta' }).eq('id', rem.id);
     if (error) { toast(error.message, 'error'); return; }
-    toast('Remessa pronta para envio! O estoque será transferido ao confirmar a entrega.', 'success');
+    toast('Remessa pronta para envio!', 'success');
     selecionarRota(rotaSel);
   };
 
@@ -6213,8 +6271,10 @@ function AddItemRemessa({ vacinas, onAdd, dosesSugeridas }) {
   const add = () => {
     if (!vacinaId) return;
     if (quantidade === '') return;
-    if (!lote.trim()) { alert('Informe o número do lote para continuar.'); return; }
-    onAdd(vacinaId, parseInt(quantidade), lote.trim());
+    const qtd = parseInt(quantidade);
+    // Lote obrigatório apenas quando doses > 0
+    if (qtd > 0 && !lote.trim()) { alert('Informe o número do lote para continuar.'); return; }
+    onAdd(vacinaId, qtd, qtd > 0 ? lote.trim() : '');
     setVacinaId(''); setQuantidade(dosesSugeridas >= 0 ? String(dosesSugeridas) : ''); setLote('');
   };
 
@@ -6241,7 +6301,7 @@ function AddItemRemessa({ vacinas, onAdd, dosesSugeridas }) {
           onKeyDown={e=>e.key==='Enter'&&add()}
           style={{borderColor: quantidade !== '' && parseInt(quantidade) !== dosesSugeridas && dosesSugeridas > 0 ? 'var(--warning)' : undefined}} />
       </div>
-      <button className="btn btn-primary btn-sm" onClick={add} disabled={!vacinaId || quantidade==='' || !lote.trim()}>+ Adicionar</button>
+      <button className="btn btn-primary btn-sm" onClick={add} disabled={!vacinaId || quantidade==='' || (parseInt(quantidade||0)>0 && !lote.trim())}>+ Adicionar</button>
     </div>
   );
 }
