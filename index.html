@@ -656,7 +656,7 @@ function LoginScreen({ onLogin }) {
 // ═══════════════════════════════════════════════
 // SIDEBAR
 // ═══════════════════════════════════════════════
-function Sidebar({ profile, currentPage, onNavigate, open, onClose, collapsed, onToggleCollapse }) {
+function Sidebar({ profile, currentPage, onNavigate, open, onClose, collapsed, onToggleCollapse, theme, onToggleTheme }) {
   const role = profile?.role || 'aplicador';
   const menuItems = [];
 
@@ -765,26 +765,16 @@ function Sidebar({ profile, currentPage, onNavigate, open, onClose, collapsed, o
         </div>
         {!collapsed && (
           <div>
-            <button onClick={() => {
-              const isLight = document.documentElement.classList.toggle('light');
-              localStorage.setItem('vacinalog-theme', isLight ? 'light' : 'dark');
-              // Force re-render
-              document.querySelector('.btn-theme-toggle').textContent = isLight ? '🌙 Tema Escuro' : '☀️ Tema Claro';
-            }} className="btn btn-secondary btn-sm btn-theme-toggle" style={{width:'100%',marginBottom:6,fontSize:11,display:'flex',alignItems:'center',justifyContent:'center',gap:6}}>
-              {document.documentElement.classList.contains('light') ? '🌙 Tema Escuro' : '☀️ Tema Claro'}
+            <button onClick={onToggleTheme} className="btn btn-secondary btn-sm" style={{width:'100%',marginBottom:6,fontSize:11,display:'flex',alignItems:'center',justifyContent:'center',gap:6}}>
+              {theme === 'light' ? '🌙 Tema Escuro' : '☀️ Tema Claro'}
             </button>
             <button className="btn-logout" onClick={async () => { await sb.auth.signOut(); window.location.reload(); }}>Sair</button>
           </div>
         )}
         {collapsed && (
           <div>
-            <button onClick={() => {
-              const isLight = document.documentElement.classList.toggle('light');
-              localStorage.setItem('vacinalog-theme', isLight ? 'light' : 'dark');
-              const btn = document.querySelector('.btn-theme-collapsed');
-              if (btn) btn.textContent = isLight ? '🌙' : '☀️';
-            }} className="btn btn-secondary btn-sm btn-theme-collapsed" title="Alternar tema" style={{width:'100%',marginBottom:6,fontSize:14,padding:'4px 0'}}>
-              {document.documentElement.classList.contains('light') ? '🌙' : '☀️'}
+            <button onClick={onToggleTheme} className="btn btn-secondary btn-sm" title="Alternar tema" style={{width:'100%',marginBottom:6,fontSize:14,padding:'4px 0'}}>
+              {theme === 'light' ? '🌙' : '☀️'}
             </button>
             <button title="Sair" onClick={async () => { await sb.auth.signOut(); window.location.reload(); }}
               style={{background:'none',border:'none',color:'var(--danger)',cursor:'pointer',fontSize:18,marginTop:8,width:'100%',textAlign:'center'}}>⏻</button>
@@ -7330,6 +7320,104 @@ async function transferirEstoqueDireto({ vacina_id, quantidade, origem_base_id, 
 }
 
 
+
+// ── Modal de Detalhes da Entrega (assinatura, local, nome, cpf) ──
+function EntregaDetalheModal({ remessa, rota, onClose }) {
+  const obs = remessa.observacao || '';
+
+  // Extrair dados da assinatura
+  const sigMatch = obs.match(/\[ASSINATURA ([^\]]+)\] Recebido por: ([^[]+?)(?:\(CPF: ([^)]+)\))?\s*\[SIG_IMG:([^:]+:[^:]+):END_SIG\]/);
+  const sigMatchSimple = obs.match(/\[ASSINATURA ([^\]]+)\] Recebido por: ([^\n\[]+?)(?:\s*\(CPF: ([^)]+)\))?/);
+  
+  const horaAssinatura = sigMatch ? sigMatch[1] : (sigMatchSimple ? sigMatchSimple[1] : '—');
+  const nomeRecebedor = sigMatch ? sigMatch[2].trim() : (sigMatchSimple ? sigMatchSimple[2].trim() : '—');
+  const cpfRecebedor = sigMatch ? (sigMatch[3]||'').trim() : (sigMatchSimple ? (sigMatchSimple[3]||'').trim() : '');
+  const sigImg = sigMatch ? sigMatch[4] : null;
+
+  // Extrair localização da entrega
+  const localMatch = obs.match(/\[ENTREGA_LOCAL:([\d.-]+),([\d.-]+):END_LOCAL\]/);
+  const entregaLat = localMatch ? localMatch[1] : null;
+  const entregaLng = localMatch ? localMatch[2] : null;
+
+  const destNome = remessa.destino_tipo === 'aplicador' ? remessa.aplicadores?.nome : remessa.bases?.nome;
+  const destCidade = remessa.destino_tipo === 'base'
+    ? (remessa.bases?.cidade||'')+'/'+(remessa.bases?.uf||'')
+    : (remessa.aplicadores?.cidade||'')+'/'+(remessa.aplicadores?.uf||'');
+  const doses = (remessa.remessa_itens||[]).reduce((s,i)=>s+i.quantidade,0);
+
+  return (
+    <Modal title="Detalhes da Entrega" onClose={onClose} large>
+      <div style={{display:'flex',flexDirection:'column',gap:16}}>
+        {/* Remessa info */}
+        <div style={{padding:12,background:'var(--bg-input)',borderRadius:'var(--radius-sm)',border:'1px solid var(--border)'}}>
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,fontSize:13}}>
+            <div><span style={{color:'var(--text-muted)'}}>Remessa:</span> <strong style={{fontFamily:'JetBrains Mono',color:'var(--accent)'}}>{remessa.codigo_rastreio}</strong></div>
+            <div><span style={{color:'var(--text-muted)'}}>Rota:</span> <strong>{rota.codigo}</strong></div>
+            <div><span style={{color:'var(--text-muted)'}}>Aplicador:</span> <strong>{destNome||'—'}</strong></div>
+            <div><span style={{color:'var(--text-muted)'}}>Doses:</span> <strong style={{color:'var(--success)'}}>{doses}</strong></div>
+            <div style={{gridColumn:'1/-1'}}><span style={{color:'var(--text-muted)'}}>Local:</span> {destCidade}</div>
+          </div>
+        </div>
+
+        {/* Dados do recebedor */}
+        <div style={{padding:14,background:'var(--success-bg)',border:'1px solid rgba(16,185,129,0.3)',borderRadius:'var(--radius-sm)'}}>
+          <div style={{fontSize:12,fontWeight:700,color:'var(--success)',marginBottom:10,textTransform:'uppercase',letterSpacing:1}}>✓ Entrega Confirmada</div>
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,fontSize:13}}>
+            <div><span style={{color:'var(--text-muted)'}}>Recebido por:</span> <strong>{nomeRecebedor}</strong></div>
+            <div><span style={{color:'var(--text-muted)'}}>CPF:</span> <strong>{cpfRecebedor || '—'}</strong></div>
+            <div><span style={{color:'var(--text-muted)'}}>Hora:</span> <strong>{horaAssinatura}</strong></div>
+            {entregaLat && (
+              <div>
+                <span style={{color:'var(--text-muted)'}}>Local GPS:</span>{' '}
+                <button className="btn btn-secondary btn-sm" style={{fontSize:10,padding:'2px 8px'}}
+                  onClick={() => window.open('https://www.google.com/maps?q='+entregaLat+','+entregaLng, '_blank')}>
+                  📍 Ver no Mapa
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Assinatura */}
+        {sigImg && (
+          <div>
+            <div style={{fontSize:12,fontWeight:600,color:'var(--text-secondary)',marginBottom:6}}>Assinatura do Responsável</div>
+            <div style={{background:'#fff',border:'2px solid var(--border)',borderRadius:'var(--radius)',padding:8,textAlign:'center'}}>
+              <img src={sigImg} alt="Assinatura" style={{maxWidth:'100%',height:120,objectFit:'contain'}} />
+            </div>
+          </div>
+        )}
+        {!sigImg && (
+          <div style={{padding:12,background:'var(--warning-bg)',borderRadius:'var(--radius-sm)',fontSize:12,color:'var(--warning)'}}>
+            ⚠ Assinatura digital não disponível para esta entrega (formato antigo ou sem assinatura)
+          </div>
+        )}
+
+        {/* Localização da entrega no mapa */}
+        {entregaLat && (
+          <div>
+            <div style={{fontSize:12,fontWeight:600,color:'var(--text-secondary)',marginBottom:6}}>Localização da Entrega</div>
+            <div style={{borderRadius:'var(--radius)',overflow:'hidden',border:'1px solid var(--border)',height:200}}>
+              <iframe
+                title="Mapa da entrega"
+                width="100%" height="200" frameBorder="0" style={{border:0}}
+                src={'https://www.google.com/maps/embed/v1/place?key=AIzaSyBFw0Qbyq9zTFTd-tUY6dZWTgaQzuU17R8&q='+entregaLat+','+entregaLng+'&zoom=15'}
+                allowFullScreen
+                onError={(e) => { e.target.style.display='none'; }}
+              />
+            </div>
+            <div style={{fontSize:10,color:'var(--text-muted)',marginTop:4}}>Coordenadas: {entregaLat}, {entregaLng}</div>
+          </div>
+        )}
+
+        <div className="modal-actions">
+          <button className="btn btn-secondary" onClick={onClose}>Fechar</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 // ── Modal de Assinatura Digital para Entrega ──
 function AssinaturaEntregaModal({ remessa, rota, onConfirm, onClose }) {
   const canvasRef = React.useRef(null);
@@ -7414,13 +7502,22 @@ function AssinaturaEntregaModal({ remessa, rota, onConfirm, onClose }) {
     if (!hasSignature) { alert('Por favor, assine no campo abaixo.'); return; }
     if (!nome.trim()) { alert('Informe o nome do responsável.'); return; }
     setSaving(true);
-    // Salvar assinatura como base64 na observação da remessa
     const sigData = canvasRef.current.toDataURL('image/png');
-    const sigInfo = '\n[ASSINATURA ' + new Date().toLocaleTimeString('pt-BR') + '] Recebido por: ' + nome.trim() + (cpf.trim() ? ' (CPF: ' + cpf.trim() + ')' : '');
+    const now = new Date();
+    const sigInfo = '\n[ASSINATURA ' + now.toLocaleTimeString('pt-BR') + '] Recebido por: ' + nome.trim() + (cpf.trim() ? ' (CPF: ' + cpf.trim() + ')' : '') + ' [SIG_IMG:' + sigData + ':END_SIG]';
     const obsAtual = remessa.observacao || '';
+
+    // Tentar salvar localização da entrega
+    let locStr = '';
+    try {
+      const pos = await new Promise((res, rej) => {
+        navigator.geolocation.getCurrentPosition(p => res(p), () => res(null), {timeout:5000});
+      });
+      if (pos) locStr = ' [ENTREGA_LOCAL:' + pos.coords.latitude.toFixed(6) + ',' + pos.coords.longitude.toFixed(6) + ':END_LOCAL]';
+    } catch(e) {}
+
     await sb.from('remessas').update({
-      observacao: obsAtual + sigInfo,
-      // Salvar assinatura como metadado (se houver coluna)
+      observacao: obsAtual + sigInfo + locStr,
     }).eq('id', remessa.id);
     await onConfirm(remessa.id);
     setSaving(false);
@@ -7502,6 +7599,7 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
   const [checkoutModal, setCheckoutModal] = useState(false);
   const [checkinModal, setCheckinModal] = useState(false);
   const [assinaturaModal, setAssinaturaModal] = useState(null);
+  const [entregaDetalhe, setEntregaDetalhe] = useState(null);
   const [gpsAtivo, setGpsAtivo] = useState(false);
   const toast = useContext(ToastContext);
 
@@ -8069,6 +8167,13 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
                     </button>
                   )}
 
+                  {/* Botão ver detalhes da entrega (assinatura, local, etc) */}
+                  {isConcluida && (rem.observacao||'').includes('[ASSINATURA') && (
+                    <button className="btn btn-secondary btn-sm" style={{marginTop:4}} onClick={() => setEntregaDetalhe(rem)}>
+                      📋 Ver Entrega
+                    </button>
+                  )}
+
                   {rem.observacao && rem.observacao.includes('[PROBLEMA') && (
                     <div style={{marginTop:8,padding:'6px 10px',background:'var(--danger-bg)',borderRadius:'var(--radius-sm)',fontSize:11,color:'var(--danger)'}}>
                       {rem.observacao.split('\n').filter(l=>l.includes('[PROBLEMA')).join(' | ')}
@@ -8082,6 +8187,11 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
       </div>
 
       
+      {/* Modal Detalhes da Entrega */}
+      {entregaDetalhe && (
+        <EntregaDetalheModal remessa={entregaDetalhe} rota={rota} onClose={() => setEntregaDetalhe(null)} />
+      )}
+
       {/* Modal Assinatura de Entrega */}
       {assinaturaModal && (
         <AssinaturaEntregaModal
@@ -9107,6 +9217,15 @@ function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [conferirDados, setConferirDados] = useState(null);
   const [viewAs, setViewAs] = useState(null); // null = perfil real, ou 'admin'|'planejador'|'motorista' etc
+  const [theme, setTheme] = useState(() => localStorage.getItem('vacinalog-theme') || 'dark');
+
+  const toggleTheme = () => {
+    const next = theme === 'dark' ? 'light' : 'dark';
+    setTheme(next);
+    localStorage.setItem('vacinalog-theme', next);
+    if (next === 'light') document.documentElement.classList.add('light');
+    else document.documentElement.classList.remove('light');
+  };
 
   useEffect(() => {
     sb.auth.getSession().then(({ data: { session } }) => setSession(session));
@@ -9202,7 +9321,8 @@ function App() {
       <Sidebar profile={effectiveProfile} currentPage={currentPage}
         onNavigate={(page) => { setCurrentPage(page); setSidebarOpen(false); }}
         open={sidebarOpen} onClose={() => setSidebarOpen(false)}
-        collapsed={sidebarCollapsed} onToggleCollapse={() => setSidebarCollapsed(c => !c)} />
+        collapsed={sidebarCollapsed} onToggleCollapse={() => setSidebarCollapsed(c => !c)}
+        theme={theme} onToggleTheme={toggleTheme} />
       <div className={`main-content ${sidebarCollapsed ? 'collapsed' : ''}`}>
         {isAdmin && (
           <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:16,padding:'8px 14px',background:'var(--bg-card)',borderRadius:'var(--radius-sm)',border:'1px solid var(--border)',flexWrap:'wrap'}}>
