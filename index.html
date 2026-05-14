@@ -688,10 +688,20 @@ function Sidebar({ profile, currentPage, onNavigate, open, onClose, collapsed, o
           ) : (
             <div key={item.id} className={`nav-item ${currentPage === item.id ? 'active' : ''}`}
               title={collapsed ? item.label : ''}
-              onClick={() => { onNavigate(item.id); onClose(); }}
-              style={collapsed ? {justifyContent:'center',padding:'10px 0'} : {}}>
+              style={{...(collapsed ? {justifyContent:'center',padding:'10px 0'} : {}), position:'relative', paddingRight: collapsed ? undefined : 28}}
+              onClick={() => { onNavigate(item.id); onClose(); }}>
               <span className="nav-icon">{item.icon}</span>
               {!collapsed && <span className="nav-label">{item.label}</span>}
+              {!collapsed && (
+                <span
+                  title={`Abrir ${item.label} em nova aba`}
+                  onClick={e => { e.stopPropagation(); window.open(window.location.href + '?page=' + item.id, '_blank'); }}
+                  style={{position:'absolute',right:6,opacity:0,transition:'opacity 0.15s',fontSize:11,color:'var(--text-muted)',cursor:'pointer',padding:'2px 4px',borderRadius:3}}
+                  onMouseEnter={e=>e.currentTarget.style.opacity='1'}
+                  onMouseLeave={e=>e.currentTarget.style.opacity='0'}>
+                  ↗
+                </span>
+              )}
             </div>
           )
         )}
@@ -2198,6 +2208,16 @@ function ImportConsulta() {
           const { id, dosesAntigas, dosesNovas, escala, ...fields } = t;
           delete fields.importacao_id;
 
+          // REGRA: não pode diminuir doses aplicadas
+          if (dosesNovas < dosesAntigas) {
+            console.warn(`Ignorando ${fields.codigo||id}: tentativa de diminuir doses (${dosesAntigas} → ${dosesNovas})`);
+            ignored++;
+            continue;
+          }
+
+          // REGRA: sem alteração nas doses — só atualizar status/campos, sem debitar
+          const incremento = dosesNovas - dosesAntigas;
+
           const { error: updErr } = await sb.from('tarefas')
             .update({
               doses_previstas: fields.doses_previstas,
@@ -2213,19 +2233,19 @@ function ImportConsulta() {
           } else {
             atualizados++;
 
-            // Atualizar doses_aplicadas na escala vinculada também
+            // Atualizar doses_aplicadas na escala vinculada
             if (escala?.id && dosesNovas >= 0) {
               await sb.from('escalas')
                 .update({ doses_aplicadas: dosesNovas })
                 .eq('id', escala.id);
             }
 
-            // Debitar doses aplicadas do estoque do aplicador
-            // SOMENTE se a tarefa tiver data_inicio >= dataCorte (data de corte)
+            // Debitar SOMENTE o incremento (novas doses além do que já foi debitado antes)
+            // e SOMENTE se data_inicio >= dataCorte
             const dataInicio = fields.data_inicio || '';
             const dentroDoCorte = dataCorte ? dataInicio >= dataCorte : false;
 
-            if (dosesNovas > 0 && dentroDoCorte && escala?.aplicador_id && escala?.vacina_id) {
+            if (incremento > 0 && dentroDoCorte && escala?.aplicador_id && escala?.vacina_id) {
               const { data: estoqueAp } = await sb.from('estoque')
                 .select('id, quantidade')
                 .eq('vacina_id', escala.vacina_id)
@@ -2233,23 +2253,23 @@ function ImportConsulta() {
                 .eq('localizacao_tipo', 'aplicador')
                 .maybeSingle();
 
-              if (estoqueAp && estoqueAp.quantidade >= dosesNovas) {
+              if (estoqueAp && estoqueAp.quantidade >= incremento) {
                 await sb.from('estoque')
-                  .update({ quantidade: estoqueAp.quantidade - dosesNovas })
+                  .update({ quantidade: estoqueAp.quantidade - incremento })
                   .eq('id', estoqueAp.id);
 
                 await sb.from('movimentacoes').insert({
                   tipo: 'aplicacao',
                   vacina_id: escala.vacina_id,
-                  quantidade: dosesNovas,
+                  quantidade: incremento,
                   origem_tipo: 'aplicador',
                   origem_aplicador_id: escala.aplicador_id,
-                  observacao: `Importação Consulta: ${dosesNovas} doses aplicadas | Tarefa ${fields.codigo || id} | Data corte: ${dataCorte}`,
+                  observacao: `Importação Consulta: +${incremento} doses aplicadas (total: ${dosesNovas}) | Tarefa ${fields.codigo || id} | Data corte: ${dataCorte}`,
                   criado_por: userId,
                 });
                 abatimentos++;
               } else {
-                console.warn(`Saldo insuficiente para ${fields.codigo || id}: disponível ${estoqueAp?.quantidade || 0}, necessário ${dosesNovas}`);
+                console.warn(`Saldo insuficiente para ${fields.codigo || id}: disponível ${estoqueAp?.quantidade || 0}, necessário ${incremento}`);
               }
             }
           }
@@ -3319,6 +3339,54 @@ function EstoquePage() {
     return true;
   });
 
+  const exportarEstoqueXLSX = (dados, filtroVacina, filtroTipo) => {
+    const agora = new Date().toLocaleString('pt-BR');
+    const rows = dados.map(i => ({
+      'Tipo': i.localizacao_tipo === 'base' ? 'Base' : 'Aplicador',
+      'Localização': i.localizacao_tipo === 'base' ? (i.bases?.nome || '—') : (i.aplicadores?.nome || '—'),
+      'CPF': i.aplicadores?.cpf || '—',
+      'Cidade': i.localizacao_tipo === 'base' ? (i.bases?.cidade || '—') : (i.aplicadores?.cidade || '—'),
+      'UF': i.localizacao_tipo === 'base' ? (i.bases?.uf || '—') : (i.aplicadores?.uf || '—'),
+      'Vacina': i.vacinas?.nome || '—',
+      'Lote': i.vacinas?.lote || '—',
+      'Quantidade': i.quantidade,
+    }));
+
+    // Totais por tipo
+    const totalBase = dados.filter(i=>i.localizacao_tipo==='base').reduce((s,i)=>s+i.quantidade,0);
+    const totalAp = dados.filter(i=>i.localizacao_tipo==='aplicador').reduce((s,i)=>s+i.quantidade,0);
+
+    const wb = XLSX.utils.book_new();
+
+    // Aba principal
+    const ws = XLSX.utils.json_to_sheet(rows);
+    // Larguras das colunas
+    ws['!cols'] = [
+      {wch:12},{wch:35},{wch:18},{wch:18},{wch:6},{wch:25},{wch:12},{wch:12}
+    ];
+    XLSX.utils.book_append_sheet(wb, ws, 'Estoque');
+
+    // Aba de resumo
+    const resumo = [
+      ['VacinaLog — Extrato de Estoque', ''],
+      ['Gerado em:', agora],
+      ['Filtro Vacina:', filtroVacina || 'Todas'],
+      ['Filtro Tipo:', filtroTipo || 'Todos'],
+      ['', ''],
+      ['RESUMO', ''],
+      ['Doses em Bases:', totalBase],
+      ['Doses com Aplicadores:', totalAp],
+      ['Total Geral:', totalBase + totalAp],
+      ['Registros:', dados.length],
+    ];
+    const wsResumo = XLSX.utils.aoa_to_sheet(resumo);
+    wsResumo['!cols'] = [{wch:25},{wch:20}];
+    XLSX.utils.book_append_sheet(wb, wsResumo, 'Resumo');
+
+    const dataStr = new Date().toISOString().slice(0,10);
+    XLSX.writeFile(wb, `estoque_vacinalog_${dataStr}.xlsx`);
+  };
+
   const conciliar = async (item) => {
     const qtdInformada = parseInt(conciliacaoVal);
     if (isNaN(qtdInformada) || qtdInformada < 0) { toast('Informe uma quantidade válida', 'error'); return; }
@@ -3351,7 +3419,12 @@ function EstoquePage() {
           <div className="page-title">Estoque</div>
           <div className="page-subtitle">Posição atual de doses{isAdmin && ' · Clique na quantidade para editar'}</div>
         </div>
-        <button className="btn btn-primary" onClick={() => setShowEntrada(true)}>+ Entrada de Estoque</button>
+        <div style={{display:'flex',gap:8}}>
+          <button className="btn btn-secondary" onClick={() => exportarEstoqueXLSX(itemsFiltrados, filterVacina, filterTipo)}>
+            📥 Exportar XLSX
+          </button>
+          <button className="btn btn-primary" onClick={() => setShowEntrada(true)}>+ Entrada de Estoque</button>
+        </div>
       </div>
 
       <div className="stats-grid">
@@ -8181,10 +8254,12 @@ function MovimentacoesPage() {
                     <td style={{fontSize:12,maxWidth:140,overflow:'hidden',textOverflow:'ellipsis'}}>{m.destinoNome}</td>
                     <td style={{textAlign:'right',fontFamily:'JetBrains Mono',fontWeight:700,
                       color: m.sinal > 0 ? 'var(--success)' : m.sinal < 0 ? 'var(--danger)' : 'var(--text-muted)'}}>
-                      {m.sinal > 0 ? '+' : m.sinal < 0 ? '-' : ''}{m.quantidade.toLocaleString('pt-BR')}
+                      {m.direcao === 'interno' ? <span style={{fontSize:10,color:'var(--text-muted)'}}>—</span> : (
+                        <>{m.sinal > 0 ? '+' : '-'}{m.quantidade.toLocaleString('pt-BR')}</>
+                      )}
                     </td>
                     <td style={{textAlign:'right',fontFamily:'JetBrains Mono',fontWeight:600,
-                      color: m.saldoPos >= 0 ? 'var(--text-primary)' : 'var(--danger)'}}>
+                      color: m.direcao === 'interno' ? 'var(--text-muted)' : m.saldoPos >= 0 ? 'var(--text-primary)' : 'var(--danger)'}}>
                       {m.saldoPos.toLocaleString('pt-BR')}
                     </td>
                     <td style={{fontSize:11}}>{m.profiles?.nome || '—'}</td>
@@ -8468,7 +8543,8 @@ function MotoristaRotasMobile({ userId, onSelectRota }) {
 function App() {
   const [session, setSession] = useState(undefined); // undefined = loading
   const [profile, setProfile] = useState(null);
-  const [currentPage, setCurrentPage] = useState('dashboard');
+  const urlPage = new URLSearchParams(window.location.search).get('page');
+  const [currentPage, setCurrentPage] = useState(urlPage || 'dashboard');
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [conferirDados, setConferirDados] = useState(null);
