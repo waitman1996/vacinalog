@@ -7080,11 +7080,27 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
     }
   };
 
-  // Iniciar tracking se rota já estiver em_transito ao carregar
+  // Iniciar tracking quando rota estiver em_transito
+  // Usar ref para evitar parar/reiniciar a cada re-render
+  const trackingStartedRef = React.useRef(false);
+
   useEffect(() => {
-    if (rota.status === 'em_transito') iniciarTracking();
-    return () => pararTracking(); // cleanup ao sair da tela
+    if (rota.status === 'em_transito' && !trackingStartedRef.current) {
+      trackingStartedRef.current = true;
+      iniciarTracking();
+    }
+    // Cleanup APENAS quando o componente desmonta (não a cada mudança de status)
+    return () => {
+      if (!document.contains(document.getElementById('root'))) {
+        pararTracking();
+      }
+    };
   }, [rota.status]);
+
+  // Cleanup definitivo ao desmontar o componente
+  useEffect(() => {
+    return () => pararTracking();
+  }, []);
 
   const fazerCheckoutComTracking = async (obs) => {
     pararTracking();
