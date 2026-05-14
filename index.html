@@ -3974,8 +3974,8 @@ function DemandaOfertaPage({ profile }) {
         const data = (t.data_inicio || e.data_inicio || '').slice(0,10);
         const statusEscala = String(e.status || t.status || '').toLowerCase();
         if (statusEscala === 'cancelada' || statusEscala === 'cancelado') return;
-        const statusLog = t.status_logistica || 'nao_roteirizado';
-        if (statusLog === 'concluido') return;
+        const statusLog = String(t.status_logistica || 'nao_roteirizado').toLowerCase();
+        if (['concluido','concluida','entregue','finalizado','finalizada'].includes(statusLog)) return;
 
         const vacinaId = resolveVacinaId(e, t);
         if (!vacinaId) return;
@@ -4027,8 +4027,8 @@ function DemandaOfertaPage({ profile }) {
         if (!belongsToWeek({}, t)) return;
         const statusTarefa = String(t.status || '').toLowerCase();
         if (statusTarefa === 'cancelada' || statusTarefa === 'cancelado') return;
-        const statusLog = t.status_logistica || 'nao_roteirizado';
-        if (statusLog === 'concluido') return;
+        const statusLog = String(t.status_logistica || 'nao_roteirizado').toLowerCase();
+        if (['concluido','concluida','entregue','finalizado','finalizada'].includes(statusLog)) return;
 
         const codigoNorm = normalizeCode(t.codigo);
         const vacinaId = resolveVacinaId({}, t);
@@ -5487,9 +5487,15 @@ function RoteirizacaoPage({ onBack }) {
   const tarefaRouteKey = (e) => String(e.id || e.tarefa_id || e.codigo_tarefa || e._tarefa?.codigo || '').trim();
 
   const getTarefasRotaTutor = (tutor) => {
+    const CONCL = ['concluido','concluida','entregue','finalizado','finalizada'];
     let tarefas = filterStatus
       ? tutor.tarefas.filter(e => (e._status || e.status) === filterStatus)
       : tutor.tarefas;
+    // Excluir tarefas com logística concluída
+    tarefas = tarefas.filter(e => {
+      const sl = String(e._status_logistica || e._tarefa?.status_logistica || e.status_logistica || '').toLowerCase().trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+      return !CONCL.includes(sl);
+    });
     if (filterDateStart) tarefas = tarefas.filter(e => (e._data_inicio || e.data_inicio || '') >= filterDateStart);
     if (filterDateEnd) tarefas = tarefas.filter(e => (e._data_inicio || e.data_inicio || '') <= filterDateEnd);
     return tarefas;
@@ -7340,25 +7346,41 @@ async function transferirEstoqueDireto({ vacina_id, quantidade, origem_base_id, 
 function EntregaDetalheModal({ remessa, rota, onClose }) {
   const obs = remessa.observacao || '';
 
-  // Extrair dados da assinatura
-  const sigMatch = obs.match(/\[ASSINATURA ([^\]]+)\] Recebido por: ([^[]+?)(?:\(CPF: ([^)]+)\))?\s*\[SIG_IMG:([^:]+:[^:]+):END_SIG\]/);
+  // Dados do aplicador/destino (sempre disponíveis)
+  const destNome = remessa.destino_tipo === 'aplicador' ? remessa.aplicadores?.nome : remessa.bases?.nome;
+  const destCPF = remessa.destino_tipo === 'aplicador' ? remessa.aplicadores?.cpf : '';
+  const destCidade = remessa.destino_tipo === 'base'
+    ? (remessa.bases?.cidade||'')+'/'+(remessa.bases?.uf||'')
+    : (remessa.aplicadores?.cidade||'')+'/'+(remessa.aplicadores?.uf||'');
+  const destEnd = remessa.destino_tipo === 'aplicador' ? remessa.aplicadores?.endereco : '';
+  const doses = (remessa.remessa_itens||[]).reduce((s,i)=>s+i.quantidade,0);
+
+  // Fallback: extrair nome/CPF da observação se não veio do banco
+  let nomeFromObs = '';
+  let cpfFromObs = '';
+  const mNome = obs.match(/^([^(|]+)/);
+  const mCPF = obs.match(/\(([^)]+)\)/);
+  if (mNome) nomeFromObs = mNome[1].trim();
+  if (mCPF) cpfFromObs = mCPF[1].trim();
+
+  // Extrair dados da assinatura digital (se existir)
+  const sigMatch = obs.match(/\[ASSINATURA ([^\]]+)\] Recebido por: ([^[]+?)(?:\(CPF: ([^)]+)\))?\s*\[SIG_IMG:(data:image\/png;base64,[A-Za-z0-9+/=]+):END_SIG\]/);
   const sigMatchSimple = obs.match(/\[ASSINATURA ([^\]]+)\] Recebido por: ([^\n\[]+?)(?:\s*\(CPF: ([^)]+)\))?/);
   
-  const horaAssinatura = sigMatch ? sigMatch[1] : (sigMatchSimple ? sigMatchSimple[1] : '—');
-  const nomeRecebedor = sigMatch ? sigMatch[2].trim() : (sigMatchSimple ? sigMatchSimple[2].trim() : '—');
-  const cpfRecebedor = sigMatch ? (sigMatch[3]||'').trim() : (sigMatchSimple ? (sigMatchSimple[3]||'').trim() : '');
+  const temAssinatura = !!(sigMatch || sigMatchSimple);
+  const horaAssinatura = sigMatch ? sigMatch[1] : (sigMatchSimple ? sigMatchSimple[1] : null);
+  const nomeAssinatura = sigMatch ? sigMatch[2].trim() : (sigMatchSimple ? sigMatchSimple[2].trim() : '');
+  const cpfAssinatura = sigMatch ? (sigMatch[3]||'').trim() : (sigMatchSimple ? (sigMatchSimple[3]||'').trim() : '');
   const sigImg = sigMatch ? sigMatch[4] : null;
+
+  // Usar dados em ordem de prioridade: assinatura > banco > observação
+  const nomeRecebedor = nomeAssinatura || destNome || nomeFromObs || '—';
+  const cpfRecebedor = cpfAssinatura || destCPF || cpfFromObs || '';
 
   // Extrair localização da entrega
   const localMatch = obs.match(/\[ENTREGA_LOCAL:([\d.-]+),([\d.-]+):END_LOCAL\]/);
   const entregaLat = localMatch ? localMatch[1] : null;
   const entregaLng = localMatch ? localMatch[2] : null;
-
-  const destNome = remessa.destino_tipo === 'aplicador' ? remessa.aplicadores?.nome : remessa.bases?.nome;
-  const destCidade = remessa.destino_tipo === 'base'
-    ? (remessa.bases?.cidade||'')+'/'+(remessa.bases?.uf||'')
-    : (remessa.aplicadores?.cidade||'')+'/'+(remessa.aplicadores?.uf||'');
-  const doses = (remessa.remessa_itens||[]).reduce((s,i)=>s+i.quantidade,0);
 
   return (
     <Modal title="Detalhes da Entrega" onClose={onClose} large>
@@ -7380,7 +7402,8 @@ function EntregaDetalheModal({ remessa, rota, onClose }) {
           <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,fontSize:13}}>
             <div><span style={{color:'var(--text-muted)'}}>Recebido por:</span> <strong>{nomeRecebedor}</strong></div>
             <div><span style={{color:'var(--text-muted)'}}>CPF:</span> <strong>{cpfRecebedor || '—'}</strong></div>
-            <div><span style={{color:'var(--text-muted)'}}>Hora:</span> <strong>{horaAssinatura}</strong></div>
+            {horaAssinatura && <div><span style={{color:'var(--text-muted)'}}>Hora assinatura:</span> <strong>{horaAssinatura}</strong></div>}
+            {destEnd && <div style={{gridColumn:'1/-1'}}><span style={{color:'var(--text-muted)'}}>Endereço:</span> {destEnd}</div>}
             {entregaLat && (
               <div>
                 <span style={{color:'var(--text-muted)'}}>Local GPS:</span>{' '}
@@ -7402,9 +7425,14 @@ function EntregaDetalheModal({ remessa, rota, onClose }) {
             </div>
           </div>
         )}
-        {!sigImg && (
+        {!sigImg && !temAssinatura && (
           <div style={{padding:12,background:'var(--warning-bg)',borderRadius:'var(--radius-sm)',fontSize:12,color:'var(--warning)'}}>
-            ⚠ Assinatura digital não disponível para esta entrega. Entregas futuras incluirão assinatura automaticamente.
+            ⚠ Assinatura digital não disponível para esta entrega (anterior à funcionalidade). Entregas futuras incluirão assinatura automaticamente.
+          </div>
+        )}
+        {!sigImg && temAssinatura && (
+          <div style={{padding:12,background:'var(--info-bg)',borderRadius:'var(--radius-sm)',fontSize:12,color:'var(--info)'}}>
+            ℹ Assinatura registrada em texto. A imagem não foi salva nesta entrega.
           </div>
         )}
 
