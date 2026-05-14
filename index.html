@@ -90,9 +90,10 @@ body {
   display: flex; align-items: center; gap: 10px; padding: 10px 12px;
   border-radius: var(--radius-sm); color: var(--text-secondary); cursor: pointer;
   font-size: 14px; font-weight: 400; transition: all 0.15s;
-  border: 1px solid transparent;
+  border: 1px solid transparent; position: relative;
 }
 .nav-item:hover { background: var(--bg-card-hover); color: var(--text-primary); }
+.nav-item:hover .nav-ext { opacity: 1 !important; }
 .nav-item.active {
   background: var(--accent-subtle); color: var(--accent);
   border-color: rgba(37, 99, 235, 0.2); font-weight: 500;
@@ -694,11 +695,10 @@ function Sidebar({ profile, currentPage, onNavigate, open, onClose, collapsed, o
               {!collapsed && <span className="nav-label">{item.label}</span>}
               {!collapsed && (
                 <span
+                  className="nav-ext"
                   title={`Abrir ${item.label} em nova aba`}
-                  onClick={e => { e.stopPropagation(); window.open(window.location.href + '?page=' + item.id, '_blank'); }}
-                  style={{position:'absolute',right:6,opacity:0,transition:'opacity 0.15s',fontSize:11,color:'var(--text-muted)',cursor:'pointer',padding:'2px 4px',borderRadius:3}}
-                  onMouseEnter={e=>e.currentTarget.style.opacity='1'}
-                  onMouseLeave={e=>e.currentTarget.style.opacity='0'}>
+                  onClick={e => { e.stopPropagation(); window.open(window.location.href.split('?')[0] + '?page=' + item.id, '_blank'); }}
+                  style={{position:'absolute',right:6,opacity:0,transition:'opacity 0.15s',fontSize:12,color:'var(--text-muted)',cursor:'pointer',padding:'2px 5px',borderRadius:3,lineHeight:1,border:'1px solid var(--border)',background:'var(--bg-input)'}}>
                   ↗
                 </span>
               )}
@@ -7049,12 +7049,24 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
     const enviarLocalizacao = async (position) => {
       const now = new Date().toISOString();
       setGpsAtivo(true);
-      await sb.from('rotas').update({
+      console.log('[VacinaLog] Enviando GPS:', position.coords.latitude, position.coords.longitude);
+      const { error } = await sb.from('rotas').update({
         current_lat: position.coords.latitude,
         current_lng: position.coords.longitude,
         current_location_at: now,
         current_speed: position.coords.speed ? Math.round(position.coords.speed * 3.6) : null
       }).eq('id', rota.id);
+      if (error) {
+        console.error('[VacinaLog] Erro ao salvar GPS:', error.message);
+        // Se coluna não existe, tenta só com lat/lng sem speed
+        if (error.message.includes('current_speed') || error.message.includes('current_')) {
+          await sb.from('rotas').update({
+            current_lat: position.coords.latitude,
+            current_lng: position.coords.longitude,
+            current_location_at: now,
+          }).eq('id', rota.id);
+        }
+      }
     };
 
     const onErro = (err) => {
