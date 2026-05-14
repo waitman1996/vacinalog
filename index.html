@@ -4820,6 +4820,7 @@ function MonitoramentoAoVivo({ onClose }) {
 function ModalDetalheRota({ rota, onClose, ROTA_ST, ROTA_BADGE }) {
   const [remessas, setRemessas] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [entregaDetalheAdmin, setEntregaDetalheAdmin] = useState(null);
   const toast = useContext(ToastContext);
 
   useEffect(() => {
@@ -4972,10 +4973,18 @@ function ModalDetalheRota({ rota, onClose, ROTA_ST, ROTA_BADGE }) {
                     </table>
                   </div>
                 )}
-                {/* Obs da remessa */}
+                {/* Obs da remessa (sem mostrar assinatura raw) */}
                 {rem.observacao && (
                   <div style={{padding:'6px 14px',borderTop:'1px solid var(--border)',fontSize:11,color:'var(--text-muted)'}}>
-                    {rem.observacao.split('|').map((p,i) => <span key={i}>{p.trim()}{i < rem.observacao.split('|').length-1 ? ' · ' : ''}</span>)}
+                    {rem.observacao.split('|').filter(p => !p.includes('[SIG_IMG') && !p.includes('[ENTREGA_LOCAL')).map((p,i) => <span key={i}>{p.trim()}{i < rem.observacao.split('|').length-1 ? ' · ' : ''}</span>)}
+                  </div>
+                )}
+                {/* Botão Ver Entrega para concluídas */}
+                {isConcluida && (
+                  <div style={{padding:'8px 14px',borderTop:'1px solid var(--border)',display:'flex',gap:8}}>
+                    <button className="btn btn-secondary btn-sm" onClick={() => setEntregaDetalheAdmin(rem)}>
+                      📋 Ver Entrega
+                    </button>
                   </div>
                 )}
               </div>
@@ -4983,6 +4992,12 @@ function ModalDetalheRota({ rota, onClose, ROTA_ST, ROTA_BADGE }) {
           })}
         </div>
       )}
+
+      {/* Modal de detalhes da entrega */}
+      {entregaDetalheAdmin && (
+        <EntregaDetalheModal remessa={entregaDetalheAdmin} rota={rota} onClose={() => setEntregaDetalheAdmin(null)} />
+      )}
+
       <div className="modal-actions">
         <button className="btn btn-secondary" onClick={onClose}>Fechar</button>
       </div>
