@@ -78,9 +78,6 @@ html.light .btn-secondary:hover { background: #e5e7eb; }
 html.light table th { background: #f3f4f6 !important; color: #374151 !important; border-color: #d4d8e0 !important; }
 html.light table td { border-color: #e5e7eb !important; }
 html.light .mobile-toggle { background: #fff; color: #111827; border-color: #d4d8e0; }
-html.light .form-input[type="date"], html.light input[type="date"] { color-scheme: light; }
-html.light .form-input[type="date"]::-webkit-calendar-picker-indicator,
-html.light input[type="date"]::-webkit-calendar-picker-indicator { filter: none; }
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body {
   font-family: 'DM Sans', sans-serif;
@@ -7271,59 +7268,75 @@ function MotoristaPage() {
 // Fallback: transferência direta sem RPC (para quando constraint não existe)
 async function transferirEstoqueDireto({ vacina_id, quantidade, origem_base_id, destino_aplicador_id, remessa_id, observacao }) {
   try {
-    // 1. Debitar da base
-    const { data: origemRows } = await sb.from('estoque')
+    quantidade = Number(quantidade || 0);
+    if (!vacina_id || !origem_base_id || !destino_aplicador_id || quantidade <= 0) {
+      console.error('Dados inválidos para transferência', { vacina_id, quantidade, origem_base_id, destino_aplicador_id });
+      return false;
+    }
+
+    // 1. Debitar da base. Usa .select() sem .single(), pois pode existir mais de uma linha da mesma vacina/base.
+    const { data: origemRows, error: origemErr } = await sb.from('estoque')
       .select('id, quantidade')
       .eq('vacina_id', vacina_id)
       .eq('base_id', origem_base_id)
-      .eq('localizacao_tipo', 'base');
+      .eq('localizacao_tipo', 'base')
+      .order('quantidade', { ascending: false });
 
+    if (origemErr) throw origemErr;
     if (!origemRows || origemRows.length === 0) {
       console.error('Origem não encontrada no estoque');
       return false;
     }
 
-    // Somar todos os registros da origem (podem ser duplicados)
     const totalOrigem = origemRows.reduce((s, r) => s + Number(r.quantidade || 0), 0);
     if (totalOrigem < quantidade) {
       console.error(`Saldo insuficiente: ${totalOrigem} < ${quantidade}`);
       return false;
     }
 
-    // Debitar do primeiro registro com saldo
     let restante = quantidade;
     for (const row of origemRows) {
       if (restante <= 0) break;
-      const debitar = Math.min(restante, Number(row.quantidade || 0));
-      await sb.from('estoque').update({ quantidade: row.quantidade - debitar }).eq('id', row.id);
+      const saldoLinha = Number(row.quantidade || 0);
+      if (saldoLinha <= 0) continue;
+      const debitar = Math.min(restante, saldoLinha);
+      const { error: debErr } = await sb.from('estoque')
+        .update({ quantidade: saldoLinha - debitar })
+        .eq('id', row.id);
+      if (debErr) throw debErr;
       restante -= debitar;
     }
 
-    // 2. Creditar no aplicador (UPSERT manual)
-    const { data: destRows } = await sb.from('estoque')
+    // 2. Creditar no aplicador. Também aceita múltiplas linhas e soma na primeira.
+    const { data: destRows, error: destErr } = await sb.from('estoque')
       .select('id, quantidade')
       .eq('vacina_id', vacina_id)
       .eq('aplicador_id', destino_aplicador_id)
-      .eq('localizacao_tipo', 'aplicador');
+      .eq('localizacao_tipo', 'aplicador')
+      .order('quantidade', { ascending: false });
+
+    if (destErr) throw destErr;
 
     if (destRows && destRows.length > 0) {
-      // Já existe — somar no primeiro
-      await sb.from('estoque')
-        .update({ quantidade: destRows[0].quantidade + quantidade })
+      const atual = Number(destRows[0].quantidade || 0);
+      const { error: updErr } = await sb.from('estoque')
+        .update({ quantidade: atual + quantidade })
         .eq('id', destRows[0].id);
+      if (updErr) throw updErr;
     } else {
-      // Não existe — criar
-      await sb.from('estoque').insert({
+      const { error: insErr } = await sb.from('estoque').insert({
         vacina_id,
         aplicador_id: destino_aplicador_id,
+        base_id: null,
         localizacao_tipo: 'aplicador',
         quantidade
       });
+      if (insErr) throw insErr;
     }
 
     // 3. Registrar movimentação
     const { data: { user } } = await sb.auth.getUser();
-    await sb.from('movimentacoes').insert({
+    const { error: movErr } = await sb.from('movimentacoes').insert({
       tipo: 'envio_aplicador',
       vacina_id,
       quantidade,
@@ -7335,6 +7348,7 @@ async function transferirEstoqueDireto({ vacina_id, quantidade, origem_base_id, 
       observacao,
       criado_por: user?.id
     });
+    if (movErr) throw movErr;
 
     return true;
   } catch (err) {
@@ -7876,70 +7890,59 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
       }
     }
 
-    // Verificar saldo antes de transferir
-    if (itens.length > 0 && destId) {
-      // Checar estoque disponível na base para cada item
+    if (!destId || destTipo !== 'aplicador') {
+      toast('Não foi possível identificar o aplicador de destino. Entrega não concluída para evitar estoque errado.', 'error');
+      return;
+    }
+
+    // Verificar saldo antes de transferir.
+    // Importante: sem .single(), porque pode existir mais de uma linha de estoque para a mesma vacina/base.
+    if (itens.length > 0) {
       for (const item of itens) {
-        const { data: estoque } = await sb.from('estoque')
+        const { data: estoqueRows, error: estoqueErr } = await sb.from('estoque')
           .select('quantidade')
           .eq('vacina_id', item.vacina_id)
           .eq('base_id', rota.base_origem_id)
-          .eq('localizacao_tipo', 'base')
-          .single();
-        const saldo = estoque?.quantidade || 0;
-        if (saldo < item.quantidade) {
-          toast(`⚠ Saldo insuficiente para ${item.vacinas?.nome || 'vacina'}: disponível ${saldo}, necessário ${item.quantidade}. Use "Entrada de Estoque" ou "Ajuste Manual" para corrigir.`, 'error');
-          // Marcar remessa como concluída mesmo assim, mas sem transferir
-          await sb.from('remessas').update({ status: 'concluida' }).eq('id', remId);
-          // Atualizar status_logistica das tarefas vinculadas para 'entregue'
-          await atualizarStatusLogisticaRemessa(rem, destId);
-          load();
+          .eq('localizacao_tipo', 'base');
+        if (estoqueErr) { toast('Erro ao consultar estoque da base: ' + estoqueErr.message, 'error'); return; }
+        const saldo = (estoqueRows || []).reduce((s, r) => s + Number(r.quantidade || 0), 0);
+        if (saldo < Number(item.quantidade || 0)) {
+          toast(`⚠ Saldo insuficiente para ${item.vacinas?.nome || 'vacina'}: disponível ${saldo}, necessário ${item.quantidade}. Entrega NÃO foi concluída.`, 'error');
           return;
         }
       }
     }
 
-    // Transferir estoque base → aplicador para cada item
-    if (itens.length > 0 && destId) {
+    // Transferir estoque base → aplicador para cada item.
+    // Usa a rotina direta robusta para garantir: debita base, credita aplicador e registra movimentação.
+    if (itens.length > 0) {
       let erros = 0;
       for (const item of itens) {
         const obs = [
+          'Entrega confirmada',
           'Rota: ' + rota.codigo,
           'Remessa: ' + rem.codigo_rastreio,
           'Aplicador: ' + (rem.aplicadores?.nome || destId),
           item.vacinas?.nome ? 'Vacina: ' + item.vacinas.nome : null
         ].filter(Boolean).join(' | ');
 
-        const { error } = await sb.rpc('transferir_estoque', {
-          p_vacina_id: item.vacina_id,
-          p_quantidade: item.quantidade,
-          p_origem_tipo: 'base',
-          p_origem_id: rota.base_origem_id,
-          p_destino_tipo: destTipo,
-          p_destino_id: destId,
-          p_remessa_id: remId,
-          p_observacao: obs
+        const transferOk = await transferirEstoqueDireto({
+          vacina_id: item.vacina_id,
+          quantidade: Number(item.quantidade || 0),
+          origem_base_id: rota.base_origem_id,
+          destino_aplicador_id: destId,
+          remessa_id: remId,
+          observacao: obs
         });
 
-        if (error) {
-          // Fallback: fazer transferência diretamente via queries
-          console.warn('RPC falhou, usando fallback direto:', error.message);
-          const transferOk = await transferirEstoqueDireto({
-            vacina_id: item.vacina_id,
-            quantidade: item.quantidade,
-            origem_base_id: rota.base_origem_id,
-            destino_aplicador_id: destId,
-            remessa_id: remId,
-            observacao: obs
-          });
-          if (!transferOk) {
-            erros++;
-            toast('Erro ao transferir ' + (item.vacinas?.nome||'') + ': verifique o estoque', 'error');
-          }
+        if (!transferOk) {
+          erros++;
+          toast('Erro ao transferir ' + (item.vacinas?.nome||'') + ': entrega não concluída.', 'error');
         }
       }
-      if (erros === 0) toast('Estoque transferido para o aplicador ✓', 'success');
-    } else if (itens.length === 0) {
+      if (erros > 0) return;
+      toast('Estoque transferido para o aplicador ✓', 'success');
+    } else {
       toast('Remessa sem itens — entrega confirmada sem movimentação de estoque', 'info');
     }
 
