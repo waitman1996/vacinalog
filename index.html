@@ -3207,6 +3207,9 @@ function EstoquePage() {
   const [profile, setProfile] = useState(null);
   const [filterVacina, setFilterVacina] = useState('');
   const [filterTipo, setFilterTipo] = useState('');
+  const [dosesTransito, setDosesTransito] = useState(0);
+  const [conciliando, setConciliando] = useState(null); // aplicador_id sendo conciliado
+  const [conciliacaoVal, setConciliacaoVal] = useState('');
   const toast = useContext(ToastContext);
 
   const load = async () => {
@@ -3238,6 +3241,12 @@ function EstoquePage() {
     sb.auth.getUser().then(({ data }) => {
       if (data?.user) sb.from('profiles').select('role').eq('id', data.user.id).single().then(({ data: p }) => setProfile(p));
     });
+    // Buscar doses em trânsito (remessas em_transito com itens)
+    sb.from('remessas').select('remessa_itens(quantidade)').eq('status','em_transito')
+      .then(({ data }) => {
+        const total = (data||[]).reduce((s,r) => s + (r.remessa_itens||[]).reduce((ss,i) => ss + Number(i.quantidade||0), 0), 0);
+        setDosesTransito(total);
+      });
   }, []);
 
   const isAdmin = profile?.role === 'admin';
@@ -3298,6 +3307,28 @@ function EstoquePage() {
     return true;
   });
 
+  const conciliar = async (item) => {
+    const qtdInformada = parseInt(conciliacaoVal);
+    if (isNaN(qtdInformada) || qtdInformada < 0) { toast('Informe uma quantidade válida', 'error'); return; }
+    const userId = (await sb.auth.getUser()).data.user.id;
+    const locNome = item.localizacao_tipo === 'base' ? item.bases?.nome : item.aplicadores?.nome;
+    const bate = qtdInformada === item.quantidade;
+    await sb.from('movimentacoes').insert({
+      tipo: 'ajuste', vacina_id: item.vacina_id, quantidade: qtdInformada,
+      origem_tipo: item.localizacao_tipo,
+      origem_base_id: item.localizacao_tipo==='base' ? item.base_id : null,
+      origem_aplicador_id: item.localizacao_tipo==='aplicador' ? item.aplicador_id : null,
+      destino_tipo: item.localizacao_tipo,
+      destino_base_id: item.localizacao_tipo==='base' ? item.base_id : null,
+      destino_aplicador_id: item.localizacao_tipo==='aplicador' ? item.aplicador_id : null,
+      observacao: `CONCILIAÇÃO ${bate?'✓ CONFERIDO':'⚠ DIVERGÊNCIA'}: ${locNome} informou ${qtdInformada} doses | Sistema: ${item.quantidade} doses${bate?'':` | Diferença: ${qtdInformada-item.quantidade}`}`,
+      criado_por: userId,
+    });
+    if (bate) toast(`✓ Conferido! ${locNome} confirma ${qtdInformada} doses.`, 'success');
+    else toast(`⚠ Divergência! ${locNome} informou ${qtdInformada} mas sistema tem ${item.quantidade}. Registrado.`, 'error');
+    setConciliando(null); setConciliacaoVal('');
+  };
+
   const totalBases = itemsFiltrados.filter(i => i.localizacao_tipo === 'base').reduce((s, i) => s + i.quantidade, 0);
   const totalAp = itemsFiltrados.filter(i => i.localizacao_tipo === 'aplicador').reduce((s, i) => s + i.quantidade, 0);
 
@@ -3321,6 +3352,11 @@ function EstoquePage() {
           <div className="stat-icon" style={{background:'var(--warning-bg)',color:'var(--warning)'}}>👤</div>
           <div className="stat-value">{totalAp.toLocaleString('pt-BR')}</div>
           <div className="stat-label">Doses com Aplicadores</div>
+        </div>
+        <div className="stat-card" style={{border:'1px solid rgba(16,185,129,0.3)'}}>
+          <div className="stat-icon" style={{background:'var(--success-bg)',color:'var(--success)'}}>🚚</div>
+          <div className="stat-value" style={{color:'var(--success)'}}>{dosesTransito.toLocaleString('pt-BR')}</div>
+          <div className="stat-label">Em Trânsito</div>
         </div>
         <div className="stat-card">
           <div className="stat-icon" style={{background:'var(--success-bg)',color:'var(--success)'}}>📦</div>
@@ -3371,7 +3407,7 @@ function EstoquePage() {
         <div className="table-wrap">
           <table>
             <thead>
-              <tr><th>Tipo</th><th>Localização</th><th>Cidade/UF</th><th>Vacina</th><th>Lote</th><th>Quantidade</th></tr>
+              <tr><th>Tipo</th><th>Localização</th><th>Cidade/UF</th><th>Vacina</th><th>Lote</th><th>Quantidade</th><th>Conciliação</th></tr>
             </thead>
             <tbody>
               {itemsFiltrados.length === 0 && (
@@ -3432,6 +3468,26 @@ function EstoquePage() {
                         {i.quantidade.toLocaleString('pt-BR')}
                         {isAdmin && <span style={{fontSize:10,marginLeft:4,opacity:0.5}}>✏️</span>}
                       </span>
+                    )}
+                  </td>
+                  <td>
+                    {i.localizacao_tipo === 'aplicador' && (
+                      conciliando === i.id ? (
+                        <div style={{display:'flex',gap:4,alignItems:'center'}}>
+                          <input type="number" min="0" value={conciliacaoVal}
+                            onChange={e=>setConciliacaoVal(e.target.value)}
+                            onKeyDown={e=>{if(e.key==='Enter')conciliar(i);if(e.key==='Escape'){setConciliando(null);setConciliacaoVal('');}}}
+                            autoFocus placeholder="Qtd real"
+                            style={{width:75,padding:'3px 6px',background:'var(--bg-input)',border:'1px solid var(--accent)',borderRadius:4,color:'var(--text-primary)',fontSize:12}} />
+                          <button className="btn btn-success btn-sm btn-icon" onClick={()=>conciliar(i)} title="Confirmar">✓</button>
+                          <button className="btn btn-secondary btn-sm btn-icon" onClick={()=>{setConciliando(null);setConciliacaoVal('')}} title="Cancelar">✕</button>
+                        </div>
+                      ) : (
+                        <button className="btn btn-secondary btn-sm" style={{fontSize:11,padding:'3px 8px'}}
+                          onClick={()=>{setConciliando(i.id);setConciliacaoVal(String(i.quantidade));}}>
+                          🔍 Conciliar
+                        </button>
+                      )
                     )}
                   </td>
                 </tr>
@@ -5899,10 +5955,11 @@ function MontagemPage() {
     setLoadingRemessas(false);
   };
 
-  const addItem = async (remessaId, vacinaId, quantidade) => {
-    if (!vacinaId || !quantidade || quantidade <= 0) return;
+  const addItem = async (remessaId, vacinaId, quantidade, lote) => {
+    if (!vacinaId || quantidade === undefined || quantidade === null || quantidade < 0) return;
     const { error } = await sb.from('remessa_itens').insert({
-      remessa_id: remessaId, vacina_id: vacinaId, quantidade: parseInt(quantidade)
+      remessa_id: remessaId, vacina_id: vacinaId, quantidade: parseInt(quantidade),
+      ...(lote ? { lote } : {})
     });
     if (error) { toast(error.message, 'error'); return; }
     toast('Item adicionado!', 'success');
@@ -5918,6 +5975,12 @@ function MontagemPage() {
   const marcarPronta = async (rem) => {
     if ((rem.remessa_itens || []).length === 0) {
       toast('Adicione pelo menos um item antes de marcar como pronta', 'error');
+      return;
+    }
+    // Verificar se todos os itens têm lote preenchido
+    const semLote = (rem.remessa_itens || []).filter(i => !i.lote && i.quantidade > 0);
+    if (semLote.length > 0) {
+      toast('Informe o lote de todos os itens antes de marcar como pronta', 'error');
       return;
     }
     const { error } = await sb.from('remessas').update({ status: 'pronta' }).eq('id', rem.id);
@@ -6105,7 +6168,9 @@ function MontagemPage() {
                                      (it.vacinas?.nome||'').toLowerCase().includes('triv') ? 'var(--success)' : 'var(--text-primary)'
                             }}>{it.vacinas?.nome||'—'}</span>
                           </td>
-                          <td style={{padding:'5px 8px',fontSize:12,fontFamily:'JetBrains Mono',color:'var(--text-muted)'}}>{it.vacinas?.lote||'—'}</td>
+                          <td style={{padding:'5px 8px',fontSize:12,fontFamily:'JetBrains Mono',color:'var(--text-muted)'}}>
+                            {it.lote ? <span style={{color:'var(--accent)',fontWeight:600}}>{it.lote}</span> : (it.vacinas?.lote||<span style={{color:'var(--danger)',fontSize:11}}>⚠ sem lote</span>)}
+                          </td>
                           <td style={{padding:'5px 8px',fontSize:14,fontFamily:'JetBrains Mono',fontWeight:700,textAlign:'right',color:'var(--success)'}}>{it.quantidade}</td>
                           <td style={{padding:'5px 4px'}}>
                             {!isPronta && <button style={{background:'none',border:'none',color:'var(--danger)',cursor:'pointer',fontSize:14,padding:2}} onClick={()=>removeItem(it.id)}>✕</button>}
@@ -6119,7 +6184,7 @@ function MontagemPage() {
 
               {/* Adicionar item */}
               {!isPronta && (
-                <AddItemRemessa vacinas={vacinas} dosesSugeridas={dosesSugeridas} onAdd={(vid, qtd) => addItem(rem.id, vid, qtd)} />
+                <AddItemRemessa vacinas={vacinas} dosesSugeridas={dosesSugeridas} onAdd={(vid, qtd, lote) => addItem(rem.id, vid, qtd, lote)} />
               )}
             </div>
           );
@@ -6137,17 +6202,20 @@ function MontagemPage() {
 
 function AddItemRemessa({ vacinas, onAdd, dosesSugeridas }) {
   const [vacinaId, setVacinaId] = useState('');
-  const [quantidade, setQuantidade] = useState(dosesSugeridas > 0 ? String(dosesSugeridas) : '');
+  const [quantidade, setQuantidade] = useState(dosesSugeridas >= 0 ? String(dosesSugeridas) : '');
+  const [lote, setLote] = useState('');
 
   // Atualiza sugestão quando muda (ex: troca de remessa)
   useEffect(() => {
-    if (dosesSugeridas > 0 && !quantidade) setQuantidade(String(dosesSugeridas));
+    if (dosesSugeridas >= 0 && quantidade === '') setQuantidade(String(dosesSugeridas));
   }, [dosesSugeridas]);
 
   const add = () => {
-    if (!vacinaId || !quantidade) return;
-    onAdd(vacinaId, parseInt(quantidade));
-    setVacinaId(''); setQuantidade(dosesSugeridas > 0 ? String(dosesSugeridas) : '');
+    if (!vacinaId) return;
+    if (quantidade === '') return;
+    if (!lote.trim()) { alert('Informe o número do lote para continuar.'); return; }
+    onAdd(vacinaId, parseInt(quantidade), lote.trim());
+    setVacinaId(''); setQuantidade(dosesSugeridas >= 0 ? String(dosesSugeridas) : ''); setLote('');
   };
 
   return (
@@ -6156,19 +6224,24 @@ function AddItemRemessa({ vacinas, onAdd, dosesSugeridas }) {
         <label className="form-label">Vacina</label>
         <select className="form-select" style={{padding:'6px 8px',fontSize:12}} value={vacinaId} onChange={e=>setVacinaId(e.target.value)}>
           <option value="">Selecione...</option>
-          {vacinas.map(v => <option key={v.id} value={v.id}>{v.nome} {v.lote?`(${v.lote})`:''}</option>)}
+          {vacinas.map(v => <option key={v.id} value={v.id}>{v.nome}</option>)}
         </select>
+      </div>
+      <div className="form-group" style={{flex:1,minWidth:90,marginBottom:0}}>
+        <label className="form-label">Lote <span style={{color:'var(--danger)'}}>*</span></label>
+        <input className="form-input sm" value={lote} onChange={e=>setLote(e.target.value)}
+          placeholder="Ex: N-15" style={{borderColor: !lote.trim() ? 'rgba(239,68,68,0.4)' : undefined}} />
       </div>
       <div className="form-group" style={{flex:1,minWidth:80,marginBottom:0}}>
         <label className="form-label">
-          Doses {dosesSugeridas > 0 && <span style={{color:'var(--accent)',fontSize:10}}>(sugerido: {dosesSugeridas})</span>}
+          Doses {dosesSugeridas > 0 && <span style={{color:'var(--accent)',fontSize:10}}>(sug: {dosesSugeridas})</span>}
         </label>
-        <input className="form-input sm" type="number" min="1" value={quantidade}
+        <input className="form-input sm" type="number" min="0" value={quantidade}
           onChange={e=>setQuantidade(e.target.value)}
           onKeyDown={e=>e.key==='Enter'&&add()}
-          style={{borderColor: quantidade && parseInt(quantidade) !== dosesSugeridas && dosesSugeridas > 0 ? 'var(--warning)' : undefined}} />
+          style={{borderColor: quantidade !== '' && parseInt(quantidade) !== dosesSugeridas && dosesSugeridas > 0 ? 'var(--warning)' : undefined}} />
       </div>
-      <button className="btn btn-primary btn-sm" onClick={add} disabled={!vacinaId||!quantidade}>+ Adicionar</button>
+      <button className="btn btn-primary btn-sm" onClick={add} disabled={!vacinaId || quantidade==='' || !lote.trim()}>+ Adicionar</button>
     </div>
   );
 }
@@ -6655,7 +6728,7 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
     };
     const { error } = await sb.from('rotas').update(payload).eq('id', rota.id);
     if (error) { toast(error.message, 'error'); return; }
-    await sb.from('remessas').update({ status: 'em_transito' }).eq('rota_id', rota.id).in('status', ['pronta','carregada']);
+    await sb.from('remessas').update({ status: 'em_transito' }).eq('rota_id', rota.id).in('status', ['pronta','carregada','montagem']);
     toast('Check-in registrado! Boa viagem! 🚀', 'success');
     load();
   };
