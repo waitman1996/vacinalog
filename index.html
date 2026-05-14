@@ -310,6 +310,10 @@ td.mono { font-family: 'JetBrains Mono', monospace; font-size: 12px; }
   from { transform: translateX(100%); opacity: 0; }
   to { transform: translateX(0); opacity: 1; }
 }
+@keyframes pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(1.5); }
+}
 
 /* Upload area */
 .upload-area {
@@ -6911,6 +6915,8 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
   const [remessas, setRemessas] = useState([]);
   const [loading, setLoading] = useState(true);
   const [checkoutModal, setCheckoutModal] = useState(false);
+  const [checkinModal, setCheckinModal] = useState(false);
+  const [gpsAtivo, setGpsAtivo] = useState(false);
   const toast = useContext(ToastContext);
 
   const ST_REM = { planejada:'Planejada', montagem:'Montagem', pronta:'Pronta', carregada:'Carregada', em_transito:'Em Trânsito', concluida:'Entregue', cancelada:'Cancelada' };
@@ -6943,7 +6949,6 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
   });
 
   const iniciarRota = async () => {
-    if (!confirm('Confirmar início da rota? Isso registrará seu check-in.')) return;
     toast('Registrando localização...', 'info');
     const loc = await getLocation();
     const now = new Date().toISOString();
@@ -6956,7 +6961,7 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
     if (error) { toast(error.message, 'error'); return; }
     await sb.from('remessas').update({ status: 'em_transito' }).eq('rota_id', rota.id).in('status', ['pronta','carregada','montagem']);
     toast('Check-in registrado! Boa viagem! 🚀', 'success');
-    // Iniciar tracking contínuo
+    setCheckinModal(false);
     iniciarTracking();
     load();
   };
@@ -6965,25 +6970,31 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
   const trackingRef = React.useRef(null);
 
   const iniciarTracking = () => {
-    if (trackingRef.current) return; // já rodando
+    if (trackingRef.current) return;
     if (!navigator.geolocation) return;
 
     const enviarLocalizacao = async (position) => {
       const now = new Date().toISOString();
+      setGpsAtivo(true);
       await sb.from('rotas').update({
         current_lat: position.coords.latitude,
         current_lng: position.coords.longitude,
         current_location_at: now,
-        current_speed: position.coords.speed ? Math.round(position.coords.speed * 3.6) : null // m/s → km/h
+        current_speed: position.coords.speed ? Math.round(position.coords.speed * 3.6) : null
       }).eq('id', rota.id);
     };
 
-    // watchPosition: atualiza automaticamente quando o motorista se move
+    const onErro = (err) => {
+      setGpsAtivo(false);
+      console.warn('GPS erro:', err.message);
+    };
+
     trackingRef.current = navigator.geolocation.watchPosition(
       enviarLocalizacao,
-      (err) => console.warn('GPS erro:', err.message),
-      { enableHighAccuracy: true, maximumAge: 10000, timeout: 15000 }
+      onErro,
+      { enableHighAccuracy: true, maximumAge: 5000, timeout: 15000 }
     );
+    setGpsAtivo(true);
     console.log('[VacinaLog] Tracking GPS iniciado');
   };
 
@@ -6991,6 +7002,7 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
     if (trackingRef.current) {
       navigator.geolocation.clearWatch(trackingRef.current);
       trackingRef.current = null;
+      setGpsAtivo(false);
       console.log('[VacinaLog] Tracking GPS parado');
     }
   };
@@ -7194,7 +7206,23 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
         </div>
         <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
           {rota.status === 'pronta' && (
-            <button className="btn btn-success" onClick={iniciarRota}>🚀 Check-in / Iniciar Rota</button>
+            <button className="btn btn-success" style={{fontSize:15,padding:'10px 20px'}} onClick={() => setCheckinModal(true)}>
+              🚀 Iniciar Rota
+            </button>
+          )}
+          {rota.status === 'em_transito' && (
+            <div style={{display:'flex',alignItems:'center',gap:10}}>
+              <div style={{display:'flex',alignItems:'center',gap:6,padding:'6px 12px',borderRadius:20,
+                background: gpsAtivo ? 'rgba(16,185,129,0.15)' : 'rgba(107,114,128,0.15)',
+                border: `1px solid ${gpsAtivo ? 'rgba(16,185,129,0.4)' : 'rgba(107,114,128,0.3)'}`,
+                fontSize:12,fontWeight:600,
+                color: gpsAtivo ? 'var(--success)' : 'var(--text-muted)'}}>
+                <span style={{width:8,height:8,borderRadius:'50%',background: gpsAtivo ? 'var(--success)' : '#6b7280',
+                  boxShadow: gpsAtivo ? '0 0 6px var(--success)' : 'none',
+                  animation: gpsAtivo ? 'pulse 2s infinite' : 'none', display:'inline-block'}} />
+                {gpsAtivo ? 'GPS Ativo' : 'GPS Offline'}
+              </div>
+            </div>
           )}
           {rota.status === 'em_transito' && todasEntregues && (
             <button className="btn btn-primary" onClick={() => setCheckoutModal(true)}>
@@ -7206,6 +7234,38 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
           )}
         </div>
       </div>
+
+      {/* Modal de Check-in com aceite de rastreamento */}
+      {checkinModal && (
+        <Modal title="🚀 Iniciar Rota" onClose={() => setCheckinModal(false)}>
+          <div style={{display:'flex',flexDirection:'column',gap:16}}>
+            <div style={{padding:14,background:'rgba(37,99,235,0.08)',border:'1px solid rgba(37,99,235,0.2)',borderRadius:'var(--radius-sm)'}}>
+              <div style={{fontSize:15,fontWeight:700,marginBottom:8}}>Rota {rota.codigo}</div>
+              <div style={{fontSize:13,color:'var(--text-secondary)'}}>
+                📅 {rota.data_prevista ? new Date(rota.data_prevista+'T12:00:00').toLocaleDateString('pt-BR',{weekday:'long',day:'2-digit',month:'long'}) : '—'}
+              </div>
+              <div style={{fontSize:13,color:'var(--text-secondary)'}}>🏢 {rota.bases?.nome}</div>
+              <div style={{fontSize:13,color:'var(--text-secondary)'}}>🚗 {rota.veiculo || '—'}</div>
+            </div>
+
+            <div style={{padding:14,background:'rgba(16,185,129,0.08)',border:'1px solid rgba(16,185,129,0.3)',borderRadius:'var(--radius-sm)'}}>
+              <div style={{fontSize:13,fontWeight:700,color:'var(--success)',marginBottom:8}}>📍 Rastreamento em Tempo Real</div>
+              <div style={{fontSize:12,color:'var(--text-secondary)',lineHeight:1.6}}>
+                Ao iniciar a rota, seu dispositivo vai <strong>compartilhar sua localização continuamente</strong> com a central de operações enquanto a rota estiver ativa.<br/><br/>
+                O rastreamento para automaticamente quando você fizer o <strong>check-out</strong>.<br/><br/>
+                <strong>⚠️ Mantenha a tela ligada</strong> durante as entregas para garantir o envio contínuo da localização.
+              </div>
+            </div>
+
+            <div style={{display:'flex',gap:10}}>
+              <button className="btn btn-secondary" style={{flex:1}} onClick={() => setCheckinModal(false)}>Cancelar</button>
+              <button className="btn btn-success" style={{flex:2,fontSize:15,padding:'12px'}} onClick={iniciarRota}>
+                ✓ Concordo — Iniciar Rota com Rastreamento
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
 
       {/* Check-in / Check-out info */}
       {(rota.checkin_at || rota.checkout_at) && (
