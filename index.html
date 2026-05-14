@@ -7389,7 +7389,22 @@ function EntregaDetalheModal({ remessa, rota, onClose }) {
         )}
         {!sigImg && (
           <div style={{padding:12,background:'var(--warning-bg)',borderRadius:'var(--radius-sm)',fontSize:12,color:'var(--warning)'}}>
-            ⚠ Assinatura digital não disponível para esta entrega (formato antigo ou sem assinatura)
+            ⚠ Assinatura digital não disponível para esta entrega. Entregas futuras incluirão assinatura automaticamente.
+          </div>
+        )}
+
+        {/* Vacinas entregues */}
+        {(remessa.remessa_itens||[]).length > 0 && (
+          <div>
+            <div style={{fontSize:12,fontWeight:600,color:'var(--text-secondary)',marginBottom:6}}>Itens Entregues</div>
+            <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+              {(remessa.remessa_itens||[]).map((it,i) => (
+                <span key={i} style={{fontSize:12,padding:'4px 10px',borderRadius:6,fontWeight:600,
+                  background:'var(--accent-subtle)',color:'var(--accent)',border:'1px solid rgba(37,99,235,0.2)'}}>
+                  💉 {it.vacinas?.nome}: <strong>{it.quantidade}</strong> doses
+                </span>
+              ))}
+            </div>
           </div>
         )}
 
@@ -8167,8 +8182,8 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
                     </button>
                   )}
 
-                  {/* Botão ver detalhes da entrega (assinatura, local, etc) */}
-                  {isConcluida && (rem.observacao||'').includes('[ASSINATURA') && (
+                  {/* Botão ver detalhes da entrega */}
+                  {isConcluida && (
                     <button className="btn btn-secondary btn-sm" style={{marginTop:4}} onClick={() => setEntregaDetalhe(rem)}>
                       📋 Ver Entrega
                     </button>
@@ -9117,7 +9132,20 @@ function MotoristaAppMobile({ profile }) {
             <div style={{fontSize:11,color:'var(--text-muted)'}}>{profile?.nome || 'Motorista'}</div>
           </div>
         </div>
-        <button onClick={sair} style={{background:'none',border:'1px solid var(--border)',borderRadius:6,color:'var(--danger)',cursor:'pointer',padding:'6px 10px',fontSize:12}}>Sair</button>
+        <div style={{display:'flex',gap:6,alignItems:'center'}}>
+          <button onClick={() => {
+            const cur = localStorage.getItem('vacinalog-theme') || 'dark';
+            const next = cur === 'dark' ? 'light' : 'dark';
+            localStorage.setItem('vacinalog-theme', next);
+            if (next === 'light') document.documentElement.classList.add('light');
+            else document.documentElement.classList.remove('light');
+            // Force re-render via state
+            setPage(p => p);
+          }} style={{background:'none',border:'1px solid var(--border)',borderRadius:6,cursor:'pointer',padding:'6px 10px',fontSize:14}}>
+            {document.documentElement.classList.contains('light') ? '🌙' : '☀️'}
+          </button>
+          <button onClick={sair} style={{background:'none',border:'1px solid var(--border)',borderRadius:6,color:'var(--danger)',cursor:'pointer',padding:'6px 10px',fontSize:12}}>Sair</button>
+        </div>
       </div>
 
       {/* Conteúdo */}
@@ -9326,6 +9354,9 @@ function App() {
       <div className={`main-content ${sidebarCollapsed ? 'collapsed' : ''}`}>
         {isAdmin && (
           <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:16,padding:'8px 14px',background:'var(--bg-card)',borderRadius:'var(--radius-sm)',border:'1px solid var(--border)',flexWrap:'wrap'}}>
+            <button onClick={toggleTheme} className="btn btn-sm btn-secondary" style={{padding:'4px 10px',fontSize:11,marginRight:8}}>
+              {theme === 'light' ? '🌙 Escuro' : '☀️ Claro'}
+            </button>
             <span style={{fontSize:12,color:'var(--text-muted)',fontWeight:600}}>👁 Visualizar como:</span>
             {[
               {key:null, label:'Admin'},
