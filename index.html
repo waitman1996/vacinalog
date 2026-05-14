@@ -4556,10 +4556,137 @@ function VeiculoForm({ initial, bases, motoristas, onSave, onClose }) {
   </>);
 }
 
+// ── Mapa de Monitoramento em Tempo Real ──
+function MonitoramentoAoVivo({ onClose }) {
+  const [motoristas, setMotoristas] = useState([]);
+  const mapRef = React.useRef(null);
+  const mapInstanceRef = React.useRef(null);
+  const markersRef = React.useRef({});
+  const intervalRef = React.useRef(null);
+
+  const loadMotoristas = async () => {
+    const { data } = await sb.from('rotas')
+      .select('id, codigo, current_lat, current_lng, current_location_at, current_speed, veiculo, profiles!rotas_motorista_id_fkey(nome), remessas(status)')
+      .eq('status', 'em_transito')
+      .not('current_lat', 'is', null);
+    setMotoristas(data || []);
+    return data || [];
+  };
+
+  const atualizarMarcadores = (data) => {
+    if (!mapInstanceRef.current) return;
+    const map = mapInstanceRef.current;
+
+    data.forEach(r => {
+      if (!r.current_lat || !r.current_lng) return;
+      const entregues = (r.remessas||[]).filter(rem=>rem.status==='concluida').length;
+      const total = (r.remessas||[]).length;
+      const nome = r.profiles?.nome || r.codigo;
+      const label = `🚚 ${nome}\n${r.veiculo||''}\n${entregues}/${total} entregas${r.current_speed != null ? `\n${r.current_speed} km/h` : ''}`;
+      const ultimaAt = r.current_location_at ? new Date(r.current_location_at) : null;
+      const segundos = ultimaAt ? Math.round((Date.now() - ultimaAt)/1000) : null;
+      const ativo = segundos !== null && segundos < 120;
+
+      const icon = L.divIcon({
+        html: `<div style="background:${ativo?'#16a34a':'#6b7280'};color:#fff;padding:4px 8px;border-radius:20px;font-size:11px;font-weight:700;white-space:nowrap;box-shadow:0 2px 6px rgba(0,0,0,0.3);border:2px solid ${ativo?'#dcfce7':'#e5e7eb'}">
+          🚚 ${nome.split(' ')[0]}${r.current_speed != null && r.current_speed > 0 ? ` · ${r.current_speed}km/h` : ''}
+        </div>`,
+        className: '',
+        iconAnchor: [0, 0]
+      });
+
+      if (markersRef.current[r.id]) {
+        markersRef.current[r.id].setLatLng([r.current_lat, r.current_lng]);
+        markersRef.current[r.id].setIcon(icon);
+        markersRef.current[r.id].setPopupContent(
+          `<strong>${nome}</strong><br/>${r.veiculo||'—'}<br/>${entregues}/${total} entregas${r.current_speed!=null?`<br/>${r.current_speed} km/h`:''}<br/><small style="color:#6b7280">Atualizado: ${segundos!=null?`${segundos}s atrás`:'—'}</small>`
+        );
+      } else {
+        const marker = L.marker([r.current_lat, r.current_lng], { icon });
+        marker.bindPopup(`<strong>${nome}</strong><br/>${r.veiculo||'—'}<br/>${entregues}/${total} entregas${r.current_speed!=null?`<br/>${r.current_speed} km/h`:''}<br/><small style="color:#6b7280">Atualizado: ${segundos!=null?`${segundos}s atrás`:'—'}</small>`);
+        marker.addTo(map);
+        markersRef.current[r.id] = marker;
+      }
+    });
+
+    // Centralizar mapa nos motoristas
+    if (data.length > 0 && data[0].current_lat) {
+      if (data.length === 1) {
+        map.setView([data[0].current_lat, data[0].current_lng], 13);
+      } else {
+        const bounds = L.latLngBounds(data.filter(r=>r.current_lat).map(r=>[r.current_lat, r.current_lng]));
+        map.fitBounds(bounds, { padding: [40, 40] });
+      }
+    }
+  };
+
+  useEffect(() => {
+    if (!mapRef.current) return;
+    if (mapInstanceRef.current) { mapInstanceRef.current.remove(); mapInstanceRef.current = null; }
+    const map = L.map(mapRef.current).setView([-15.78, -47.93], 5);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OSM' }).addTo(map);
+    mapInstanceRef.current = map;
+
+    // Carregar e iniciar polling a cada 15 segundos
+    loadMotoristas().then(data => atualizarMarcadores(data));
+    intervalRef.current = setInterval(async () => {
+      const data = await loadMotoristas();
+      atualizarMarcadores(data);
+    }, 15000);
+
+    return () => {
+      clearInterval(intervalRef.current);
+      if (mapInstanceRef.current) { mapInstanceRef.current.remove(); mapInstanceRef.current = null; }
+      markersRef.current = {};
+    };
+  }, []);
+
+  return (
+    <Modal title="🗺️ Monitoramento em Tempo Real" onClose={onClose} large>
+      <div style={{marginBottom:10,display:'flex',justifyContent:'space-between',alignItems:'center',flexWrap:'wrap',gap:8}}>
+        <div style={{fontSize:12,color:'var(--text-muted)'}}>
+          {motoristas.length === 0
+            ? 'Nenhum motorista em trânsito no momento.'
+            : `${motoristas.length} motorista${motoristas.length>1?'s':''} em trânsito · Atualiza a cada 15 segundos`}
+        </div>
+        <button className="btn btn-secondary btn-sm" onClick={async () => {
+          const data = await loadMotoristas();
+          atualizarMarcadores(data);
+        }}>↻ Atualizar agora</button>
+      </div>
+      <div style={{display:'flex',gap:8,marginBottom:10,flexWrap:'wrap'}}>
+        {motoristas.map(r => {
+          const entregues = (r.remessas||[]).filter(rem=>rem.status==='concluida').length;
+          const total = (r.remessas||[]).length;
+          const segundos = r.current_location_at ? Math.round((Date.now()-new Date(r.current_location_at))/1000) : null;
+          const ativo = segundos !== null && segundos < 120;
+          return (
+            <div key={r.id} style={{padding:'8px 12px',background:'var(--bg-input)',borderRadius:'var(--radius-sm)',border:`1px solid ${ativo?'rgba(16,185,129,0.4)':'var(--border)'}`,fontSize:12}}>
+              <div style={{fontWeight:600,color:ativo?'var(--success)':'var(--text-muted)'}}>
+                {ativo?'🟢':'⚫'} {r.profiles?.nome || r.codigo}
+              </div>
+              <div style={{color:'var(--text-muted)',fontSize:11}}>
+                🚗 {r.veiculo||'—'} · {entregues}/{total} entregas
+                {r.current_speed != null && r.current_speed > 0 && <span> · {r.current_speed} km/h</span>}
+                {segundos != null && <span> · {segundos < 60 ? `${segundos}s` : `${Math.round(segundos/60)}min`} atrás</span>}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <div ref={mapRef} style={{height:420,borderRadius:'var(--radius-sm)',border:'1px solid var(--border)',zIndex:1}} />
+      <div style={{marginTop:8,fontSize:11,color:'var(--text-muted)'}}>
+        🟢 Verde = localização recente (menos de 2 min) · ⚫ Cinza = sem sinal recente
+      </div>
+    </Modal>
+  );
+}
+
 // ── Lista de Rotas ──
 function RotasListPage({ onOpenRoteirizacao }) {
   const [rotas, setRotas] = useState([]);
   const [statusFilter, setStatusFilter] = useState('');
+  const [showMonitoramento, setShowMonitoramento] = useState(false);
   const toast = useContext(ToastContext);
 
   const ROTA_ST = { planejada:'Planejada', montagem:'Em Montagem', pronta:'Pronta', em_transito:'Em Trânsito', concluida:'Concluída', cancelada:'Cancelada' };
@@ -4589,8 +4716,14 @@ function RotasListPage({ onOpenRoteirizacao }) {
     <div>
       <div className="page-header">
         <div><div className="page-title">Rotas</div><div className="page-subtitle">Gerencie rotas de entrega e coleta</div></div>
-        <button className="btn btn-primary" onClick={onOpenRoteirizacao}>+ Nova Roteirização</button>
+        <div style={{display:'flex',gap:8}}>
+          <button className="btn btn-secondary" onClick={() => setShowMonitoramento(true)}>
+            🗺️ Monitoramento ao Vivo
+          </button>
+          <button className="btn btn-primary" onClick={onOpenRoteirizacao}>+ Nova Roteirização</button>
+        </div>
       </div>
+      {showMonitoramento && <MonitoramentoAoVivo onClose={() => setShowMonitoramento(false)} />}
       <div className="card" style={{marginBottom:16}}>
         <div className="form-group" style={{maxWidth:200}}>
           <label className="form-label">Status</label>
@@ -6300,6 +6433,7 @@ function AddItemRemessa({ vacinas, onAdd, dosesSugeridas }) {
           onChange={e=>setQuantidade(e.target.value)}
           onKeyDown={e=>e.key==='Enter'&&add()}
           style={{borderColor: quantidade !== '' && parseInt(quantidade) !== dosesSugeridas && dosesSugeridas > 0 ? 'var(--warning)' : undefined}} />
+        {quantidade === '0' && <div style={{fontSize:9,color:'var(--text-muted)',marginTop:2}}>Aplicador já tem estoque</div>}
       </div>
       <button className="btn btn-primary btn-sm" onClick={add} disabled={!vacinaId || quantidade==='' || (parseInt(quantidade||0)>0 && !lote.trim())}>+ Adicionar</button>
     </div>
@@ -6784,13 +6918,73 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
     const payload = {
       status: 'em_transito',
       checkin_at: now,
-      ...(loc ? { checkin_lat: loc.lat, checkin_lng: loc.lng } : {})
+      ...(loc ? { checkin_lat: loc.lat, checkin_lng: loc.lng, current_lat: loc.lat, current_lng: loc.lng, current_location_at: now } : {})
     };
     const { error } = await sb.from('rotas').update(payload).eq('id', rota.id);
     if (error) { toast(error.message, 'error'); return; }
     await sb.from('remessas').update({ status: 'em_transito' }).eq('rota_id', rota.id).in('status', ['pronta','carregada','montagem']);
     toast('Check-in registrado! Boa viagem! 🚀', 'success');
+    // Iniciar tracking contínuo
+    iniciarTracking();
     load();
+  };
+
+  // Tracking contínuo de localização
+  const trackingRef = React.useRef(null);
+
+  const iniciarTracking = () => {
+    if (trackingRef.current) return; // já rodando
+    if (!navigator.geolocation) return;
+
+    const enviarLocalizacao = async (position) => {
+      const now = new Date().toISOString();
+      await sb.from('rotas').update({
+        current_lat: position.coords.latitude,
+        current_lng: position.coords.longitude,
+        current_location_at: now,
+        current_speed: position.coords.speed ? Math.round(position.coords.speed * 3.6) : null // m/s → km/h
+      }).eq('id', rota.id);
+    };
+
+    // watchPosition: atualiza automaticamente quando o motorista se move
+    trackingRef.current = navigator.geolocation.watchPosition(
+      enviarLocalizacao,
+      (err) => console.warn('GPS erro:', err.message),
+      { enableHighAccuracy: true, maximumAge: 10000, timeout: 15000 }
+    );
+    console.log('[VacinaLog] Tracking GPS iniciado');
+  };
+
+  const pararTracking = () => {
+    if (trackingRef.current) {
+      navigator.geolocation.clearWatch(trackingRef.current);
+      trackingRef.current = null;
+      console.log('[VacinaLog] Tracking GPS parado');
+    }
+  };
+
+  // Iniciar tracking se rota já estiver em_transito ao carregar
+  useEffect(() => {
+    if (rota.status === 'em_transito') iniciarTracking();
+    return () => pararTracking(); // cleanup ao sair da tela
+  }, [rota.status]);
+
+  const fazerCheckoutComTracking = async (obs) => {
+    pararTracking();
+    const loc = await getLocation();
+    const now = new Date().toISOString();
+    const { error } = await sb.from('rotas').update({
+      status: 'concluida',
+      checkout_at: now,
+      checkout_obs: obs || null,
+      current_lat: null, current_lng: null, current_location_at: null, // limpar posição
+      ...(loc ? { checkout_lat: loc.lat, checkout_lng: loc.lng } : {})
+    }).eq('id', rota.id);
+    if (error) { toast(error.message, 'error'); return; }
+    toast('Check-out registrado! Rota finalizada.', 'success');
+    setCheckoutModal(false);
+    load();
+    setTimeout(() => onBack(), 1500);
   };
 
   const confirmarEntrega = async (remId) => {
@@ -6920,22 +7114,7 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
     }
   };
 
-  const fazerCheckout = async (obs) => {
-    toast('Registrando localização...', 'info');
-    const loc = await getLocation();
-    const now = new Date().toISOString();
-    const { error } = await sb.from('rotas').update({
-      status: 'concluida',
-      checkout_at: now,
-      checkout_obs: obs || null,
-      ...(loc ? { checkout_lat: loc.lat, checkout_lng: loc.lng } : {})
-    }).eq('id', rota.id);
-    if (error) { toast(error.message, 'error'); return; }
-    toast('Check-out registrado! Rota finalizada.', 'success');
-    setCheckoutModal(false);
-    load();
-    setTimeout(() => onBack(), 1500);
-  };
+  const fazerCheckout = fazerCheckoutComTracking;
 
   const reportarProblema = async (remId, problema) => {
     const obs = (remessas.find(r=>r.id===remId)?.observacao||'') + '\n[PROBLEMA ' + new Date().toLocaleTimeString('pt-BR') + '] ' + problema;
