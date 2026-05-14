@@ -679,7 +679,7 @@ function Sidebar({ profile, currentPage, onNavigate, open, onClose, collapsed, o
       { id: 'rotas', icon: '🚚', label: 'Rotas' },
       { id: 'veiculos', icon: '🚗', label: 'Veículos' },
       { id: 'montagem', icon: '📦', label: 'Fila de Montagem' },
-      { id: 'etiquetas', icon: '🏷️', label: 'Etiquetas' },
+      { id: 'etiquetas', icon: '🏷️', label: 'Etiquetas/Recibos' },
       { id: 'transferencia', icon: '↔️', label: 'Transferência' },
       { id: 'movimentacoes', icon: '📜', label: 'Movimentações' },
     );
@@ -700,7 +700,7 @@ function Sidebar({ profile, currentPage, onNavigate, open, onClose, collapsed, o
       { section: 'Logística' },
       { id: 'rotas', icon: '🚚', label: 'Rotas' },
       { id: 'montagem', icon: '📦', label: 'Fila de Montagem' },
-      { id: 'etiquetas', icon: '🏷️', label: 'Etiquetas' },
+      { id: 'etiquetas', icon: '🏷️', label: 'Etiquetas/Recibos' },
       { section: 'Estoque' },
       { id: 'estoque', icon: '📦', label: 'Estoque' },
       { id: 'transferencia', icon: '↔️', label: 'Transferência' },
@@ -5970,7 +5970,7 @@ function TransferenciaPage() {
   const [bases, setBases] = useState([]);
   const [vacinas, setVacinas] = useState([]);
   const [modo, setModo] = useState('transferencia');
-  const [form, setForm] = useState({ vacina_id:'', quantidade:'', origem_tipo:'base', origem_id:'', destino_tipo:'aplicador', destino_id:'', observacao:'', tem_danificadas:false, qtd_danificadas:'' });
+  const [form, setForm] = useState({ vacina_id:'', quantidade:'', lote:'', origem_tipo:'base', origem_id:'', destino_tipo:'aplicador', destino_id:'', observacao:'', tem_danificadas:false, qtd_danificadas:'' });
   const [searchOrig, setSearchOrig] = useState('');
   const [searchDest, setSearchDest] = useState('');
   const [origResults, setOrigResults] = useState([]);
@@ -6036,41 +6036,43 @@ function TransferenciaPage() {
     }
   };
 
+  const loteObs = () => form.lote?.trim() ? `Lote manual: ${form.lote.trim()} | ` : '';
+
   const executarTransferencia = async () => {
-    if (!form.vacina_id || !form.quantidade || !form.origem_id || !form.destino_id) { toast('Preencha todos os campos', 'error'); return; }
+    if (!form.vacina_id || !form.quantidade || !form.lote?.trim() || !form.origem_id || !form.destino_id) { toast('Preencha vacina, lote, quantidade, origem e destino', 'error'); return; }
     setSaving(true);
     const qtd = parseInt(form.quantidade);
     const userId = (await sb.auth.getUser()).data.user.id;
     try {
-      const { error } = await sb.rpc('transferir_estoque', { p_vacina_id: form.vacina_id, p_quantidade: qtd, p_origem_tipo: form.origem_tipo, p_origem_id: form.origem_id, p_destino_tipo: form.destino_tipo, p_destino_id: form.destino_id, p_observacao: form.observacao || null });
+      const { error } = await sb.rpc('transferir_estoque', { p_vacina_id: form.vacina_id, p_quantidade: qtd, p_origem_tipo: form.origem_tipo, p_origem_id: form.origem_id, p_destino_tipo: form.destino_tipo, p_destino_id: form.destino_id, p_observacao: (loteObs() + (form.observacao||'')).trim() || null });
       if (error) {
         await debitarEstoque(form.vacina_id, form.origem_tipo, form.origem_id, qtd);
         await creditarEstoque(form.vacina_id, form.destino_tipo, form.destino_id, qtd);
-        await sb.from('movimentacoes').insert({ tipo: 'transferencia', vacina_id: form.vacina_id, quantidade: qtd, origem_tipo: form.origem_tipo, origem_base_id: form.origem_tipo==='base'?form.origem_id:null, origem_aplicador_id: form.origem_tipo==='aplicador'?form.origem_id:null, destino_tipo: form.destino_tipo, destino_base_id: form.destino_tipo==='base'?form.destino_id:null, destino_aplicador_id: form.destino_tipo==='aplicador'?form.destino_id:null, observacao: form.observacao||null, criado_por: userId });
+        await sb.from('movimentacoes').insert({ tipo: 'transferencia', vacina_id: form.vacina_id, quantidade: qtd, origem_tipo: form.origem_tipo, origem_base_id: form.origem_tipo==='base'?form.origem_id:null, origem_aplicador_id: form.origem_tipo==='aplicador'?form.origem_id:null, destino_tipo: form.destino_tipo, destino_base_id: form.destino_tipo==='base'?form.destino_id:null, destino_aplicador_id: form.destino_tipo==='aplicador'?form.destino_id:null, observacao: (loteObs() + (form.observacao||'')).trim() || null, criado_por: userId });
       }
       toast('Transferência realizada! ✓', 'success');
-      setForm(f=>({...f, quantidade:'', observacao:''}));
+      setForm(f=>({...f, quantidade:'', lote:'', observacao:''}));
     } catch(err) { toast(err.message, 'error'); }
     setSaving(false);
   };
 
   const executarEntregaDoses = async () => {
-    if (!form.vacina_id || !form.quantidade || !form.origem_id || !tarefaSel) { toast('Preencha todos os campos e selecione a tarefa', 'error'); return; }
+    if (!form.vacina_id || !form.quantidade || !form.lote?.trim() || !form.origem_id || !tarefaSel) { toast('Preencha vacina, lote, quantidade, origem e selecione a tarefa', 'error'); return; }
     setSaving(true);
     const qtd = parseInt(form.quantidade);
     const userId = (await sb.auth.getUser()).data.user.id;
     try {
       await debitarEstoque(form.vacina_id, form.origem_tipo, form.origem_id, qtd);
-      await sb.from('movimentacoes').insert({ tipo: 'ajuste', vacina_id: form.vacina_id, quantidade: qtd, origem_tipo: form.origem_tipo, origem_base_id: form.origem_tipo==='base'?form.origem_id:null, origem_aplicador_id: form.origem_tipo==='aplicador'?form.origem_id:null, destino_tipo: form.origem_tipo, destino_base_id: form.origem_tipo==='base'?form.origem_id:null, destino_aplicador_id: form.origem_tipo==='aplicador'?form.origem_id:null, observacao: `Entrega de Doses p/ Tarefa: ${tarefaSel.codigo} | Cliente: ${tarefaSel.cliente} | ${qtd} doses | ${form.observacao||''}`, criado_por: userId });
+      await sb.from('movimentacoes').insert({ tipo: 'ajuste', vacina_id: form.vacina_id, quantidade: qtd, origem_tipo: form.origem_tipo, origem_base_id: form.origem_tipo==='base'?form.origem_id:null, origem_aplicador_id: form.origem_tipo==='aplicador'?form.origem_id:null, destino_tipo: form.origem_tipo, destino_base_id: form.origem_tipo==='base'?form.origem_id:null, destino_aplicador_id: form.origem_tipo==='aplicador'?form.origem_id:null, observacao: `Entrega de Doses p/ Tarefa: ${tarefaSel.codigo} | Cliente: ${tarefaSel.cliente} | Lote manual: ${form.lote.trim()} | ${qtd} doses | ${form.observacao||''}`, criado_por: userId });
       toast(`Entrega de ${qtd} doses registrada para ${tarefaSel.codigo} ✓`, 'success');
-      setForm(f=>({...f, quantidade:'', observacao:''}));
+      setForm(f=>({...f, quantidade:'', lote:'', observacao:''}));
       setTarefaSel(null); setTarefaBusca('');
     } catch(err) { toast(err.message, 'error'); }
     setSaving(false);
   };
 
   const executarDevolucao = async () => {
-    if (!form.vacina_id || !form.quantidade || !form.origem_id || !form.destino_id) { toast('Preencha todos os campos', 'error'); return; }
+    if (!form.vacina_id || !form.quantidade || !form.lote?.trim() || !form.origem_id || !form.destino_id) { toast('Preencha vacina, lote, quantidade, aplicador e base destino', 'error'); return; }
     const qtdTotal = parseInt(form.quantidade);
     const qtdDanif = form.tem_danificadas ? parseInt(form.qtd_danificadas||0) : 0;
     const qtdBoa = qtdTotal - qtdDanif;
@@ -6081,13 +6083,13 @@ function TransferenciaPage() {
       await debitarEstoque(form.vacina_id, 'aplicador', form.origem_id, qtdTotal);
       if (qtdBoa > 0) {
         await creditarEstoque(form.vacina_id, 'base', form.destino_id, qtdBoa);
-        await sb.from('movimentacoes').insert({ tipo: 'devolucao', vacina_id: form.vacina_id, quantidade: qtdBoa, origem_tipo: 'aplicador', origem_aplicador_id: form.origem_id, destino_tipo: 'base', destino_base_id: form.destino_id, observacao: `Devolução: ${qtdBoa} boas + ${qtdDanif} danificadas = ${qtdTotal} total | ${form.observacao||''}`, criado_por: userId });
+        await sb.from('movimentacoes').insert({ tipo: 'devolucao', vacina_id: form.vacina_id, quantidade: qtdBoa, origem_tipo: 'aplicador', origem_aplicador_id: form.origem_id, destino_tipo: 'base', destino_base_id: form.destino_id, observacao: `Devolução: ${qtdBoa} boas + ${qtdDanif} danificadas = ${qtdTotal} total | Lote manual: ${form.lote.trim()} | ${form.observacao||''}`, criado_por: userId });
       }
       if (qtdDanif > 0) {
-        await sb.from('movimentacoes').insert({ tipo: 'ajuste', vacina_id: form.vacina_id, quantidade: qtdDanif, origem_tipo: 'aplicador', origem_aplicador_id: form.origem_id, destino_tipo: 'base', destino_base_id: form.destino_id, observacao: `DESCARTE: ${qtdDanif} doses danificadas de ${qtdTotal} devolvidas | ${form.observacao||''}`, criado_por: userId });
+        await sb.from('movimentacoes').insert({ tipo: 'ajuste', vacina_id: form.vacina_id, quantidade: qtdDanif, origem_tipo: 'aplicador', origem_aplicador_id: form.origem_id, destino_tipo: 'base', destino_base_id: form.destino_id, observacao: `DESCARTE: ${qtdDanif} doses danificadas de ${qtdTotal} devolvidas | Lote manual: ${form.lote.trim()} | ${form.observacao||''}`, criado_por: userId });
       }
       toast(`Devolução: ${qtdBoa} para estoque${qtdDanif>0?` + ${qtdDanif} descartadas`:''} ✓`, 'success');
-      setForm(f=>({...f, quantidade:'', observacao:'', tem_danificadas:false, qtd_danificadas:''}));
+      setForm(f=>({...f, quantidade:'', lote:'', observacao:'', tem_danificadas:false, qtd_danificadas:''}));
       setSearchOrig('');
       carregarDescarte();
     } catch(err) { toast(err.message, 'error'); }
@@ -6126,7 +6128,9 @@ function TransferenciaPage() {
         <div className="card">
           <div className="form-grid">
             <div className="form-group"><label className="form-label">Vacina *</label>
-              <select className="form-select" value={form.vacina_id} onChange={e=>setForm(f=>({...f,vacina_id:e.target.value}))}><option value="">Selecione...</option>{vacinas.map(v=><option key={v.id} value={v.id}>{v.nome}{v.lote?` (${v.lote})`:''}</option>)}</select></div>
+              <select className="form-select" value={form.vacina_id} onChange={e=>setForm(f=>({...f,vacina_id:e.target.value}))}><option value="">Selecione...</option>{vacinas.map(v=><option key={v.id} value={v.id}>{v.nome}</option>)}</select></div>
+            <div className="form-group"><label className="form-label">Lote manual *</label>
+              <input className="form-input" value={form.lote||''} onChange={e=>setForm(f=>({...f,lote:e.target.value}))} placeholder="Digite o lote exatamente como está na caixa" /></div>
             <div className="form-group"><label className="form-label">Quantidade *</label>
               <input className="form-input" type="number" min="1" value={form.quantidade} onChange={e=>setForm(f=>({...f,quantidade:e.target.value}))} /></div>
             <div className="form-group"><label className="form-label">Tipo Origem</label>
@@ -6159,7 +6163,9 @@ function TransferenciaPage() {
           </div>
           <div className="form-grid">
             <div className="form-group"><label className="form-label">Vacina *</label>
-              <select className="form-select" value={form.vacina_id} onChange={e=>setForm(f=>({...f,vacina_id:e.target.value}))}><option value="">Selecione...</option>{vacinas.map(v=><option key={v.id} value={v.id}>{v.nome}{v.lote?` (${v.lote})`:''}</option>)}</select></div>
+              <select className="form-select" value={form.vacina_id} onChange={e=>setForm(f=>({...f,vacina_id:e.target.value}))}><option value="">Selecione...</option>{vacinas.map(v=><option key={v.id} value={v.id}>{v.nome}</option>)}</select></div>
+            <div className="form-group"><label className="form-label">Lote manual *</label>
+              <input className="form-input" value={form.lote||''} onChange={e=>setForm(f=>({...f,lote:e.target.value}))} placeholder="Digite o lote exatamente como está na caixa" /></div>
             <div className="form-group"><label className="form-label">Quantidade *</label>
               <input className="form-input" type="number" min="1" value={form.quantidade} onChange={e=>setForm(f=>({...f,quantidade:e.target.value}))} /></div>
             <div className="form-group"><label className="form-label">Origem *</label>
@@ -6202,7 +6208,9 @@ function TransferenciaPage() {
           </div>
           <div className="form-grid">
             <div className="form-group"><label className="form-label">Vacina *</label>
-              <select className="form-select" value={form.vacina_id} onChange={e=>setForm(f=>({...f,vacina_id:e.target.value}))}><option value="">Selecione...</option>{vacinas.map(v=><option key={v.id} value={v.id}>{v.nome}{v.lote?` (${v.lote})`:''}</option>)}</select></div>
+              <select className="form-select" value={form.vacina_id} onChange={e=>setForm(f=>({...f,vacina_id:e.target.value}))}><option value="">Selecione...</option>{vacinas.map(v=><option key={v.id} value={v.id}>{v.nome}</option>)}</select></div>
+            <div className="form-group"><label className="form-label">Lote manual *</label>
+              <input className="form-input" value={form.lote||''} onChange={e=>setForm(f=>({...f,lote:e.target.value}))} placeholder="Digite o lote exatamente como está na caixa" /></div>
             <div className="form-group"><label className="form-label">Total devolvido *</label>
               <input className="form-input" type="number" min="1" value={form.quantidade} onChange={e=>setForm(f=>({...f,quantidade:e.target.value}))} placeholder="Ex: 100" /></div>
             <div className="form-group"><label className="form-label">Aplicador (origem) *</label>
@@ -6957,7 +6965,7 @@ function EtiquetaModal({ remessa, rota, onClose, totalParadas }) {
 
     const itensHtml = (remessa.remessa_itens || []).length > 0
       ? (remessa.remessa_itens || []).map(it =>
-          '<div class="item-row"><span>' + (it.vacinas?.nome || '—') + (it.vacinas?.lote ? ' (' + it.vacinas.lote + ')' : '') + '</span><span style="font-weight:700">' + it.quantidade + '</span></div>'
+          '<div class="item-row"><span>' + (it.vacinas?.nome || '—') + (it.lote ? ' (Lote ' + it.lote + ')' : '') + '</span><span style="font-weight:700">' + it.quantidade + '</span></div>'
         ).join('')
       : '<div style="font-size:10px;color:#999;text-align:center">Sem itens</div>';
 
@@ -7045,7 +7053,7 @@ function EtiquetaModal({ remessa, rota, onClose, totalParadas }) {
           ? <div style={{fontSize:11,color:'#999',fontStyle:'italic'}}>Adicione itens antes de imprimir</div>
           : (remessa.remessa_itens || []).map(it => (
             <div key={it.id} style={{display:'flex',justifyContent:'space-between',fontSize:11,padding:'2px 0',borderBottom:'1px solid #eee'}}>
-              <span>{it.vacinas?.nome} {it.vacinas?.lote ? '(' + it.vacinas.lote + ')' : ''}</span>
+              <span>{it.vacinas?.nome} {it.lote ? '(Lote ' + it.lote + ')' : ''}</span>
               <strong>{it.quantidade}</strong>
             </div>
           ))
@@ -7063,49 +7071,138 @@ function EtiquetaModal({ remessa, rota, onClose, totalParadas }) {
   );
 }
 
-// Página de etiquetas avulsas (busca por rastreio)
+
+// Página de etiquetas e recibos avulsos (busca por rastreio, aplicador e data de montagem)
 function EtiquetasPage() {
-  const [search, setSearch] = useState('');
+  const hojeISO = new Date().toISOString().split('T')[0];
+  const [filters, setFilters] = useState({ rastreio:'', aplicador:'', data_montagem:'' });
+  const [resultados, setResultados] = useState([]);
   const [remessa, setRemessa] = useState(null);
   const [rota, setRota] = useState(null);
   const [totalParadas, setTotalParadas] = useState(0);
   const [loading, setLoading] = useState(false);
   const toast = useContext(ToastContext);
 
-  const buscar = async () => {
-    if (!search.trim()) return;
-    setLoading(true);
-    const { data, error } = await sb.from('remessas')
+  const setFilter = (k, v) => setFilters(f => ({ ...f, [k]: v }));
+
+  const montarQuery = () => {
+    let q = sb.from('remessas')
       .select('*, remessa_itens(*, vacinas(nome, lote)), bases(nome, cidade, uf), aplicadores(nome, cpf, cidade, uf, endereco), rotas(id, codigo, data_prevista, veiculo, base_origem_id, bases!rotas_base_origem_id_fkey(nome), profiles!rotas_motorista_id_fkey(nome))')
-      .ilike('codigo_rastreio', `%${search.trim()}%`)
-      .single();
+      .order('created_at', { ascending: false })
+      .limit(80);
+    if (filters.rastreio.trim()) q = q.ilike('codigo_rastreio', `%${filters.rastreio.trim()}%`);
+    if (filters.data_montagem) {
+      q = q.gte('created_at', filters.data_montagem + 'T00:00:00').lt('created_at', filters.data_montagem + 'T23:59:59');
+    }
+    return q;
+  };
+
+  const buscar = async () => {
+    setLoading(true);
+    const { data, error } = await montarQuery();
     setLoading(false);
-    if (error || !data) { toast('Remessa não encontrada', 'error'); return; }
-    setRemessa(data);
-    setRota(data.rotas);
-    // Contar total de paradas na rota
-    const { count } = await sb.from('remessas').select('id', {count:'exact',head:true}).eq('rota_id', data.rota_id);
+    if (error) { toast(error.message, 'error'); return; }
+    let rows = data || [];
+    if (filters.aplicador.trim()) {
+      const t = filters.aplicador.trim().toLowerCase();
+      rows = rows.filter(r => {
+        const nome = (r.aplicadores?.nome || r.bases?.nome || '').toLowerCase();
+        const cpf = (r.aplicadores?.cpf || '').toLowerCase();
+        const obs = (r.observacao || '').toLowerCase();
+        return nome.includes(t) || cpf.includes(t) || obs.includes(t);
+      });
+    }
+    setResultados(rows);
+    if (rows.length === 0) toast('Nenhuma remessa encontrada para os filtros informados', 'info');
+  };
+
+  const abrirEtiqueta = async (r) => {
+    setRemessa(r);
+    setRota(r.rotas);
+    const { count } = await sb.from('remessas').select('id', {count:'exact',head:true}).eq('rota_id', r.rota_id);
     setTotalParadas(count||0);
   };
+
+  const imprimirRecibo = (rem) => {
+    const destNome = rem.destino_tipo==='base' ? rem.bases?.nome : rem.aplicadores?.nome;
+    const destCPF = rem.destino_tipo==='aplicador' ? rem.aplicadores?.cpf : null;
+    let nomeExibir = destNome;
+    let cpfExibir = destCPF;
+    if (!nomeExibir) {
+      const obs = rem.observacao || '';
+      const mNome = obs.match(/^([^(|]+)/);
+      const mCPF = obs.match(/\(([^)]+)\)/);
+      if (mNome) nomeExibir = mNome[1].trim();
+      if (mCPF) cpfExibir = mCPF[1].trim();
+    }
+    const dataHoje = new Date().toLocaleDateString('pt-BR');
+    const horaAgora = new Date().toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'});
+    const itensHtml = (rem.remessa_itens||[]).map(it =>
+      '<tr><td style="border:1px solid #000;padding:4px 8px;font-size:11px;">' + (it.vacinas?.nome||'—') + '</td>'
+      + '<td style="border:1px solid #000;padding:4px 8px;font-size:11px;text-align:center;">' + (it.lote || '—') + '</td>'
+      + '<td style="border:1px solid #000;padding:4px 8px;font-size:11px;text-align:center;font-weight:700;">' + it.quantidade + '</td></tr>'
+    ).join('');
+    const html = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Recibo ' + rem.codigo_rastreio + '</title>'
+      + '<style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:Arial,sans-serif;padding:12mm 15mm;background:#fff;color:#000;font-size:11px;line-height:1.5}@page{size:A4;margin:10mm}@media print{body{padding:0}}h1{font-size:14px;text-align:center;margin-bottom:8px;text-transform:uppercase;letter-spacing:1px}.empresa{text-align:center;font-size:10px;color:#444;margin-bottom:12px}.intro{font-size:10px;text-align:justify;margin-bottom:12px;line-height:1.6}.section{margin-bottom:10px}.section-title{font-weight:700;font-size:11px;text-transform:uppercase;border-bottom:1px solid #000;padding-bottom:2px;margin-bottom:6px}table{width:100%;border-collapse:collapse;margin-bottom:8px}th{border:1px solid #000;padding:4px 8px;font-size:10px;background:#f0f0f0;text-align:center}.field{margin-bottom:4px;font-size:11px}.sig-area{margin-top:30px;text-align:center}.sig-line{border-top:1px solid #000;width:300px;margin:0 auto;padding-top:4px;font-size:10px}.footer-info{display:flex;justify-content:space-between;margin-top:16px;font-size:10px;border-top:1px solid #ccc;padding-top:6px}.checkbox{display:inline-block;width:12px;height:12px;border:1px solid #000;margin-right:4px;vertical-align:middle}</style></head><body>'
+      + '<h1>Termo de Entrega e Responsabilidade</h1><div class="empresa">S&A IMUNIZAÇÕES LTDA</div>'
+      + '<div class="intro">Pelo presente instrumento, eu, abaixo identificado, declaro ter recebido da S&A IMUNIZAÇÕES LTDA os materiais e imunobiológicos listados, assumindo total responsabilidade pela sua guarda, conservação térmica e uso exclusivo na campanha designada.</div>'
+      + '<div class="section"><div class="section-title">Dados de Recebimento</div>'
+      + '<div class="field"><b>APLICADOR:</b> ' + (nomeExibir||'_____________________________') + '&nbsp;&nbsp;&nbsp;&nbsp;<b>CPF:</b> ' + (cpfExibir||'___________________') + '</div>'
+      + '<div class="field"><b>CÓDIGO:</b> ' + (rem.codigo_rastreio||'—') + '&nbsp;&nbsp;&nbsp;&nbsp;<b>ROTA:</b> ' + (rem.rotas?.codigo||'—') + '</div>'
+      + '<div class="field"><b>TIPO:</b> <span class="checkbox"></span> ENTREGA &nbsp;&nbsp; <span class="checkbox"></span> DEVOLUÇÃO</div></div>'
+      + '<div class="section"><div class="section-title">Detalhamento da Carga</div>'
+      + '<table><thead><tr><th>Vacina/Doses</th><th>Lote Manual</th><th>Qtd. Doses</th></tr></thead><tbody>'
+      + itensHtml + (itensHtml ? '' : '<tr><td style="border:1px solid #000;padding:4px 8px;" colspan="3">—</td></tr>')
+      + '</tbody></table>'
+      + '<div class="field"><b>Caixa de Insumos:</b> _____ (Qtd. Cx) &nbsp;&nbsp; <b>Coletor Perfuro:</b> _____ (Qtd.) &nbsp;&nbsp; <b>Kit Infantil:</b> <span class="checkbox"></span> Sim <span class="checkbox"></span> Não</div>'
+      + '<div class="field"><b>Outros:</b> _______________________________________________________________________________________</div></div>'
+      + '<div class="section"><div class="section-title">Conferência na Devolução</div>'
+      + '<div class="field"><b>Doses devolvidas boas:</b> _________ &nbsp;&nbsp; <b>Doses danificadas:</b> _________ &nbsp;&nbsp; <b>Lote:</b> ____________________</div>'
+      + '<div class="field"><b>Observações:</b> _______________________________________________________________________________</div></div>'
+      + '<div class="sig-area"><div class="sig-line">Assinatura do Aplicador / Responsável</div></div>'
+      + '<div class="footer-info"><span>Data: ' + dataHoje + ' às ' + horaAgora + '</span><span>VacinaLog · Recibo: ' + rem.codigo_rastreio + '</span></div>'
+      + '</body></html>';
+    const w = window.open('', '_blank', 'width=900,height=700');
+    w.document.write(html); w.document.close(); w.focus(); setTimeout(() => w.print(), 500);
+  };
+
+  useEffect(() => { buscar(); }, []);
 
   return (
     <div>
       <div className="page-header">
-        <div><div className="page-title">Etiquetas</div><div className="page-subtitle">Gerar etiqueta por código de rastreio</div></div>
+        <div><div className="page-title">Etiquetas e Recibos</div><div className="page-subtitle">Buscar por rastreio, aplicador ou data de montagem para imprimir etiqueta ou recibo</div></div>
       </div>
       <div className="card" style={{marginBottom:16}}>
-        <div style={{display:'flex',gap:10,alignItems:'flex-end'}}>
-          <div className="form-group" style={{flex:1}}>
-            <label className="form-label">Código de rastreio</label>
-            <input className="form-input" value={search} onChange={e=>setSearch(e.target.value)}
-              onKeyDown={e=>e.key==='Enter'&&buscar()} placeholder="Ex: RM-2026-000001" />
-          </div>
-          <button className="btn btn-primary" onClick={buscar} disabled={loading}>{loading?'Buscando...':'Buscar'}</button>
+        <div className="form-grid" style={{alignItems:'end'}}>
+          <div className="form-group"><label className="form-label">Código de rastreio</label><input className="form-input" value={filters.rastreio} onChange={e=>setFilter('rastreio',e.target.value)} onKeyDown={e=>e.key==='Enter'&&buscar()} placeholder="Ex: RM-2026-000001" /></div>
+          <div className="form-group"><label className="form-label">Aplicador / CPF</label><input className="form-input" value={filters.aplicador} onChange={e=>setFilter('aplicador',e.target.value)} onKeyDown={e=>e.key==='Enter'&&buscar()} placeholder="Nome ou CPF do aplicador" /></div>
+          <div className="form-group"><label className="form-label">Data de montagem</label><input className="form-input" type="date" value={filters.data_montagem} onClick={openDatePicker} onFocus={openDatePicker} onChange={e=>setFilter('data_montagem',e.target.value)} /></div>
+          <div style={{display:'flex',gap:8,flexWrap:'wrap'}}><button className="btn btn-primary" onClick={buscar} disabled={loading}>{loading?'Buscando...':'🔎 Buscar'}</button><button className="btn btn-secondary" onClick={()=>{setFilters({rastreio:'',aplicador:'',data_montagem:''});setResultados([]);}}>Limpar</button></div>
         </div>
       </div>
-      {remessa && rota && (
-        <EtiquetaModal remessa={remessa} rota={rota} onClose={()=>setRemessa(null)} totalParadas={totalParadas} />
-      )}
+
+      <div className="card">
+        <div className="card-header"><div className="card-title">Resultados ({resultados.length})</div></div>
+        {resultados.length === 0 ? <div className="empty-state"><div className="empty-icon">📋</div><div className="empty-text">Use os filtros acima para localizar recibos e etiquetas.</div></div> : (
+          <div className="table-wrap"><table><thead><tr><th>Montagem</th><th>Rastreio</th><th>Rota</th><th>Aplicador/Destino</th><th>Itens / Lote</th><th>Status</th><th>Ações</th></tr></thead><tbody>
+            {resultados.map(r => {
+              const destino = r.destino_tipo==='base' ? r.bases?.nome : r.aplicadores?.nome;
+              const itens = (r.remessa_itens||[]).map(it => `${it.vacinas?.nome||'Vacina'} · Lote ${it.lote||'manual não informado'} · ${it.quantidade}`).join(' | ');
+              return <tr key={r.id}>
+                <td style={{fontSize:11}}>{r.created_at ? new Date(r.created_at).toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',year:'2-digit',hour:'2-digit',minute:'2-digit'}) : '—'}</td>
+                <td className="mono" style={{fontWeight:700,color:'var(--accent)'}}>{r.codigo_rastreio}</td>
+                <td>{r.rotas?.codigo || '—'}</td>
+                <td>{destino || '—'}{r.aplicadores?.cpf ? <div style={{fontSize:10,color:'var(--text-muted)'}}>CPF: {r.aplicadores.cpf}</div> : null}</td>
+                <td style={{fontSize:11,maxWidth:360}}>{itens || '—'}</td>
+                <td><span className="badge badge-gray">{r.status}</span></td>
+                <td><div style={{display:'flex',gap:6,flexWrap:'wrap'}}><button className="btn btn-secondary btn-sm" onClick={()=>abrirEtiqueta(r)}>🏷️ Etiqueta</button><button className="btn btn-primary btn-sm" onClick={()=>imprimirRecibo(r)}>📋 Recibo</button></div></td>
+              </tr>;
+            })}
+          </tbody></table></div>
+        )}
+      </div>
+      {remessa && rota && <EtiquetaModal remessa={remessa} rota={rota} onClose={()=>setRemessa(null)} totalParadas={totalParadas} />}
     </div>
   );
 }
