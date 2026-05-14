@@ -37,6 +37,46 @@
   --radius: 10px;
   --radius-sm: 6px;
   --shadow: 0 1px 3px rgba(0,0,0,0.3), 0 4px 12px rgba(0,0,0,0.2);
+
+/* Light theme */
+html.light {
+  --bg-deep: #f0f2f5;
+  --bg-card: #ffffff;
+  --bg-card-hover: #f8f9fb;
+  --bg-input: #f5f6f8;
+  --border: #d4d8e0;
+  --border-focus: #2563eb;
+  --text-primary: #111827;
+  --text-secondary: #4b5563;
+  --text-muted: #9ca3af;
+  --accent: #2563eb;
+  --accent-hover: #3b82f6;
+  --accent-subtle: rgba(37, 99, 235, 0.08);
+  --success: #059669;
+  --success-bg: rgba(5, 150, 105, 0.08);
+  --warning: #d97706;
+  --warning-bg: rgba(217, 119, 6, 0.08);
+  --danger: #dc2626;
+  --danger-bg: rgba(220, 38, 38, 0.06);
+  --info: #0891b2;
+  --info-bg: rgba(8, 145, 178, 0.06);
+  --shadow: 0 1px 3px rgba(0,0,0,0.08), 0 1px 2px rgba(0,0,0,0.04);
+}
+html.light ::-webkit-scrollbar-track { background: #e5e7eb; }
+html.light ::-webkit-scrollbar-thumb { background: #9ca3af; }
+html.light .sidebar { background: #fff; border-right-color: #d4d8e0; }
+html.light .sidebar-logo { background: linear-gradient(135deg, #2563eb 0%, #0891b2 100%); -webkit-background-clip: text; }
+html.light .nav-item.active { background: rgba(37,99,235,0.06); }
+html.light .card { border-color: #d4d8e0; }
+html.light .stat-card { background: #fff; border-color: #d4d8e0; }
+html.light .form-input, html.light .form-select { background: #fff; border-color: #d4d8e0; color: #111827; }
+html.light .badge { border-color: #d4d8e0; }
+html.light .progress-bar { background: #e5e7eb; }
+html.light .btn-secondary { background: #f3f4f6; border-color: #d1d5db; color: #374151; }
+html.light .btn-secondary:hover { background: #e5e7eb; }
+html.light table th { background: #f3f4f6 !important; color: #374151 !important; border-color: #d4d8e0 !important; }
+html.light table td { border-color: #e5e7eb !important; }
+html.light .mobile-toggle { background: #fff; color: #111827; border-color: #d4d8e0; }
 }
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body {
@@ -447,6 +487,13 @@ window.onerror = function(msg, src, line, col, err) {
   document.getElementById('error-msg').innerText = 'Erro: ' + msg + '\nArquivo: ' + src + '\nLinha: ' + line + (err ? '\n\n' + err.stack : '');
 };
 </script>
+<script>
+// Load saved theme
+(function(){
+  var t = localStorage.getItem('vacinalog-theme');
+  if (t === 'light') document.documentElement.classList.add('light');
+})();
+</script>
 <script type="text/babel">
 const { useState, useEffect, useCallback, useRef, createContext, useContext } = React;
 
@@ -717,6 +764,22 @@ function Sidebar({ profile, currentPage, onNavigate, open, onClose, collapsed, o
           )}
         </div>
         {!collapsed && (
+        {!collapsed && (
+          <button onClick={() => {
+            const isLight = document.documentElement.classList.toggle('light');
+            localStorage.setItem('vacinalog-theme', isLight ? 'light' : 'dark');
+          }} className="btn btn-secondary btn-sm" style={{width:'100%',marginBottom:6,fontSize:11,display:'flex',alignItems:'center',justifyContent:'center',gap:6}}>
+            {document.documentElement.classList.contains('light') ? '🌙 Tema Escuro' : '☀️ Tema Claro'}
+          </button>
+        )}
+        {collapsed && (
+          <button onClick={() => {
+            const isLight = document.documentElement.classList.toggle('light');
+            localStorage.setItem('vacinalog-theme', isLight ? 'light' : 'dark');
+          }} className="btn btn-secondary btn-sm" title="Alternar tema" style={{width:'100%',marginBottom:6,fontSize:14,padding:'4px 0'}}>
+            {document.documentElement.classList.contains('light') ? '🌙' : '☀️'}
+          </button>
+        )}
           <button className="btn-logout" onClick={async () => { await sb.auth.signOut(); window.location.reload(); }}>Sair</button>
         )}
         {collapsed && (
@@ -6484,6 +6547,107 @@ function MontagemPage() {
     }
   };
 
+
+  // Imprimir Recibo / Termo de Entrega e Responsabilidade
+  const imprimirRecibo = (rem) => {
+    const destNome = rem.destino_tipo==='base' ? rem.bases?.nome : rem.aplicadores?.nome;
+    const destCPF = rem.destino_tipo==='aplicador' ? rem.aplicadores?.cpf : null;
+    const destCidade = rem.destino_tipo==='base'
+      ? (rem.bases?.cidade||'')+'/'+(rem.bases?.uf||'')
+      : (rem.aplicadores?.cidade||'')+'/'+(rem.aplicadores?.uf||'');
+
+    let nomeExibir = destNome;
+    let cpfExibir = destCPF;
+    if (!nomeExibir) {
+      const obs = rem.observacao || '';
+      const mNome = obs.match(/^([^(|]+)/);
+      const mCPF = obs.match(/\(([^)]+)\)/);
+      if (mNome) nomeExibir = mNome[1].trim();
+      if (mCPF) cpfExibir = mCPF[1].trim();
+    }
+
+    const totalDoses = (rem.remessa_itens||[]).reduce((s,i)=>s+i.quantidade,0);
+    const dataHoje = new Date().toLocaleDateString('pt-BR');
+    const horaAgora = new Date().toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'});
+
+    const itensHtml = (rem.remessa_itens||[]).map(it =>
+      '<tr><td style="border:1px solid #000;padding:4px 8px;font-size:11px;">' + (it.vacinas?.nome||'—') + '</td>'
+      + '<td style="border:1px solid #000;padding:4px 8px;font-size:11px;text-align:center;">' + (it.lote || it.vacinas?.lote || '—') + '</td>'
+      + '<td style="border:1px solid #000;padding:4px 8px;font-size:11px;text-align:center;font-weight:700;">' + it.quantidade + '</td></tr>'
+    ).join('');
+
+    const reciboHtml = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Recibo ' + rem.codigo_rastreio + '</title>'
+      + '<style>'
+      + '* { margin:0; padding:0; box-sizing:border-box; }'
+      + 'body { font-family:Arial,sans-serif; padding:12mm 15mm; background:#fff; color:#000; font-size:11px; line-height:1.5; }'
+      + '@page { size:A4; margin:10mm; }'
+      + '@media print { body { padding:0; } }'
+      + 'h1 { font-size:14px; text-align:center; margin-bottom:8px; text-transform:uppercase; letter-spacing:1px; }'
+      + '.empresa { text-align:center; font-size:10px; color:#444; margin-bottom:12px; }'
+      + '.intro { font-size:10px; text-align:justify; margin-bottom:12px; line-height:1.6; }'
+      + '.section { margin-bottom:10px; }'
+      + '.section-title { font-weight:700; font-size:11px; text-transform:uppercase; border-bottom:1px solid #000; padding-bottom:2px; margin-bottom:6px; }'
+      + 'table { width:100%; border-collapse:collapse; margin-bottom:8px; }'
+      + 'th { border:1px solid #000; padding:4px 8px; font-size:10px; background:#f0f0f0; text-align:center; }'
+      + '.field { margin-bottom:4px; font-size:11px; }'
+      + '.field b { font-weight:700; }'
+      + '.line { border-bottom:1px solid #000; display:inline-block; min-width:200px; }'
+      + '.sig-area { margin-top:30px; text-align:center; }'
+      + '.sig-line { border-top:1px solid #000; width:300px; margin:0 auto; padding-top:4px; font-size:10px; }'
+      + '.footer-info { display:flex; justify-content:space-between; margin-top:16px; font-size:10px; border-top:1px solid #ccc; padding-top:6px; }'
+      + '.checkbox { display:inline-block; width:12px; height:12px; border:1px solid #000; margin-right:4px; vertical-align:middle; }'
+      + '</style></head><body>'
+      + '<h1>Termo de Entrega e Responsabilidade</h1>'
+      + '<div class="empresa">S&A IMUNIZAÇÕES LTDA</div>'
+      + '<div class="intro">Pelo presente instrumento, eu, abaixo identificado, declaro ter recebido da S&A IMUNIZAÇÕES LTDA os materiais e imunobiológicos listados, assumindo total responsabilidade pela sua guarda, conservação térmica e uso exclusivo na campanha designada.</div>'
+
+      + '<div class="section">'
+      + '<div class="section-title">Dados de Recebimento</div>'
+      + '<div class="field"><b>APLICADOR:</b> ' + (nomeExibir||'_____________________________') + '&nbsp;&nbsp;&nbsp;&nbsp;<b>CPF:</b> ' + (cpfExibir||'___________________') + '</div>'
+      + '<div class="field"><b>TIPO:</b> <span class="checkbox"></span> ENTREGA &nbsp;&nbsp; <span class="checkbox"></span> DEVOLUÇÃO</div>'
+      + '</div>'
+
+      + '<div class="section">'
+      + '<div class="section-title">Detalhamento da Carga</div>'
+      + '<table><thead><tr><th>Vacina/Doses</th><th>Lote</th><th>Qtd. Doses</th></tr></thead>'
+      + '<tbody>' + itensHtml
+      + (itensHtml ? '' : '<tr><td style="border:1px solid #000;padding:4px 8px;" colspan="3">—</td></tr>')
+      + '</tbody></table>'
+      + '<div class="field"><b>Caixa de Insumos:</b> _____ (Qtd. Cx) &nbsp;&nbsp; <b>Coletor Perfuro:</b> _____ (Qtd.) &nbsp;&nbsp; <b>Kit Infantil:</b> <span class="checkbox"></span> Sim <span class="checkbox"></span> Não</div>'
+      + '<div class="field"><b>Gelox Reserva:</b> _____ (Qtd.) &nbsp;&nbsp; <b>Termômetro Digital:</b> <span class="checkbox"></span> Sim <span class="checkbox"></span> Não</div>'
+      + '<div class="field"><b>Outros:</b> _______________________________________________________________________________________</div>'
+      + '<div class="field"><b>Equipamento:</b> ___________________________________________________________________________________</div>'
+      + '<div class="field"><b>Nº de Série:</b> ____________________________________________________________________________________</div>'
+      + '<div class="field"><b>Estado:</b> <span class="checkbox"></span> Perfeito Estado &nbsp;&nbsp; <span class="checkbox"></span> Com Avaria — Descrever: ________________________________</div>'
+      + '</div>'
+
+      + '<div class="section">'
+      + '<div class="section-title">Declaração</div>'
+      + '<div class="intro">Responsabilizo-me por qualquer dano, perda ou desvio de temperatura por negligência. Comprometo-me a realizar a leitura constante do termômetro e manter a integridade dos frascos.</div>'
+      + '</div>'
+
+      + '<div class="footer-info">'
+      + '<span>São Paulo, ' + dataHoje + ' &nbsp; Hora: ' + horaAgora + '</span>'
+      + '<span>MOTORISTA: ' + (rotaSel.profiles?.nome || '___________________________') + '</span>'
+      + '</div>'
+
+      + '<div class="sig-area">'
+      + '<div class="sig-line">Assinatura do Profissional Responsável</div>'
+      + '</div>'
+
+      + '<div style="margin-top:20px;padding-top:8px;border-top:1px dashed #999;font-size:9px;color:#666;text-align:center;">'
+      + 'VacinaLog · Remessa: ' + rem.codigo_rastreio + ' · Rota: ' + rotaSel.codigo + ' · Gerado em ' + dataHoje + ' ' + horaAgora
+      + '</div>'
+
+      + '</body></html>';
+
+    const w = window.open('', '_blank', 'width=700,height=900');
+    w.document.write(reciboHtml);
+    w.document.close();
+    w.focus();
+    setTimeout(() => w.print(), 600);
+  };
+
   const prontas = remessas.filter(r => r.status === 'pronta').length;
   const total = remessas.length;
 
@@ -6607,6 +6771,7 @@ function MontagemPage() {
                   }} style={{background:'none',border:'1px solid var(--border)',borderRadius:'50%',width:22,height:22,cursor:'pointer',fontSize:12,color:'var(--text-muted)',display:'flex',alignItems:'center',justifyContent:'center',padding:0}}
                   title="Ver informações">ⓘ</button>
                   <button className="btn btn-secondary btn-sm" onClick={() => setEtiquetaRem(rem)}>🏷️ Etiqueta</button>
+                  <button className="btn btn-secondary btn-sm" onClick={() => imprimirRecibo(rem)}>📋 Recibo</button>
                   {!isPronta && <button className="btn btn-success btn-sm" onClick={() => marcarPronta(rem)}>✓ Marcar Pronta</button>}
                   {isPronta && <button className="btn btn-secondary btn-sm" onClick={() => marcarMontagem(rem.id)}>↩ Reabrir</button>}
                 </div>
@@ -7160,12 +7325,179 @@ async function transferirEstoqueDireto({ vacina_id, quantidade, origem_base_id, 
   }
 }
 
+
+// ── Modal de Assinatura Digital para Entrega ──
+function AssinaturaEntregaModal({ remessa, rota, onConfirm, onClose }) {
+  const canvasRef = React.useRef(null);
+  const [drawing, setDrawing] = React.useState(false);
+  const [hasSignature, setHasSignature] = React.useState(false);
+  const [nome, setNome] = React.useState('');
+  const [cpf, setCpf] = React.useState('');
+  const [saving, setSaving] = React.useState(false);
+
+  // Pré-preencher nome e CPF do aplicador
+  React.useEffect(() => {
+    const n = remessa.destino_tipo === 'aplicador' ? remessa.aplicadores?.nome : remessa.bases?.nome;
+    const c = remessa.destino_tipo === 'aplicador' ? remessa.aplicadores?.cpf : '';
+    // Fallback: extrair da observação
+    let nomeF = n || '';
+    let cpfF = c || '';
+    if (!nomeF) {
+      const obs = remessa.observacao || '';
+      const mN = obs.match(/^([^(|]+)/);
+      const mC = obs.match(/\(([^)]+)\)/);
+      if (mN) nomeF = mN[1].trim();
+      if (mC) cpfF = mC[1].trim();
+    }
+    setNome(nomeF);
+    setCpf(cpfF);
+  }, [remessa]);
+
+  // Canvas setup
+  React.useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    const rect = canvas.getBoundingClientRect();
+    canvas.width = rect.width * 2;
+    canvas.height = rect.height * 2;
+    ctx.scale(2, 2);
+    ctx.strokeStyle = '#111';
+    ctx.lineWidth = 2;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+  }, []);
+
+  const getPos = (e) => {
+    const canvas = canvasRef.current;
+    const rect = canvas.getBoundingClientRect();
+    const touch = e.touches ? e.touches[0] : e;
+    return { x: touch.clientX - rect.left, y: touch.clientY - rect.top };
+  };
+
+  const startDraw = (e) => {
+    e.preventDefault();
+    setDrawing(true);
+    const ctx = canvasRef.current.getContext('2d');
+    const pos = getPos(e);
+    ctx.beginPath();
+    ctx.moveTo(pos.x, pos.y);
+  };
+
+  const draw = (e) => {
+    e.preventDefault();
+    if (!drawing) return;
+    const ctx = canvasRef.current.getContext('2d');
+    const pos = getPos(e);
+    ctx.lineTo(pos.x, pos.y);
+    ctx.stroke();
+    setHasSignature(true);
+  };
+
+  const endDraw = (e) => {
+    e.preventDefault();
+    setDrawing(false);
+  };
+
+  const limpar = () => {
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    setHasSignature(false);
+  };
+
+  const confirmar = async () => {
+    if (!hasSignature) { alert('Por favor, assine no campo abaixo.'); return; }
+    if (!nome.trim()) { alert('Informe o nome do responsável.'); return; }
+    setSaving(true);
+    // Salvar assinatura como base64 na observação da remessa
+    const sigData = canvasRef.current.toDataURL('image/png');
+    const sigInfo = '\n[ASSINATURA ' + new Date().toLocaleTimeString('pt-BR') + '] Recebido por: ' + nome.trim() + (cpf.trim() ? ' (CPF: ' + cpf.trim() + ')' : '');
+    const obsAtual = remessa.observacao || '';
+    await sb.from('remessas').update({
+      observacao: obsAtual + sigInfo,
+      // Salvar assinatura como metadado (se houver coluna)
+    }).eq('id', remessa.id);
+    await onConfirm(remessa.id);
+    setSaving(false);
+  };
+
+  const destNome = remessa.destino_tipo === 'aplicador' ? remessa.aplicadores?.nome : remessa.bases?.nome;
+  const doses = (remessa.remessa_itens||[]).reduce((s,i)=>s+i.quantidade,0);
+
+  return (
+    <Modal title="Confirmar Entrega — Assinatura" onClose={onClose} large>
+      <div style={{display:'flex',flexDirection:'column',gap:14}}>
+        {/* Resumo da entrega */}
+        <div style={{padding:12,background:'var(--bg-input)',borderRadius:'var(--radius-sm)',border:'1px solid var(--border)'}}>
+          <div style={{fontSize:13,fontWeight:600,marginBottom:6}}>Remessa: <span style={{color:'var(--accent)',fontFamily:'JetBrains Mono'}}>{remessa.codigo_rastreio}</span></div>
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:6,fontSize:12}}>
+            <div><span style={{color:'var(--text-muted)'}}>Aplicador:</span> <strong>{destNome||nome||'—'}</strong></div>
+            <div><span style={{color:'var(--text-muted)'}}>Doses:</span> <strong style={{color:'var(--success)'}}>{doses}</strong></div>
+          </div>
+          {(remessa.remessa_itens||[]).length > 0 && (
+            <div style={{marginTop:8,display:'flex',gap:6,flexWrap:'wrap'}}>
+              {(remessa.remessa_itens||[]).map((it,i) => (
+                <span key={i} style={{fontSize:11,padding:'2px 8px',borderRadius:4,fontWeight:600,
+                  background:'var(--accent-subtle)',color:'var(--accent)'}}>
+                  💉 {it.vacinas?.nome}: {it.quantidade}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Nome e CPF */}
+        <div style={{display:'grid',gridTemplateColumns:'2fr 1fr',gap:10}}>
+          <div className="form-group" style={{marginBottom:0}}>
+            <label className="form-label">Nome do Responsável <span style={{color:'var(--danger)'}}>*</span></label>
+            <input className="form-input" value={nome} onChange={e=>setNome(e.target.value)} placeholder="Nome completo" />
+          </div>
+          <div className="form-group" style={{marginBottom:0}}>
+            <label className="form-label">CPF</label>
+            <input className="form-input" value={cpf} onChange={e=>setCpf(e.target.value)} placeholder="000.000.000-00" />
+          </div>
+        </div>
+
+        {/* Área de assinatura */}
+        <div>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}}>
+            <label className="form-label" style={{marginBottom:0}}>Assinatura <span style={{color:'var(--danger)'}}>*</span></label>
+            <button className="btn btn-secondary btn-sm" onClick={limpar} style={{fontSize:10}}>↺ Limpar</button>
+          </div>
+          <div style={{border:'2px solid var(--border)',borderRadius:'var(--radius)',background:'#fff',position:'relative',overflow:'hidden'}}>
+            <canvas ref={canvasRef}
+              style={{width:'100%',height:160,cursor:'crosshair',touchAction:'none',display:'block'}}
+              onMouseDown={startDraw} onMouseMove={draw} onMouseUp={endDraw} onMouseLeave={endDraw}
+              onTouchStart={startDraw} onTouchMove={draw} onTouchEnd={endDraw} />
+            {!hasSignature && (
+              <div style={{position:'absolute',top:'50%',left:'50%',transform:'translate(-50%,-50%)',
+                color:'#ccc',fontSize:13,pointerEvents:'none',textAlign:'center'}}>
+                Assine aqui com o dedo ou mouse
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Botões */}
+        <div className="modal-actions">
+          <button className="btn btn-secondary" onClick={onClose}>Cancelar</button>
+          <button className="btn btn-success" onClick={confirmar} disabled={saving || !hasSignature || !nome.trim()}>
+            {saving ? 'Registrando...' : '✓ Confirmar Entrega com Assinatura'}
+          </button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
   const [rota, setRota] = useState(rotaInit);
   const [remessas, setRemessas] = useState([]);
   const [loading, setLoading] = useState(true);
   const [checkoutModal, setCheckoutModal] = useState(false);
   const [checkinModal, setCheckinModal] = useState(false);
+  const [assinaturaModal, setAssinaturaModal] = useState(null);
   const [gpsAtivo, setGpsAtivo] = useState(false);
   const toast = useContext(ToastContext);
 
@@ -7455,6 +7787,12 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
     window.open(isMobile ? urlApp : urlWeb, '_blank');
   };
 
+  // Ocultar caixas com 0 doses do motorista (aplicador já tem estoque)
+  const remessasVisiveis = isAdmin ? remessas : remessas.filter(r => {
+    const doses = (r.remessa_itens||[]).reduce((s,i)=>s+i.quantidade,0);
+    return doses > 0 || r.status === 'concluida' || r.status === 'cancelada';
+  });
+
   const totalDoses = remessas.reduce((s,r) => s + (r.remessa_itens||[]).reduce((ss,i)=>ss+i.quantidade,0), 0);
   const entregues = remessas.filter(r => r.status === 'concluida').length;
   const pendentes = remessas.filter(r => !['concluida','cancelada'].includes(r.status)).length;
@@ -7640,7 +7978,7 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
       {/* Lista de remessas */}
       {loading && <div style={{textAlign:'center',padding:40,color:'var(--text-muted)'}}>Carregando...</div>}
       <div style={{display:'flex',flexDirection:'column',gap:10}}>
-        {remessas.map(rem => {
+        {remessasVisiveis.map(rem => {
           const isConcluida = rem.status === 'concluida';
           const isCancelada = rem.status === 'cancelada';
           const destNome = rem.destino_tipo==='base' ? rem.bases?.nome : rem.aplicadores?.nome;
@@ -7707,7 +8045,7 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
 
                   {!isConcluida && !isCancelada && rota.status === 'em_transito' && (
                     <div style={{display:'flex',gap:8,flexWrap:'wrap',marginTop:4}}>
-                      <button className="btn btn-success btn-sm" onClick={() => confirmarEntrega(rem.id)}>
+                      <button className="btn btn-success btn-sm" onClick={() => setAssinaturaModal(rem)}>
                         ✓ Confirmar Entrega
                       </button>
                       <button className="btn btn-secondary btn-sm" onClick={() => {
@@ -7738,6 +8076,17 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
           );
         })}
       </div>
+
+      
+      {/* Modal Assinatura de Entrega */}
+      {assinaturaModal && (
+        <AssinaturaEntregaModal
+          remessa={assinaturaModal}
+          rota={rota}
+          onConfirm={async (remId) => { setAssinaturaModal(null); await confirmarEntrega(remId); }}
+          onClose={() => setAssinaturaModal(null)}
+        />
+      )}
 
       {/* Modal Check-out */}
       {checkoutModal && (
