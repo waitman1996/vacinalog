@@ -7346,7 +7346,7 @@ async function transferirEstoqueDireto({ vacina_id, quantidade, origem_base_id, 
 function EntregaDetalheModal({ remessa, rota, onClose }) {
   const obs = remessa.observacao || '';
 
-  // Dados do aplicador/destino (sempre disponíveis)
+  // Dados do aplicador/destino (sempre disponíveis no banco)
   const destNome = remessa.destino_tipo === 'aplicador' ? remessa.aplicadores?.nome : remessa.bases?.nome;
   const destCPF = remessa.destino_tipo === 'aplicador' ? remessa.aplicadores?.cpf : '';
   const destCidade = remessa.destino_tipo === 'base'
@@ -7355,7 +7355,66 @@ function EntregaDetalheModal({ remessa, rota, onClose }) {
   const destEnd = remessa.destino_tipo === 'aplicador' ? remessa.aplicadores?.endereco : '';
   const doses = (remessa.remessa_itens||[]).reduce((s,i)=>s+i.quantidade,0);
 
-  // Fallback: extrair nome/CPF da observação se não veio do banco
+  // Extrair assinatura usando indexOf (mais robusto que regex para base64 longo)
+  let temAssinatura = false;
+  let horaAssinatura = null;
+  let nomeAssinatura = '';
+  let cpfAssinatura = '';
+  let sigImg = null;
+  let entregaLat = null;
+  let entregaLng = null;
+
+  const sigStart = obs.indexOf('[ASSINATURA ');
+  if (sigStart >= 0) {
+    temAssinatura = true;
+    // Extrair hora: [ASSINATURA HH:MM:SS]
+    const sigBracketEnd = obs.indexOf(']', sigStart);
+    if (sigBracketEnd > sigStart) {
+      horaAssinatura = obs.substring(sigStart + 12, sigBracketEnd);
+    }
+    // Extrair nome e CPF: "Recebido por: NOME (CPF: XXX)"
+    const recebidoIdx = obs.indexOf('Recebido por: ', sigStart);
+    if (recebidoIdx > 0) {
+      const afterRecebido = obs.substring(recebidoIdx + 14);
+      // Encontrar onde termina o nome: antes de "(CPF:" ou antes de "[SIG_IMG"
+      const cpfIdx = afterRecebido.indexOf('(CPF: ');
+      const sigImgIdx = afterRecebido.indexOf(' [SIG_IMG:');
+      const endOfLine = afterRecebido.indexOf('\n');
+      
+      if (cpfIdx >= 0 && (cpfIdx < sigImgIdx || sigImgIdx < 0)) {
+        nomeAssinatura = afterRecebido.substring(0, cpfIdx).trim();
+        const cpfEnd = afterRecebido.indexOf(')', cpfIdx);
+        if (cpfEnd > cpfIdx) {
+          cpfAssinatura = afterRecebido.substring(cpfIdx + 6, cpfEnd).trim();
+        }
+      } else if (sigImgIdx >= 0) {
+        nomeAssinatura = afterRecebido.substring(0, sigImgIdx).trim();
+      } else if (endOfLine >= 0) {
+        nomeAssinatura = afterRecebido.substring(0, endOfLine).trim();
+      } else {
+        nomeAssinatura = afterRecebido.trim();
+      }
+    }
+    // Extrair imagem da assinatura: [SIG_IMG:data:...:END_SIG]
+    const imgStart = obs.indexOf('[SIG_IMG:');
+    const imgEnd = obs.indexOf(':END_SIG]');
+    if (imgStart >= 0 && imgEnd > imgStart) {
+      sigImg = obs.substring(imgStart + 9, imgEnd);
+    }
+  }
+
+  // Extrair localização da entrega
+  const localStart = obs.indexOf('[ENTREGA_LOCAL:');
+  const localEnd = obs.indexOf(':END_LOCAL]');
+  if (localStart >= 0 && localEnd > localStart) {
+    const coords = obs.substring(localStart + 15, localEnd).split(',');
+    if (coords.length === 2) {
+      entregaLat = coords[0];
+      entregaLng = coords[1];
+    }
+  }
+
+  // Fallback: extrair nome/CPF da observação se não veio da assinatura
   let nomeFromObs = '';
   let cpfFromObs = '';
   const mNome = obs.match(/^([^(|]+)/);
@@ -7363,24 +7422,9 @@ function EntregaDetalheModal({ remessa, rota, onClose }) {
   if (mNome) nomeFromObs = mNome[1].trim();
   if (mCPF) cpfFromObs = mCPF[1].trim();
 
-  // Extrair dados da assinatura digital (se existir)
-  const sigMatch = obs.match(/\[ASSINATURA ([^\]]+)\] Recebido por: ([^[]+?)(?:\(CPF: ([^)]+)\))?\s*\[SIG_IMG:(data:image\/png;base64,[A-Za-z0-9+/=]+):END_SIG\]/);
-  const sigMatchSimple = obs.match(/\[ASSINATURA ([^\]]+)\] Recebido por: ([^\n\[]+?)(?:\s*\(CPF: ([^)]+)\))?/);
-  
-  const temAssinatura = !!(sigMatch || sigMatchSimple);
-  const horaAssinatura = sigMatch ? sigMatch[1] : (sigMatchSimple ? sigMatchSimple[1] : null);
-  const nomeAssinatura = sigMatch ? sigMatch[2].trim() : (sigMatchSimple ? sigMatchSimple[2].trim() : '');
-  const cpfAssinatura = sigMatch ? (sigMatch[3]||'').trim() : (sigMatchSimple ? (sigMatchSimple[3]||'').trim() : '');
-  const sigImg = sigMatch ? sigMatch[4] : null;
-
   // Usar dados em ordem de prioridade: assinatura > banco > observação
   const nomeRecebedor = nomeAssinatura || destNome || nomeFromObs || '—';
   const cpfRecebedor = cpfAssinatura || destCPF || cpfFromObs || '';
-
-  // Extrair localização da entrega
-  const localMatch = obs.match(/\[ENTREGA_LOCAL:([\d.-]+),([\d.-]+):END_LOCAL\]/);
-  const entregaLat = localMatch ? localMatch[1] : null;
-  const entregaLng = localMatch ? localMatch[2] : null;
 
   return (
     <Modal title="Detalhes da Entrega" onClose={onClose} large>
