@@ -4733,23 +4733,55 @@ function RotasListPage({ onOpenRoteirizacao }) {
         </div>
       </div>
       <div className="card"><div className="table-wrap"><table><thead>
-        <tr><th>Código</th><th>Data</th><th>Tipo</th><th>Base Origem</th><th>Motorista</th><th>Veículo</th><th>Status</th><th>Ações</th></tr>
+        <tr><th>Código</th><th>Data</th><th>Base Origem</th><th>Motorista</th><th>Veículo</th><th>Status</th><th>Check-in</th><th>Check-out</th><th>Duração</th><th>Ações</th></tr>
       </thead><tbody>
-        {rotas.length === 0 && <tr><td colSpan={8}><div className="empty-state"><div className="empty-icon">🚚</div><div className="empty-text">Nenhuma rota encontrada</div></div></td></tr>}
-        {rotas.map(r => (
+        {rotas.length === 0 && <tr><td colSpan={10}><div className="empty-state"><div className="empty-icon">🚚</div><div className="empty-text">Nenhuma rota encontrada</div></div></td></tr>}
+        {rotas.map(r => {
+          const fmtDT = (dt) => dt ? new Date(dt).toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}) : '—';
+          const duracao = () => {
+            if (!r.checkin_at || !r.checkout_at) return '—';
+            const mins = Math.round((new Date(r.checkout_at)-new Date(r.checkin_at))/60000);
+            return mins < 60 ? `${mins}min` : `${Math.floor(mins/60)}h${mins%60>0?String(mins%60).padStart(2,'0')+'min':''}`;
+          };
+          return (
           <tr key={r.id}>
             <td className="mono" style={{fontWeight:600,color:'var(--accent)'}}>{r.codigo}</td>
             <td>{r.data_prevista ? new Date(r.data_prevista+'T12:00:00').toLocaleDateString('pt-BR') : '—'}</td>
-            <td><span className={`badge ${r.tipo==='entrega'?'badge-green':r.tipo==='coleta'?'badge-yellow':'badge-blue'}`}>{r.tipo}</span></td>
             <td>{r.bases?.nome||'—'}</td>
             <td>{r.profiles?.nome||'—'}</td>
-            <td>{r.veiculos ? `${r.veiculos.modelo} - ${r.veiculos.placa}` : (r.veiculo||'—')}</td>
+            <td style={{fontSize:11}}>{r.veiculos ? `${r.veiculos.modelo} · ${r.veiculos.placa}` : (r.veiculo||'—')}</td>
             <td><span className={`badge ${ROTA_BADGE[r.status]}`}>{ROTA_ST[r.status]}</span></td>
+            <td style={{fontSize:11,whiteSpace:'nowrap'}}>
+              {r.checkin_at ? (
+                <div>
+                  <div style={{color:'var(--success)',fontWeight:600}}>{fmtDT(r.checkin_at)}</div>
+                  {r.checkin_lat && <div style={{fontSize:9,color:'var(--text-muted)',cursor:'pointer'}}
+                    onClick={()=>window.open(`https://maps.google.com?q=${r.checkin_lat},${r.checkin_lng}`,'_blank')}>
+                    📍 ver local
+                  </div>}
+                </div>
+              ) : <span style={{color:'var(--text-muted)'}}>—</span>}
+            </td>
+            <td style={{fontSize:11,whiteSpace:'nowrap'}}>
+              {r.checkout_at ? (
+                <div>
+                  <div style={{color:'var(--accent)',fontWeight:600}}>{fmtDT(r.checkout_at)}</div>
+                  {r.checkout_lat && <div style={{fontSize:9,color:'var(--text-muted)',cursor:'pointer'}}
+                    onClick={()=>window.open(`https://maps.google.com?q=${r.checkout_lat},${r.checkout_lng}`,'_blank')}>
+                    📍 ver local
+                  </div>}
+                </div>
+              ) : r.status === 'em_transito' ? (
+                <span style={{fontSize:10,color:'var(--warning)'}}>Em andamento...</span>
+              ) : <span style={{color:'var(--text-muted)'}}>—</span>}
+            </td>
+            <td style={{fontSize:11,fontFamily:'JetBrains Mono',color:'var(--text-muted)'}}>{duracao()}</td>
             <td><div style={{display:'flex',gap:4,flexWrap:'wrap'}}>
               {r.status==='planejada' && <><button className="btn btn-success btn-sm" onClick={()=>enviarMontagem(r.id)}>→ Montagem</button><button className="btn btn-danger btn-sm" onClick={()=>cancelar(r.id)}>Cancelar</button></>}
+              {r.status==='em_transito' && <span style={{fontSize:10,color:'var(--success)'}}>🟢 ao vivo</span>}
             </div></td>
           </tr>
-        ))}
+        )})}
       </tbody></table></div></div>
     </div>
   );
