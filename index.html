@@ -498,8 +498,6 @@ window.onerror = function(msg, src, line, col, err) {
 const { useState, useEffect, useCallback, useRef, createContext, useContext } = React;
 
 // ═══════════════════════════════════════════════
-// VERSÃO FINAL: descarte em Descarte Doses, rota sem origem Descarte, cancelar rota via RPC e troca de motorista sem check-in
-// ═══════════════════════════════════════════════
 // SUPABASE CONFIG
 // ═══════════════════════════════════════════════
 const SUPABASE_URL = 'https://ojmuykptmsoiligirqru.supabase.co';
@@ -787,7 +785,7 @@ function Sidebar({ profile, currentPage, onNavigate, open, onClose, collapsed, o
         {!collapsed && (
           <div style={{fontSize:9,color:'var(--text-muted)',textAlign:'center',marginTop:6,padding:'4px 0',borderTop:'1px solid var(--border)',opacity:0.6}}>
             {'🕐 Atualizado em'}<br/>
-            <span style={{fontFamily:'JetBrains Mono',fontSize:9}}>{'15/05/2026 às 14:55'}</span>
+            <span style={{fontFamily:'JetBrains Mono',fontSize:9}}>{'15/05/2026 às 10:50'}</span>
           </div>
         )}
       </div>
@@ -5417,10 +5415,6 @@ function RotasListPage({ onOpenRoteirizacao }) {
   const [statusFilter, setStatusFilter] = useState('');
   const [showMonitoramento, setShowMonitoramento] = useState(false);
   const [rotaDetalhe, setRotaDetalhe] = useState(null);
-  const [motoristas, setMotoristas] = useState([]);
-  const [trocaMotorista, setTrocaMotorista] = useState(null);
-  const [novoMotoristaId, setNovoMotoristaId] = useState('');
-  const [savingMotorista, setSavingMotorista] = useState(false);
   const toast = useContext(ToastContext);
 
   const ROTA_ST = { planejada:'Planejada', montagem:'Em Montagem', pronta:'Pronta', em_transito:'Em Trânsito', concluida:'Concluída', cancelada:'Cancelada' };
@@ -5433,11 +5427,7 @@ function RotasListPage({ onOpenRoteirizacao }) {
     if (error) toast(error.message, 'error');
     else setRotas(data || []);
   };
-  useEffect(() => {
-    load();
-    sb.from('profiles').select('id, nome').eq('role', 'motorista').eq('ativo', true).order('nome')
-      .then(({ data, error }) => { if (!error) setMotoristas(data || []); });
-  }, [statusFilter]);
+  useEffect(() => { load(); }, [statusFilter]);
 
   const enviarMontagem = async (id) => {
     const { error } = await sb.from('rotas').update({ status: 'montagem' }).eq('id', id);
@@ -5445,55 +5435,14 @@ function RotasListPage({ onOpenRoteirizacao }) {
   };
 
   const cancelar = async (id) => {
-    if (!confirm('Cancelar esta rota? Só será permitido se não houver caixa/remessa montada.')) return;
-    const { error } = await sb.rpc('cancelar_rota', { p_rota_id: id });
+    if (!confirm('Cancelar esta rota?')) return;
+    const { error } = await sb.from('rotas').update({ status: 'cancelada' }).eq('id', id);
     if (error) toast(error.message, 'error'); else { toast('Rota cancelada', 'success'); load(); }
-  };
-
-  const abrirTrocaMotorista = (rota) => {
-    if (rota.checkin_at) { toast('Não é possível trocar motorista: check-in já realizado.', 'error'); return; }
-    setTrocaMotorista(rota);
-    setNovoMotoristaId(rota.motorista_id || '');
-  };
-
-  const confirmarTrocaMotorista = async () => {
-    if (!trocaMotorista || !novoMotoristaId) { toast('Selecione o novo motorista.', 'error'); return; }
-    setSavingMotorista(true);
-    const { error } = await sb.rpc('trocar_motorista_rota', {
-      p_rota_id: trocaMotorista.id,
-      p_novo_motorista_id: novoMotoristaId
-    });
-    setSavingMotorista(false);
-    if (error) { toast(error.message, 'error'); return; }
-    toast('Motorista da rota alterado com sucesso.', 'success');
-    setTrocaMotorista(null);
-    setNovoMotoristaId('');
-    load();
   };
 
   return (
     <div>
       {rotaDetalhe && <ModalDetalheRota rota={rotaDetalhe} onClose={() => setRotaDetalhe(null)} ROTA_ST={ROTA_ST} ROTA_BADGE={ROTA_BADGE} />}
-      {trocaMotorista && (
-        <Modal title={'Trocar motorista da rota ' + (trocaMotorista.codigo || '')} onClose={() => setTrocaMotorista(null)}>
-          <div style={{fontSize:13,color:'var(--text-secondary)',marginBottom:12}}>
-            Só é permitido trocar motorista enquanto não houver check-in realizado na rota.
-          </div>
-          <div className="form-group">
-            <label className="form-label">Novo motorista *</label>
-            <select className="form-select" value={novoMotoristaId} onChange={e=>setNovoMotoristaId(e.target.value)}>
-              <option value="">Selecione...</option>
-              {motoristas.map(m => <option key={m.id} value={m.id}>{m.nome}</option>)}
-            </select>
-          </div>
-          <div className="modal-actions">
-            <button className="btn btn-secondary" onClick={() => setTrocaMotorista(null)}>Cancelar</button>
-            <button className="btn btn-primary" onClick={confirmarTrocaMotorista} disabled={savingMotorista || !novoMotoristaId}>
-              {savingMotorista ? 'Salvando...' : 'Salvar troca'}
-            </button>
-          </div>
-        </Modal>
-      )}
       <div className="page-header">
         <div><div className="page-title">Rotas</div><div className="page-subtitle">Gerencie rotas de entrega e coleta</div></div>
         <div style={{display:'flex',gap:8}}>
@@ -5558,9 +5507,6 @@ function RotasListPage({ onOpenRoteirizacao }) {
             <td style={{fontSize:11,fontFamily:'JetBrains Mono',color:'var(--text-muted)'}}>{duracao()}</td>
             <td><div style={{display:'flex',gap:4,flexWrap:'wrap'}}>
               <button className="btn btn-secondary btn-sm" onClick={() => setRotaDetalhe(r)}>👁 Ver</button>
-              {!r.checkin_at && !['concluida','cancelada'].includes(r.status) && (
-                <button className="btn btn-secondary btn-sm" onClick={() => abrirTrocaMotorista(r)}>👤 Trocar motorista</button>
-              )}
               {r.status==='planejada' && <><button className="btn btn-success btn-sm" onClick={()=>enviarMontagem(r.id)}>→ Montagem</button><button className="btn btn-danger btn-sm" onClick={()=>cancelar(r.id)}>Cancelar</button></>}
               {r.status==='em_transito' && <span style={{fontSize:10,color:'var(--success)'}}>🟢 ao vivo</span>}
             </div></td>
@@ -5615,7 +5561,7 @@ function RoteirizacaoPage({ onBack }) {
   const toast = useContext(ToastContext);
 
   useEffect(() => {
-    sb.from('bases').select('id, nome, latitude, longitude').eq('ativa', true).neq('nome', 'Descarte Doses').order('nome').then(r => setBases(r.data||[]));
+    sb.from('bases').select('id, nome, latitude, longitude').eq('ativa', true).order('nome').then(r => setBases(r.data||[]));
     sb.from('veiculos').select('id, placa, modelo, capacidade_doses, motorista_padrao_id, base_id').eq('ativo', true).order('modelo').then(r => setVeiculos(r.data||[]));
     sb.from('profiles').select('id, nome, base_id').eq('role', 'motorista').eq('ativo', true).order('nome').then(r => setMotoristas(r.data||[]));
     loadEscalas();
@@ -9164,7 +9110,7 @@ function AbatimentoPage() {
     }
   };
 
-  const TIPO_LABELS = { vacinados: '💉 Vacinados', perdidas: '⚠️ Perdidas', danificadas: '🚫 Danificadas / Descarte' };
+  const TIPO_LABELS = { vacinados: '💉 Vacinados', perdidas: '⚠️ Perdidas', danificadas: '🚫 Danificadas' };
   const TIPO_COLORS = { vacinados: 'var(--success)', perdidas: 'var(--warning)', danificadas: 'var(--danger)' };
 
   const escSel = escalas.find(e => e.id === form.escala_id);
@@ -9233,7 +9179,7 @@ function AbatimentoPage() {
             {saving ? 'Registrando...' : '✓ Registrar ' + TIPO_LABELS[form.tipo]}
           </button>
           {form.tipo !== 'vacinados' && (
-            <span style={{fontSize:12,color:'var(--warning)'}}>⚠ Perdas e danos debitam do saldo e entram em Descarte Doses</span>
+            <span style={{fontSize:12,color:'var(--warning)'}}>⚠ Perdas e danos debitam do seu saldo</span>
           )}
         </div>
       </div>
@@ -10493,3 +10439,5 @@ ReactDOM.render(
 </script>
 </body>
 </html>
+
+<!-- BOTÃO TROCAR MOTORISTA NÃO INSERIDO AUTOMATICAMENTE -->
