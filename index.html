@@ -785,7 +785,7 @@ function Sidebar({ profile, currentPage, onNavigate, open, onClose, collapsed, o
         {!collapsed && (
           <div style={{fontSize:9,color:'var(--text-muted)',textAlign:'center',marginTop:6,padding:'4px 0',borderTop:'1px solid var(--border)',opacity:0.6}}>
             {'🕐 Atualizado em'}<br/>
-            <span style={{fontFamily:'JetBrains Mono',fontSize:9}}>{'14/05/2026 às 09:15'}</span>
+            <span style={{fontFamily:'JetBrains Mono',fontSize:9}}>{'15/05/2026 às 10:50'}</span>
           </div>
         )}
       </div>
@@ -2153,7 +2153,7 @@ function ImportConsulta() {
       const escalaMap = {};
       for (let i = 0; i < codigos.length; i += LOOKUP_BATCH) {
         const { data: escalasData } = await sb.from('escalas')
-          .select('id, codigo_tarefa, aplicador_id, vacina_id, status')
+          .select('id, codigo_tarefa, aplicador_id, vacina_id, status, vacinas(nome, produto_nome)')
           .in('codigo_tarefa', codigos.slice(i, i + LOOKUP_BATCH))
           .in('status', ['aprovada','em_validacao','em_execucao','pronta_faturamento']);
         (escalasData || []).forEach(e => {
@@ -2169,6 +2169,69 @@ function ImportConsulta() {
         usuario_id: userId
       }).select().single();
       if (impErr) throw new Error('Erro ao registrar importação: ' + impErr.message);
+
+      // Debita estoque do aplicador por PRODUTO, não por lote/vacina_id específico.
+      // Isso resolve casos em que o aplicador tem saldo em outro lote do mesmo produto.
+      const debitarAplicadorPorProduto = async ({ escala, quantidade, codigo, totalAplicadas }) => {
+        if (!escala?.aplicador_id || !escala?.vacina_id || !quantidade || quantidade <= 0) return false;
+
+        const produtoEscala = String(escala.vacinas?.produto_nome || escala.vacinas?.nome || '').trim().toLowerCase();
+
+        const { data: estoqueRows, error: estErr } = await sb.from('estoque')
+          .select('id, quantidade, vacina_id, vacinas(nome, produto_nome)')
+          .eq('aplicador_id', escala.aplicador_id)
+          .eq('localizacao_tipo', 'aplicador')
+          .gt('quantidade', 0);
+
+        if (estErr) {
+          console.warn(`Erro ao consultar estoque do aplicador para ${codigo}:`, estErr.message);
+          return false;
+        }
+
+        let candidatos = (estoqueRows || []).filter(e => {
+          const produtoEstoque = String(e.vacinas?.produto_nome || e.vacinas?.nome || '').trim().toLowerCase();
+          return produtoEscala && produtoEstoque === produtoEscala;
+        });
+
+        // Fallback de segurança: se o produto_nome ainda não estiver preenchido, tenta pelo vacina_id antigo.
+        if (candidatos.length === 0) {
+          candidatos = (estoqueRows || []).filter(e => String(e.vacina_id) === String(escala.vacina_id));
+        }
+
+        const disponivel = candidatos.reduce((s, e) => s + Number(e.quantidade || 0), 0);
+        if (disponivel < quantidade) {
+          console.warn(`Saldo insuficiente para ${codigo}: disponível ${disponivel}, necessário ${quantidade}`);
+          return false;
+        }
+
+        let restante = quantidade;
+        const ordenados = [...candidatos].sort((a,b) => Number(b.quantidade||0) - Number(a.quantidade||0));
+        const vacinaMovId = ordenados[0]?.vacina_id || escala.vacina_id;
+
+        for (const item of ordenados) {
+          if (restante <= 0) break;
+          const saldo = Number(item.quantidade || 0);
+          const debito = Math.min(saldo, restante);
+          const { error: debErr } = await sb.from('estoque')
+            .update({ quantidade: saldo - debito })
+            .eq('id', item.id);
+          if (debErr) throw debErr;
+          restante -= debito;
+        }
+
+        const { error: movErr } = await sb.from('movimentacoes').insert({
+          tipo: 'aplicacao',
+          vacina_id: vacinaMovId,
+          quantidade,
+          origem_tipo: 'aplicador',
+          origem_aplicador_id: escala.aplicador_id,
+          observacao: `Importação Consulta: +${quantidade} doses aplicadas (total: ${totalAplicadas}) | Tarefa ${codigo} | Data corte: ${dataCorte} | Débito por produto`,
+          criado_por: userId,
+        });
+
+        if (movErr) throw movErr;
+        return true;
+      };
 
       const rows = preview.data;
       const batchSize = 50;
@@ -2254,11 +2317,30 @@ function ImportConsulta() {
 
         // INSERT para novas tarefas
         if (novos.length > 0) {
-          const { data: insertedData, error: insertErr } = await sb.from('tarefas').insert(novos).select('id');
+          const { data: insertedData, error: insertErr } = await sb.from('tarefas').insert(novos).select('id,codigo');
           if (insertErr) {
             ignored += novos.length;
           } else {
             imported += (insertedData?.length || novos.length);
+
+            // Para tarefas novas já com Doses Aplicadas, também debitar se estiverem dentro da data de corte.
+            // Antes, o sistema só debitava tarefas já existentes; por isso algumas importações não geravam abatimento.
+            for (const novo of novos) {
+              const escala = escalaMap[novo.codigo] || null;
+              const dentroDoCorte = dataCorte ? (novo.data_inicio || '') >= dataCorte : false;
+              if (novo.doses_aplicadas > 0 && dentroDoCorte && escala?.id) {
+                await sb.from('escalas')
+                  .update({ doses_aplicadas: novo.doses_aplicadas })
+                  .eq('id', escala.id);
+                const ok = await debitarAplicadorPorProduto({
+                  escala,
+                  quantidade: novo.doses_aplicadas,
+                  codigo: novo.codigo,
+                  totalAplicadas: novo.doses_aplicadas,
+                });
+                if (ok) abatimentos++;
+              }
+            }
           }
         }
 
@@ -2274,8 +2356,22 @@ function ImportConsulta() {
             continue;
           }
 
-          // REGRA: sem alteração nas doses — só atualizar status/campos, sem debitar
+          // REGRA: sem alteração nas doses — normalmente não debita.
+          // Exceção: se já foi importado antes, atualizou doses_aplicadas, mas NÃO existe movimentação,
+          // permite reprocessar o arquivo e gerar o débito pendente.
           const incremento = dosesNovas - dosesAntigas;
+          let qtdParaDebitar = incremento;
+
+          if (incremento === 0 && dosesNovas > 0) {
+            const { data: movExistente } = await sb.from('movimentacoes')
+              .select('id')
+              .eq('tipo', 'aplicacao')
+              .ilike('observacao', `%Tarefa ${fields.codigo || id}%`)
+              .limit(1);
+            if (!movExistente || movExistente.length === 0) {
+              qtdParaDebitar = dosesNovas;
+            }
+          }
 
           const { error: updErr } = await sb.from('tarefas')
             .update({
@@ -2304,32 +2400,14 @@ function ImportConsulta() {
             const dataInicio = fields.data_inicio || '';
             const dentroDoCorte = dataCorte ? dataInicio >= dataCorte : false;
 
-            if (incremento > 0 && dentroDoCorte && escala?.aplicador_id && escala?.vacina_id) {
-              const { data: estoqueAp } = await sb.from('estoque')
-                .select('id, quantidade')
-                .eq('vacina_id', escala.vacina_id)
-                .eq('aplicador_id', escala.aplicador_id)
-                .eq('localizacao_tipo', 'aplicador')
-                .maybeSingle();
-
-              if (estoqueAp && estoqueAp.quantidade >= incremento) {
-                await sb.from('estoque')
-                  .update({ quantidade: estoqueAp.quantidade - incremento })
-                  .eq('id', estoqueAp.id);
-
-                await sb.from('movimentacoes').insert({
-                  tipo: 'aplicacao',
-                  vacina_id: escala.vacina_id,
-                  quantidade: incremento,
-                  origem_tipo: 'aplicador',
-                  origem_aplicador_id: escala.aplicador_id,
-                  observacao: `Importação Consulta: +${incremento} doses aplicadas (total: ${dosesNovas}) | Tarefa ${fields.codigo || id} | Data corte: ${dataCorte}`,
-                  criado_por: userId,
-                });
-                abatimentos++;
-              } else {
-                console.warn(`Saldo insuficiente para ${fields.codigo || id}: disponível ${estoqueAp?.quantidade || 0}, necessário ${incremento}`);
-              }
+            if (qtdParaDebitar > 0 && dentroDoCorte && escala?.aplicador_id && escala?.vacina_id) {
+              const ok = await debitarAplicadorPorProduto({
+                escala,
+                quantidade: qtdParaDebitar,
+                codigo: fields.codigo || id,
+                totalAplicadas: dosesNovas,
+              });
+              if (ok) abatimentos++;
             }
           }
         }
@@ -9453,6 +9531,11 @@ function AumentoDosesPage({ profile }) {
   const fmtData = (v) => v ? new Date(v).toLocaleDateString('pt-BR') : '—';
   const fmtNum = (v) => Number(v || 0).toLocaleString('pt-BR');
   const produtoItem = (it) => it?.vacinas?.produto_nome || it?.vacinas?.nome || 'Produto não informado';
+  const extrairCodigoTarefa = (r) => {
+    const txt = String(r?.observacao || '');
+    const m = txt.match(/[A-Z0-9]+(?:\.[A-Z0-9&]+)+/i);
+    return m ? m[0] : '';
+  };
 
   useEffect(() => {
     setForm(f => ({ ...f, solicitado_por: f.solicitado_por || profile?.nome || profile?.email || '' }));
@@ -9477,6 +9560,7 @@ function AumentoDosesPage({ profile }) {
           r.aplicadores?.nome,
           r.aplicadores?.cpf,
           r.rotas?.codigo,
+          extrairCodigoTarefa(r),
           ...(r.remessa_itens || []).map(i => produtoItem(i))
         ].join(' ').toLowerCase();
         return texto.includes(termo);
@@ -9585,11 +9669,7 @@ function AumentoDosesPage({ profile }) {
       }).select('id').single();
       if (movErr) throw movErr;
 
-      const tarefaCodigo = (() => {
-        const txt = String(selecionada.observacao || '');
-        const m = txt.match(/[A-Z0-9]+(?:\.[A-Z0-9&]+)+/i);
-        return m ? m[0] : null;
-      })();
+      const tarefaCodigo = extrairCodigoTarefa(selecionada) || null;
 
       const { error: adErr } = await sb.from('aumentos_doses').insert({
         tarefa_id: null,
@@ -9692,7 +9772,7 @@ function AumentoDosesPage({ profile }) {
             </div>
             <div className="table-wrap" style={{maxHeight:520,overflowY:'auto'}}>
               <table>
-                <thead><tr><th>Entrega</th><th>Aplicador</th><th>Produto</th><th></th></tr></thead>
+                <thead><tr><th>Entrega</th><th>Tarefa</th><th>Aplicador</th><th>Produto</th><th></th></tr></thead>
                 <tbody>
                   {remessas.map(r => (
                     <tr key={r.id} style={{background: selecionada?.id === r.id ? 'var(--accent-subtle)' : ''}}>
@@ -9700,12 +9780,13 @@ function AumentoDosesPage({ profile }) {
                         <div style={{fontWeight:600,color:'var(--text-primary)'}}>{r.codigo_rastreio || r.id.slice(0,8)}</div>
                         <div style={{fontSize:11,color:'var(--text-muted)'}}>Rota {r.rotas?.codigo || '—'} · {fmtData(r.updated_at)}</div>
                       </td>
+                      <td className="mono" style={{color:'var(--accent)',fontWeight:600}}>{extrairCodigoTarefa(r) || '—'}</td>
                       <td>{r.aplicadores?.nome || '—'}<br/><span style={{fontSize:11,color:'var(--text-muted)'}}>{r.aplicadores?.cpf || ''}</span></td>
                       <td>{[...new Set((r.remessa_itens || []).map(i => produtoItem(i)))].join(', ')}</td>
                       <td><button className="btn btn-sm btn-primary" onClick={() => escolherRemessa(r)}>Selecionar</button></td>
                     </tr>
                   ))}
-                  {!remessas.length && <tr><td colSpan="4" style={{textAlign:'center',padding:24}}>Nenhuma remessa listada</td></tr>}
+                  {!remessas.length && <tr><td colSpan="5" style={{textAlign:'center',padding:24}}>Nenhuma remessa listada</td></tr>}
                 </tbody>
               </table>
             </div>
@@ -9719,6 +9800,7 @@ function AumentoDosesPage({ profile }) {
               <div style={{display:'flex',flexDirection:'column',gap:12}}>
                 <div style={{padding:12,border:'1px solid var(--border)',borderRadius:8,background:'var(--bg-input)'}}>
                   <div style={{fontWeight:700}}>{selecionada.aplicadores?.nome || 'Aplicador'}</div>
+                  <div style={{fontSize:12,color:'var(--text-muted)'}}>Tarefa: <strong style={{color:'var(--accent)',fontFamily:'JetBrains Mono'}}>{extrairCodigoTarefa(selecionada) || '—'}</strong></div>
                   <div style={{fontSize:12,color:'var(--text-muted)'}}>Remessa {selecionada.codigo_rastreio || selecionada.id.slice(0,8)} · Base: {selecionada.rotas?.bases?.nome || '—'}</div>
                 </div>
                 <div className="form-group">
