@@ -682,6 +682,7 @@ function Sidebar({ profile, currentPage, onNavigate, open, onClose, collapsed, o
       { id: 'etiquetas', icon: '🏷️', label: 'Etiquetas/Recibos' },
       { id: 'transferencia', icon: '↔️', label: 'Transferência' },
       { id: 'movimentacoes', icon: '📜', label: 'Movimentações' },
+      { id: 'aumentos-doses', icon: '➕', label: 'Aumento de Doses' },
     );
   } else if (role === 'planejador') {
     menuItems.push(
@@ -693,6 +694,7 @@ function Sidebar({ profile, currentPage, onNavigate, open, onClose, collapsed, o
       { id: 'escalas', icon: '👩‍⚕️', label: 'Escalas' },
       { id: 'rotas', icon: '🚚', label: 'Rotas' },
       { id: 'transferencia', icon: '↔️', label: 'Transferência' },
+      { id: 'aumentos-doses', icon: '➕', label: 'Aumento de Doses' },
       { id: 'importacao', icon: '📥', label: 'Importação' },
     );
   } else if (role === 'montador') {
@@ -9426,6 +9428,376 @@ function MotoristaRotasMobile({ userId, onSelectRota }) {
   );
 }
 
+
+// ═══════════════════════════════════════════════
+// AUMENTO DE DOSES
+// ═══════════════════════════════════════════════
+function AumentoDosesPage({ profile }) {
+  const toast = useContext(ToastContext);
+  const [tab, setTab] = useState('novo');
+  const [busca, setBusca] = useState('');
+  const [remessas, setRemessas] = useState([]);
+  const [loadingBusca, setLoadingBusca] = useState(false);
+  const [selecionada, setSelecionada] = useState(null);
+  const [itemSelecionado, setItemSelecionado] = useState('');
+  const [form, setForm] = useState({ quantidade: '', motivo: '', data_solicitacao: new Date().toISOString().split('T')[0], solicitado_por: '' });
+  const [salvando, setSalvando] = useState(false);
+  const [relatorio, setRelatorio] = useState([]);
+  const [loadingRel, setLoadingRel] = useState(false);
+  const [filtros, setFiltros] = useState({ inicio: '', fim: '', aplicador: '', tarefa: '', produto: '' });
+
+  const statusConcluidos = ['concluida','concluido','entregue','finalizada','finalizado'];
+  const fmtData = (v) => v ? new Date(v).toLocaleDateString('pt-BR') : '—';
+  const fmtNum = (v) => Number(v || 0).toLocaleString('pt-BR');
+  const produtoItem = (it) => it?.vacinas?.produto_nome || it?.vacinas?.nome || 'Produto não informado';
+
+  useEffect(() => {
+    setForm(f => ({ ...f, solicitado_por: f.solicitado_por || profile?.nome || profile?.email || '' }));
+  }, [profile]);
+
+  const carregarRemessas = async () => {
+    setLoadingBusca(true);
+    try {
+      let query = sb.from('remessas')
+        .select('id,codigo_rastreio,status,updated_at,observacao,destino_aplicador_id,rota_id,aplicadores(nome,cpf,cidade,uf),rotas(id,codigo,base_origem_id,bases(nome)),remessa_itens(id,quantidade,vacina_id,lote,vacinas(id,nome,produto_nome,lote))')
+        .in('status', statusConcluidos)
+        .order('updated_at', { ascending: false })
+        .limit(250);
+      const { data, error } = await query;
+      if (error) throw error;
+      const termo = busca.trim().toLowerCase();
+      const filtradas = (data || []).filter(r => {
+        if (!termo) return true;
+        const texto = [
+          r.codigo_rastreio,
+          r.observacao,
+          r.aplicadores?.nome,
+          r.aplicadores?.cpf,
+          r.rotas?.codigo,
+          ...(r.remessa_itens || []).map(i => produtoItem(i))
+        ].join(' ').toLowerCase();
+        return texto.includes(termo);
+      });
+      setRemessas(filtradas);
+      if (!filtradas.length) toast('Nenhuma remessa concluída encontrada com esse filtro.', 'info');
+    } catch (err) {
+      toast('Erro ao buscar remessas: ' + err.message, 'error');
+    } finally {
+      setLoadingBusca(false);
+    }
+  };
+
+  useEffect(() => { carregarRemessas(); }, []);
+
+  const escolherRemessa = (r) => {
+    setSelecionada(r);
+    const first = (r.remessa_itens || []).find(i => Number(i.quantidade || 0) > 0) || (r.remessa_itens || [])[0];
+    setItemSelecionado(first?.id || '');
+  };
+
+  const getItemAtual = () => {
+    if (!selecionada) return null;
+    return (selecionada.remessa_itens || []).find(i => i.id === itemSelecionado) || null;
+  };
+
+  const creditarAplicador = async ({ vacina_id, aplicador_id, quantidade }) => {
+    const { data: destRows, error: destErr } = await sb.from('estoque')
+      .select('id,quantidade')
+      .eq('vacina_id', vacina_id)
+      .eq('aplicador_id', aplicador_id)
+      .eq('localizacao_tipo', 'aplicador')
+      .order('quantidade', { ascending: false });
+    if (destErr) throw destErr;
+
+    if (destRows && destRows.length > 0) {
+      const atual = Number(destRows[0].quantidade || 0);
+      const { error } = await sb.from('estoque').update({ quantidade: atual + quantidade }).eq('id', destRows[0].id);
+      if (error) throw error;
+    } else {
+      const { error } = await sb.from('estoque').insert({ vacina_id, aplicador_id, base_id: null, localizacao_tipo: 'aplicador', quantidade });
+      if (error) throw error;
+    }
+  };
+
+  const debitarBasePorProduto = async ({ produto_nome, base_id, quantidade }) => {
+    const { data: rows, error } = await sb.from('estoque')
+      .select('id,quantidade,vacina_id,vacinas(nome,produto_nome,lote)')
+      .eq('base_id', base_id)
+      .eq('localizacao_tipo', 'base')
+      .gt('quantidade', 0)
+      .order('quantidade', { ascending: false });
+    if (error) throw error;
+
+    const candidatos = (rows || []).filter(r => (r.vacinas?.produto_nome || r.vacinas?.nome || '') === produto_nome);
+    const total = candidatos.reduce((s, r) => s + Number(r.quantidade || 0), 0);
+    if (total < quantidade) throw new Error(`Saldo insuficiente na base para ${produto_nome}. Disponível: ${fmtNum(total)}, solicitado: ${fmtNum(quantidade)}`);
+
+    let restante = quantidade;
+    let primeiraVacinaId = null;
+    for (const row of candidatos) {
+      if (restante <= 0) break;
+      const saldo = Number(row.quantidade || 0);
+      const debitar = Math.min(restante, saldo);
+      const { error: updErr } = await sb.from('estoque').update({ quantidade: saldo - debitar }).eq('id', row.id);
+      if (updErr) throw updErr;
+      if (!primeiraVacinaId) primeiraVacinaId = row.vacina_id;
+      restante -= debitar;
+    }
+    return primeiraVacinaId;
+  };
+
+  const salvarAumento = async () => {
+    const item = getItemAtual();
+    const quantidade = Number(form.quantidade || 0);
+    if (!selecionada) return toast('Selecione uma remessa concluída.', 'error');
+    if (!item) return toast('Selecione o produto/vacina da remessa.', 'error');
+    if (!selecionada.rotas?.base_origem_id) return toast('A rota da remessa não possui base de origem.', 'error');
+    if (!selecionada.destino_aplicador_id) return toast('A remessa não possui aplicador destino.', 'error');
+    if (!quantidade || quantidade <= 0) return toast('Informe uma quantidade maior que zero.', 'error');
+    if (!form.motivo.trim()) return toast('Informe o motivo do aumento de doses.', 'error');
+
+    if (!confirm(`Confirmar aumento de ${fmtNum(quantidade)} doses para ${selecionada.aplicadores?.nome || 'aplicador'}?`)) return;
+
+    setSalvando(true);
+    try {
+      const { data: { user } } = await sb.auth.getUser();
+      if (!user?.id) throw new Error('Usuário não autenticado.');
+      const produto_nome = produtoItem(item);
+
+      const vacinaMovId = await debitarBasePorProduto({ produto_nome, base_id: selecionada.rotas.base_origem_id, quantidade });
+      await creditarAplicador({ vacina_id: vacinaMovId, aplicador_id: selecionada.destino_aplicador_id, quantidade });
+
+      const obs = `AUMENTO DE DOSES | Produto: ${produto_nome} | Qtd extra: ${quantidade} | Remessa original: ${selecionada.codigo_rastreio || selecionada.id} | Rota: ${selecionada.rotas?.codigo || ''} | Motivo: ${form.motivo}`;
+      const { data: mov, error: movErr } = await sb.from('movimentacoes').insert({
+        tipo: 'envio_aplicador',
+        vacina_id: vacinaMovId,
+        quantidade,
+        origem_tipo: 'base',
+        origem_base_id: selecionada.rotas.base_origem_id,
+        destino_tipo: 'aplicador',
+        destino_aplicador_id: selecionada.destino_aplicador_id,
+        remessa_id: selecionada.id,
+        observacao: obs,
+        criado_por: user.id
+      }).select('id').single();
+      if (movErr) throw movErr;
+
+      const tarefaCodigo = (() => {
+        const txt = String(selecionada.observacao || '');
+        const m = txt.match(/[A-Z0-9]+(?:\.[A-Z0-9&]+)+/i);
+        return m ? m[0] : null;
+      })();
+
+      const { error: adErr } = await sb.from('aumentos_doses').insert({
+        tarefa_id: null,
+        tarefa_codigo: tarefaCodigo,
+        remessa_id: selecionada.id,
+        rota_id: selecionada.rota_id,
+        vacina_id: vacinaMovId,
+        produto_nome,
+        base_origem_id: selecionada.rotas.base_origem_id,
+        aplicador_id: selecionada.destino_aplicador_id,
+        quantidade,
+        data_solicitacao: form.data_solicitacao,
+        motivo: form.motivo,
+        solicitado_por: form.solicitado_por || profile?.nome || profile?.email || '',
+        movimentacao_id: mov.id,
+        criado_por: user.id
+      });
+      if (adErr) throw adErr;
+
+      toast('Aumento de doses registrado e estoque movimentado com sucesso!', 'success');
+      setForm({ quantidade: '', motivo: '', data_solicitacao: new Date().toISOString().split('T')[0], solicitado_por: profile?.nome || profile?.email || '' });
+      setSelecionada(null);
+      setItemSelecionado('');
+      carregarRelatorio();
+    } catch (err) {
+      toast('Erro ao registrar aumento: ' + err.message, 'error');
+    } finally {
+      setSalvando(false);
+    }
+  };
+
+  const carregarRelatorio = async () => {
+    setLoadingRel(true);
+    try {
+      let query = sb.from('vw_relatorio_aumentos_doses').select('*').order('created_at', { ascending: false }).limit(1000);
+      if (filtros.inicio) query = query.gte('data_solicitacao', filtros.inicio);
+      if (filtros.fim) query = query.lte('data_solicitacao', filtros.fim);
+      const { data, error } = await query;
+      if (error) throw error;
+      const termoAp = filtros.aplicador.trim().toLowerCase();
+      const termoTarefa = filtros.tarefa.trim().toLowerCase();
+      const termoProduto = filtros.produto.trim().toLowerCase();
+      const filtrado = (data || []).filter(r =>
+        (!termoAp || String(r.aplicador || '').toLowerCase().includes(termoAp)) &&
+        (!termoTarefa || String(r.tarefa_codigo || '').toLowerCase().includes(termoTarefa)) &&
+        (!termoProduto || String(r.produto_nome || '').toLowerCase().includes(termoProduto))
+      );
+      setRelatorio(filtrado);
+    } catch (err) {
+      toast('Erro ao carregar relatório: ' + err.message, 'error');
+    } finally {
+      setLoadingRel(false);
+    }
+  };
+
+  useEffect(() => { carregarRelatorio(); }, []);
+
+  const exportarCSV = () => {
+    const header = ['Data','Tarefa','Produto','Quantidade','Base','Aplicador','Motivo','Solicitado por'];
+    const linhas = relatorio.map(r => [
+      r.data_solicitacao || '', r.tarefa_codigo || '', r.produto_nome || '', r.quantidade || 0,
+      r.base_origem || '', r.aplicador || '', r.motivo || '', r.solicitado_por || ''
+    ]);
+    const csv = [header, ...linhas].map(row => row.map(v => `"${String(v).replace(/"/g, '""')}"`).join(';')).join('\n');
+    const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'relatorio_aumentos_doses.csv'; a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const itemAtual = getItemAtual();
+  const totalRel = relatorio.reduce((s, r) => s + Number(r.quantidade || 0), 0);
+
+  return (
+    <div>
+      <div className="page-header">
+        <div>
+          <div className="page-title">Aumento de Doses</div>
+          <div className="page-subtitle">Registre envios extras vinculados a uma remessa/tarefa já concluída</div>
+        </div>
+        <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+          <button className="btn btn-secondary" onClick={() => setTab('novo')}>➕ Novo aumento</button>
+          <button className="btn btn-secondary" onClick={() => { setTab('relatorio'); carregarRelatorio(); }}>📊 Relatório</button>
+        </div>
+      </div>
+
+      <div className="tabs">
+        <button className={`tab ${tab === 'novo' ? 'active' : ''}`} onClick={() => setTab('novo')}>Lançamento</button>
+        <button className={`tab ${tab === 'relatorio' ? 'active' : ''}`} onClick={() => { setTab('relatorio'); carregarRelatorio(); }}>Relatório Diretoria</button>
+      </div>
+
+      {tab === 'novo' && (
+        <div style={{display:'grid',gridTemplateColumns:'minmax(320px, 1fr) minmax(320px, 0.9fr)',gap:16}}>
+          <div className="card">
+            <div className="card-header"><div className="card-title">1. Buscar remessa concluída</div></div>
+            <div style={{display:'flex',gap:8,marginBottom:12}}>
+              <input className="form-input" value={busca} onChange={e=>setBusca(e.target.value)} placeholder="Buscar por aplicador, CPF, remessa, rota, tarefa ou produto" onKeyDown={e=>{ if(e.key==='Enter') carregarRemessas(); }} />
+              <button className="btn btn-primary" onClick={carregarRemessas} disabled={loadingBusca}>{loadingBusca ? 'Buscando...' : 'Buscar'}</button>
+            </div>
+            <div className="table-wrap" style={{maxHeight:520,overflowY:'auto'}}>
+              <table>
+                <thead><tr><th>Entrega</th><th>Aplicador</th><th>Produto</th><th></th></tr></thead>
+                <tbody>
+                  {remessas.map(r => (
+                    <tr key={r.id} style={{background: selecionada?.id === r.id ? 'var(--accent-subtle)' : ''}}>
+                      <td>
+                        <div style={{fontWeight:600,color:'var(--text-primary)'}}>{r.codigo_rastreio || r.id.slice(0,8)}</div>
+                        <div style={{fontSize:11,color:'var(--text-muted)'}}>Rota {r.rotas?.codigo || '—'} · {fmtData(r.updated_at)}</div>
+                      </td>
+                      <td>{r.aplicadores?.nome || '—'}<br/><span style={{fontSize:11,color:'var(--text-muted)'}}>{r.aplicadores?.cpf || ''}</span></td>
+                      <td>{[...new Set((r.remessa_itens || []).map(i => produtoItem(i)))].join(', ')}</td>
+                      <td><button className="btn btn-sm btn-primary" onClick={() => escolherRemessa(r)}>Selecionar</button></td>
+                    </tr>
+                  ))}
+                  {!remessas.length && <tr><td colSpan="4" style={{textAlign:'center',padding:24}}>Nenhuma remessa listada</td></tr>}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div className="card">
+            <div className="card-header"><div className="card-title">2. Declarar saída extra</div></div>
+            {!selecionada ? (
+              <div className="empty-state"><div className="empty-icon">➕</div><div className="empty-text">Selecione uma remessa concluída para lançar o aumento.</div></div>
+            ) : (
+              <div style={{display:'flex',flexDirection:'column',gap:12}}>
+                <div style={{padding:12,border:'1px solid var(--border)',borderRadius:8,background:'var(--bg-input)'}}>
+                  <div style={{fontWeight:700}}>{selecionada.aplicadores?.nome || 'Aplicador'}</div>
+                  <div style={{fontSize:12,color:'var(--text-muted)'}}>Remessa {selecionada.codigo_rastreio || selecionada.id.slice(0,8)} · Base: {selecionada.rotas?.bases?.nome || '—'}</div>
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Produto/Vacina da remessa original</label>
+                  <select className="form-select" value={itemSelecionado} onChange={e=>setItemSelecionado(e.target.value)}>
+                    {(selecionada.remessa_itens || []).map(i => <option key={i.id} value={i.id}>{produtoItem(i)} · enviado originalmente: {fmtNum(i.quantidade)} doses</option>)}
+                  </select>
+                  {itemAtual && <div style={{fontSize:11,color:'var(--text-muted)'}}>O débito será feito por produto consolidado, ignorando lote.</div>}
+                </div>
+                <div className="form-grid">
+                  <div className="form-group">
+                    <label className="form-label">Quantidade extra</label>
+                    <input className="form-input" type="number" min="1" value={form.quantidade} onChange={e=>setForm({...form, quantidade:e.target.value})} placeholder="Ex: 100" />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">Data da solicitação</label>
+                    <input className="form-input" type="date" value={form.data_solicitacao} onClick={openDatePicker} onFocus={openDatePicker} onChange={e=>setForm({...form, data_solicitacao:e.target.value})} />
+                  </div>
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Solicitado por</label>
+                  <input className="form-input" value={form.solicitado_por} onChange={e=>setForm({...form, solicitado_por:e.target.value})} placeholder="Nome de quem solicitou" />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Motivo</label>
+                  <textarea className="form-input" rows="4" value={form.motivo} onChange={e=>setForm({...form, motivo:e.target.value})} placeholder="Ex: atendimento adicional sinalizado pela operação/diretoria" />
+                </div>
+                <button className="btn btn-success" onClick={salvarAumento} disabled={salvando}>{salvando ? 'Registrando...' : 'Confirmar aumento e movimentar estoque'}</button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {tab === 'relatorio' && (
+        <div>
+          <div className="kpi-grid-compact">
+            <div className="kpi-card-compact"><div className="kpi-value">{fmtNum(totalRel)}</div><div className="kpi-label">Doses aumentadas</div></div>
+            <div className="kpi-card-compact"><div className="kpi-value">{fmtNum(relatorio.length)}</div><div className="kpi-label">Lançamentos</div></div>
+          </div>
+          <div className="card" style={{marginBottom:14}}>
+            <div className="form-grid">
+              <div className="form-group"><label className="form-label">Data início</label><input className="form-input" type="date" value={filtros.inicio} onClick={openDatePicker} onFocus={openDatePicker} onChange={e=>setFiltros({...filtros,inicio:e.target.value})} /></div>
+              <div className="form-group"><label className="form-label">Data fim</label><input className="form-input" type="date" value={filtros.fim} onClick={openDatePicker} onFocus={openDatePicker} onChange={e=>setFiltros({...filtros,fim:e.target.value})} /></div>
+              <div className="form-group"><label className="form-label">Aplicador</label><input className="form-input" value={filtros.aplicador} onChange={e=>setFiltros({...filtros,aplicador:e.target.value})} /></div>
+              <div className="form-group"><label className="form-label">Tarefa</label><input className="form-input" value={filtros.tarefa} onChange={e=>setFiltros({...filtros,tarefa:e.target.value})} /></div>
+              <div className="form-group"><label className="form-label">Produto</label><input className="form-input" value={filtros.produto} onChange={e=>setFiltros({...filtros,produto:e.target.value})} /></div>
+            </div>
+            <div style={{display:'flex',gap:8,marginTop:14,flexWrap:'wrap'}}>
+              <button className="btn btn-primary" onClick={carregarRelatorio} disabled={loadingRel}>{loadingRel ? 'Carregando...' : 'Aplicar filtros'}</button>
+              <button className="btn btn-secondary" onClick={exportarCSV}>Exportar CSV</button>
+              <button className="btn btn-secondary" onClick={() => window.print()}>Imprimir</button>
+            </div>
+          </div>
+          <div className="card">
+            <div className="table-wrap">
+              <table>
+                <thead><tr><th>Data</th><th>Tarefa</th><th>Produto</th><th>Qtd</th><th>Base</th><th>Aplicador</th><th>Motivo</th><th>Solicitado por</th></tr></thead>
+                <tbody>
+                  {relatorio.map((r, idx) => (
+                    <tr key={idx}>
+                      <td>{fmtData(r.data_solicitacao)}</td>
+                      <td className="mono">{r.tarefa_codigo || '—'}</td>
+                      <td>{r.produto_nome || '—'}</td>
+                      <td className="mono">{fmtNum(r.quantidade)}</td>
+                      <td>{r.base_origem || '—'}</td>
+                      <td>{r.aplicador || '—'}</td>
+                      <td>{r.motivo || '—'}</td>
+                      <td>{r.solicitado_por || '—'}</td>
+                    </tr>
+                  ))}
+                  {!relatorio.length && <tr><td colSpan="8" style={{textAlign:'center',padding:24}}>Nenhum aumento encontrado</td></tr>}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function App() {
   const [session, setSession] = useState(undefined); // undefined = loading
   const [profile, setProfile] = useState(null);
@@ -9499,6 +9871,7 @@ function App() {
       case 'estoque': return <EstoquePage />;
       case 'demanda': return <DemandaOfertaPage profile={profile} />;
       case 'movimentacoes': return <MovimentacoesPage />;
+      case 'aumentos-doses': return <AumentoDosesPage profile={profile} />;
       case 'rotas': return <RotasPage />;
       case 'veiculos': return <VeiculosPage />;
       case 'transferencia': return <TransferenciaPage />;
