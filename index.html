@@ -4024,15 +4024,21 @@ function EntradaEstoqueModal({ onClose }) {
     // Entrada de estoque deve ser por PRODUTO, não por lote.
     // Agrupamos todos os registros da tabela vacinas pelo produto_nome/nome e usamos
     // apenas um vacina_id representante para gravar o saldo. O lote fica fora da tela.
-    sb.from('vacinas').select('id, nome, lote, produto_nome').eq('ativa', true).order('nome').then(r => {
+    // Entrada de estoque deve listar TODOS os produtos cadastrados, mesmo que algum lote esteja inativo.
+    // O saldo continua consolidado por produto_nome/nome, ignorando lote.
+    sb.from('vacinas').select('id, nome, lote, produto_nome, ativa').order('nome').then(r => {
       const mapa = new Map();
       (r.data || []).forEach(v => {
-        const produto = (v.produto_nome || v.nome || '').trim();
+        const produto = String(v.produto_nome || v.nome || '').trim();
         if (!produto) return;
-        const atual = mapa.get(produto);
-        // Preferir cadastro sem lote como representante; se não houver, fica o primeiro.
-        if (!atual || (!v.lote && atual.lote)) {
-          mapa.set(produto, { id: v.id, nome: produto, lote: null, produto_nome: produto });
+        const key = produto.toLowerCase();
+        const atual = mapa.get(key);
+        // Preferência do representante:
+        // 1) produto ativo e sem lote; 2) produto ativo; 3) sem lote; 4) primeiro encontrado.
+        const score = (v.ativa === true ? 10 : 0) + (!v.lote ? 2 : 0);
+        const atualScore = atual ? ((atual.ativa === true ? 10 : 0) + (!atual.lote ? 2 : 0)) : -1;
+        if (!atual || score > atualScore) {
+          mapa.set(key, { id: v.id, nome: produto, lote: v.lote || null, produto_nome: produto, ativa: v.ativa });
         }
       });
       setVacinas(Array.from(mapa.values()).sort((a,b) => a.nome.localeCompare(b.nome)));
