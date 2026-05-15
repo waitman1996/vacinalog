@@ -5434,10 +5434,34 @@ function RotasListPage({ onOpenRoteirizacao }) {
     if (error) toast(error.message, 'error'); else { toast('Rota enviada para montagem!', 'success'); load(); }
   };
 
-  const cancelar = async (id) => {
-    if (!confirm('Cancelar esta rota?')) return;
-    const { error } = await sb.from('rotas').update({ status: 'cancelada' }).eq('id', id);
-    if (error) toast(error.message, 'error'); else { toast('Rota cancelada', 'success'); load(); }
+  const cancelar = async (rota) => {
+    if (!confirm('Cancelar esta rota? Só é permitido quando ainda não existe caixa montada.')) return;
+    try {
+      const rpc = await sb.rpc('cancelar_rota_segura', { p_rota_id: rota.id });
+      if (rpc.error) throw rpc.error;
+      toast('Rota cancelada com segurança.', 'success');
+      load();
+    } catch (err) {
+      // Fallback caso o SQL novo ainda não tenha sido rodado: bloqueia qualquer rota com remessa já em montagem/pronta/carregada/em trânsito/concluída.
+      try {
+        const { data: remessas, error: remErr } = await sb.from('remessas')
+          .select('id,status')
+          .eq('rota_id', rota.id);
+        if (remErr) throw remErr;
+        const temCaixaMontada = (remessas || []).some(r => ['montagem','pronta','carregada','em_transito','concluida'].includes(String(r.status || '').toLowerCase()));
+        if (temCaixaMontada) {
+          toast('Não é possível cancelar: esta rota já tem caixa montada ou etapa posterior.', 'error');
+          return;
+        }
+        const { error } = await sb.from('rotas').update({ status: 'cancelada' }).eq('id', rota.id);
+        if (error) throw error;
+        await sb.from('remessas').update({ status: 'cancelada' }).eq('rota_id', rota.id).eq('status', 'planejada');
+        toast('Rota cancelada com segurança.', 'success');
+        load();
+      } catch (fallbackErr) {
+        toast(fallbackErr.message || 'Erro ao cancelar rota', 'error');
+      }
+    }
   };
 
   return (
@@ -5507,7 +5531,8 @@ function RotasListPage({ onOpenRoteirizacao }) {
             <td style={{fontSize:11,fontFamily:'JetBrains Mono',color:'var(--text-muted)'}}>{duracao()}</td>
             <td><div style={{display:'flex',gap:4,flexWrap:'wrap'}}>
               <button className="btn btn-secondary btn-sm" onClick={() => setRotaDetalhe(r)}>👁 Ver</button>
-              {r.status==='planejada' && <><button className="btn btn-success btn-sm" onClick={()=>enviarMontagem(r.id)}>→ Montagem</button><button className="btn btn-danger btn-sm" onClick={()=>cancelar(r.id)}>Cancelar</button></>}
+              {r.status==='planejada' && <button className="btn btn-success btn-sm" onClick={()=>enviarMontagem(r.id)}>→ Montagem</button>}
+              {!['cancelada','concluida','em_transito'].includes(r.status) && <button className="btn btn-danger btn-sm" onClick={()=>cancelar(r)}>Cancelar</button>}
               {r.status==='em_transito' && <span style={{fontSize:10,color:'var(--success)'}}>🟢 ao vivo</span>}
             </div></td>
           </tr>
@@ -5561,7 +5586,7 @@ function RoteirizacaoPage({ onBack }) {
   const toast = useContext(ToastContext);
 
   useEffect(() => {
-    sb.from('bases').select('id, nome, latitude, longitude').eq('ativa', true).order('nome').then(r => setBases(r.data||[]));
+    sb.from('bases').select('id, nome, latitude, longitude').eq('ativa', true).order('nome').then(r => setBases((r.data||[]).filter(b => String(b.nome||'').toLowerCase() !== 'descarte doses')));
     sb.from('veiculos').select('id, placa, modelo, capacidade_doses, motorista_padrao_id, base_id').eq('ativo', true).order('modelo').then(r => setVeiculos(r.data||[]));
     sb.from('profiles').select('id, nome, base_id').eq('role', 'motorista').eq('ativo', true).order('nome').then(r => setMotoristas(r.data||[]));
     loadEscalas();
@@ -6443,7 +6468,7 @@ function TransferenciaPage() {
   const toast = useContext(ToastContext);
 
   useEffect(() => {
-    sb.from('bases').select('id, nome').eq('ativa', true).order('nome').then(r => setBases(r.data||[]));
+    sb.from('bases').select('id, nome').eq('ativa', true).order('nome').then(r => setBases((r.data||[]).filter(b => String(b.nome||'').toLowerCase() !== 'descarte doses')));
     sb.from('vacinas').select('id, nome, lote, produto_nome').eq('ativa', true).order('nome').then(r => setVacinas(r.data||[]));
     carregarDescarte();
   }, []);
@@ -6519,6 +6544,36 @@ function TransferenciaPage() {
 
   const loteObs = () => form.lote?.trim() ? `Lote manual: ${form.lote.trim()} | ` : '';
 
+  const getDescarteBase = async () => {
+    const { data, error } = await sb.from('bases')
+      .select('id, nome')
+      .ilike('nome', 'Descarte Doses')
+      .maybeSingle();
+    if (error) throw error;
+    if (data?.id) return data;
+
+    const { data: criado, error: createErr } = await sb.from('bases')
+      .insert({
+        nome: 'Descarte Doses',
+        tipo: 'base_regional',
+        cidade: 'Descarte',
+        uf: 'DS',
+        ponto_partida: 'Descarte Doses',
+        endereco: 'Local virtual para perdas, avarias e descartes',
+        ativa: true
+      })
+      .select('id, nome')
+      .single();
+    if (createErr) throw createErr;
+    return criado;
+  };
+
+  const creditarDescarte = async (vacina_id, qtd) => {
+    const descarte = await getDescarteBase();
+    await creditarEstoque(vacina_id, 'base', descarte.id, qtd);
+    return descarte;
+  };
+
   const executarTransferencia = async () => {
     if (!form.vacina_id || !form.quantidade || !form.lote?.trim() || !form.origem_id || !form.destino_id) { toast('Preencha vacina, lote, quantidade, origem e destino', 'error'); return; }
     setSaving(true);
@@ -6585,7 +6640,8 @@ function TransferenciaPage() {
         await sb.from('movimentacoes').insert({ tipo: 'devolucao', vacina_id: form.vacina_id, quantidade: qtdBoa, origem_tipo: 'aplicador', origem_aplicador_id: form.origem_id, destino_tipo: 'base', destino_base_id: form.destino_id, observacao: `Devolução: ${qtdBoa} boas + ${qtdDanif} danificadas = ${qtdTotal} total | Lote manual: ${form.lote.trim()} | ${form.observacao||''}`, criado_por: userId });
       }
       if (qtdDanif > 0) {
-        await sb.from('movimentacoes').insert({ tipo: 'ajuste', vacina_id: form.vacina_id, quantidade: qtdDanif, origem_tipo: 'aplicador', origem_aplicador_id: form.origem_id, destino_tipo: 'base', destino_base_id: form.destino_id, observacao: `DESCARTE: ${qtdDanif} doses danificadas de ${qtdTotal} devolvidas | Lote manual: ${form.lote.trim()} | ${form.observacao||''}`, criado_por: userId });
+        const descarte = await creditarDescarte(form.vacina_id, qtdDanif);
+        await sb.from('movimentacoes').insert({ tipo: 'ajuste', vacina_id: form.vacina_id, quantidade: qtdDanif, origem_tipo: 'aplicador', origem_aplicador_id: form.origem_id, destino_tipo: 'base', destino_base_id: descarte.id, observacao: `DESCARTE: ${qtdDanif} doses danificadas de ${qtdTotal} devolvidas | Enviado para Descarte Doses | Lote manual: ${form.lote.trim()} | ${form.observacao||''}`, criado_por: userId });
       }
       toast(`Devolução: ${qtdBoa} para estoque${qtdDanif>0?` + ${qtdDanif} descartadas`:''} ✓`, 'success');
       setForm(f=>({...f, quantidade:'', lote:'', observacao:'', tem_danificadas:false, qtd_danificadas:''}));
@@ -6784,7 +6840,7 @@ function UsuariosPage() {
 
   useEffect(() => {
     load();
-    sb.from('bases').select('id, nome').eq('ativa', true).order('nome').then(r => setBases(r.data||[]));
+    sb.from('bases').select('id, nome').eq('ativa', true).order('nome').then(r => setBases((r.data||[]).filter(b => String(b.nome||'').toLowerCase() !== 'descarte doses')));
   }, []);
 
   const updatePerfil = async (form) => {
