@@ -5440,6 +5440,122 @@ function RotasListPage({ onOpenRoteirizacao }) {
     if (error) toast(error.message, 'error'); else { toast('Rota cancelada', 'success'); load(); }
   };
 
+
+  const imprimirRomaneio = async (rota) => {
+    try {
+      toast('Gerando romaneio...', 'info');
+
+      const { data: rotaData, error: rotaError } = await sb.from('rotas')
+        .select('*, bases!rotas_base_origem_id_fkey(nome,cidade,uf,endereco), profiles!rotas_motorista_id_fkey(nome), veiculos(placa, modelo)')
+        .eq('id', rota.id)
+        .single();
+
+      if (rotaError) throw rotaError;
+
+      const { data: remessasData, error: remessasError } = await sb.from('remessas')
+        .select('*, remessa_itens(*, vacinas(nome, lote)), bases(nome, cidade, uf, endereco), aplicadores(nome, cpf, cidade, uf, endereco)')
+        .eq('rota_id', rota.id)
+        .order('ordem_entrega', { ascending: true });
+
+      if (remessasError) throw remessasError;
+
+      const esc = (v) => String(v ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[ch]));
+      const dataBr = (d) => d ? new Date(d + 'T12:00:00').toLocaleDateString('pt-BR') : new Date().toLocaleDateString('pt-BR');
+      const parseDosesObs = (obs) => {
+        const m = String(obs || '').match(/(\d+)\s*doses/i);
+        return m ? Number(m[1]) : 0;
+      };
+
+      const remessas = remessasData || [];
+      const motorista = rotaData.profiles?.nome || rota.profiles?.nome || '—';
+      const veiculoPlaca = rotaData.veiculos
+        ? `${rotaData.veiculos.modelo || ''}${rotaData.veiculos.placa ? ' - ' + rotaData.veiculos.placa : ''}`.trim()
+        : (rotaData.veiculo || rota.veiculo || '—');
+      const dataRota = dataBr(rotaData.data_prevista || rota.data_prevista);
+      const baseOrigem = rotaData.bases?.nome || rota.bases?.nome || '—';
+
+      const totalDoses = remessas.reduce((s, rem) => {
+        const itens = rem.remessa_itens || [];
+        return s + (itens.length ? itens.reduce((x, it) => x + Number(it.quantidade || 0), 0) : parseDosesObs(rem.observacao));
+      }, 0);
+
+      const rowsHtml = remessas.map((rem, idx) => {
+        const destino = rem.destino_tipo === 'base' ? rem.bases : rem.aplicadores;
+        const responsavel = rem.destino_tipo === 'base'
+          ? (destino?.nome || 'Base')
+          : `${destino?.nome || 'Aplicador'}${destino?.cpf ? ' — CPF: ' + destino.cpf : ''}`;
+        const endereco = [destino?.endereco || '', destino?.cidade || '', destino?.uf || ''].filter(Boolean).join(' — ');
+        const itens = rem.remessa_itens || [];
+        const doses = itens.length ? itens.reduce((s, it) => s + Number(it.quantidade || 0), 0) : parseDosesObs(rem.observacao);
+        const labLote = itens.length
+          ? itens.map(it => `${esc(it.vacinas?.nome || 'Vacina')}${(it.lote || it.vacinas?.lote) ? ' / Lote ' + esc(it.lote || it.vacinas?.lote) : ''}`).join('<br>')
+          : '—';
+        const descricao = itens.length
+          ? itens.map(it => `${esc(it.quantidade || 0)} doses — ${esc(it.vacinas?.nome || 'Vacina')}`).join('<br>')
+          : esc(rem.observacao || 'Doses / materiais da campanha');
+
+        return [
+          '<tr>',
+          '<td>' + esc(responsavel) + '</td>',
+          '<td>' + esc(endereco) + '</td>',
+          '<td style="text-align:center">' + esc(destino?.uf || '') + '</td>',
+          '<td>Ordem ' + esc(rem.ordem_entrega || idx + 1) + '</td>',
+          '<td style="text-align:center">' + esc(itens.length || (doses > 0 ? 1 : '—')) + '</td>',
+          '<td style="text-align:center;font-weight:700">' + esc(doses || '—') + '</td>',
+          '<td>' + labLote + '</td>',
+          '<td style="text-align:center">Entrega</td>',
+          '<td>' + descricao + '</td>',
+          '<td></td>',
+          '<td></td>',
+          '</tr>'
+        ].join('');
+      }).join('');
+
+      const htmlParts = [
+        '<!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8"><title>Romaneio ' + esc(rotaData.codigo || rota.codigo || '') + '</title>',
+        '<style>',
+        '*{box-sizing:border-box}body{font-family:Arial,sans-serif;margin:0;padding:10mm;background:#fff;color:#000;font-size:10px}',
+        '@page{size:A4 landscape;margin:8mm}@media print{body{padding:0}.no-print{display:none}}',
+        'h1{font-size:16px;text-align:center;margin:0 0 10px;text-transform:uppercase}',
+        '.top{width:100%;border-collapse:collapse;margin-bottom:8px}.top td{border:1px solid #000;padding:5px;font-size:11px;height:28px}',
+        '.alert{border:1px solid #000;background:#f2f2f2;text-align:center;font-weight:700;padding:6px;margin-bottom:8px;font-size:11px}',
+        'table.rom{width:100%;border-collapse:collapse;table-layout:fixed}.rom th,.rom td{border:1px solid #000;padding:4px;vertical-align:top;word-break:break-word}',
+        '.rom th{background:#e5e7eb;font-size:9px;text-align:center;text-transform:uppercase}.footer{display:flex;justify-content:space-between;margin-top:12px;font-size:10px}',
+        '.no-print{position:fixed;right:12px;top:12px}.btn{padding:8px 14px;background:#2563eb;color:#fff;border:0;border-radius:4px;cursor:pointer;font-weight:700}',
+        '</style></head><body>',
+        '<button class="btn no-print" onclick="window.print()">Imprimir / Salvar PDF</button>',
+        '<h1>Romaneio de movimentação base - Campanha 2026</h1>',
+        '<table class="top">',
+        '<tr><td style="width:12%;font-weight:700">ROTA:</td><td style="width:18%">' + esc(rotaData.codigo || rota.codigo || '—') + '</td><td style="width:12%;font-weight:700">MOTORISTA:</td><td style="width:22%">' + esc(motorista) + '</td><td style="width:8%;font-weight:700">DATA:</td><td style="width:12%">' + esc(dataRota) + '</td><td style="width:16%;font-weight:700">ASSINATURA MOTORISTA:</td></tr>',
+        '<tr><td style="font-weight:700">BASE ORIGEM:</td><td>' + esc(baseOrigem) + '</td><td style="font-weight:700">VEÍCULO-PLACA:</td><td>' + esc(veiculoPlaca) + '</td><td style="font-weight:700">TOTAL DOSES:</td><td>' + esc(totalDoses.toLocaleString('pt-BR')) + '</td><td></td></tr>',
+        '</table>',
+        '<div class="alert">ATENÇÃO: TODA OPERAÇÃO COM VACINAS TERÁ QUE SER FEITA TRANSFERÊNCIA VIA SISTEMA</div>',
+        '<table class="rom"><thead><tr>',
+        '<th style="width:13%">Responsável CPF/CNPJ<br>(Clínica, empresa ou enfermeira)</th><th style="width:15%">Endereço</th><th style="width:3%">UF</th><th style="width:8%">Contato e Horário</th><th style="width:5%">Volumes</th><th style="width:7%">Quantidade Doses</th><th style="width:12%">Laboratório e Lote</th><th style="width:7%">Entrega e/ou Retirada</th><th style="width:13%">Descrição do Volume ou Material</th><th style="width:9%">Conferência Base e Observação</th><th style="width:8%">Assinatura e CPF do responsável</th>',
+        '</tr></thead><tbody>',
+        rowsHtml || '<tr><td colspan="11" style="text-align:center;padding:18px">Nenhuma parada/remessa encontrada para esta rota.</td></tr>',
+        '</tbody></table>',
+        '<div class="footer"><div>Gerado automaticamente pelo VacinaLog em ' + esc(new Date().toLocaleString('pt-BR')) + '</div><div>' + esc(remessas.length) + ' paradas na ordem de entrega</div></div>',
+        '</body></html>'
+      ];
+
+      const blob = new Blob([htmlParts.join('')], { type: 'text/html;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const win = window.open(url, '_blank');
+      if (!win) {
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'romaneio-' + (rotaData.codigo || rota.codigo || 'rota') + '.html';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+      }
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+    } catch (err) {
+      toast('Erro ao gerar romaneio: ' + (err.message || err), 'error');
+    }
+  };
+
   return (
     <div>
       {rotaDetalhe && <ModalDetalheRota rota={rotaDetalhe} onClose={() => setRotaDetalhe(null)} ROTA_ST={ROTA_ST} ROTA_BADGE={ROTA_BADGE} />}
@@ -5507,6 +5623,7 @@ function RotasListPage({ onOpenRoteirizacao }) {
             <td style={{fontSize:11,fontFamily:'JetBrains Mono',color:'var(--text-muted)'}}>{duracao()}</td>
             <td><div style={{display:'flex',gap:4,flexWrap:'wrap'}}>
               <button className="btn btn-secondary btn-sm" onClick={() => setRotaDetalhe(r)}>👁 Ver</button>
+              <button className="btn btn-secondary btn-sm" onClick={() => imprimirRomaneio(r)}>📄 Romaneio</button>
               {r.status==='planejada' && <><button className="btn btn-success btn-sm" onClick={()=>enviarMontagem(r.id)}>→ Montagem</button><button className="btn btn-danger btn-sm" onClick={()=>cancelar(r.id)}>Cancelar</button></>}
               {r.status==='em_transito' && <span style={{fontSize:10,color:'var(--success)'}}>🟢 ao vivo</span>}
             </div></td>
