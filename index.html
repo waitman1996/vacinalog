@@ -6938,7 +6938,7 @@ function MontagemPage() {
 
       {/* Modal etiqueta */}
       {etiquetaRem && (
-        <EtiquetaModal remessa={etiquetaRem} rota={rotaSel} onClose={() => setEtiquetaRem(null)} totalParadas={remessas.length} />
+        <EtiquetaModal remessa={etiquetaRem} rota={rotaSel} onClose={() => setEtiquetaRem(null)} totalParadas={remessas.length} remessasDaRota={remessas} />
       )}
       {infoTutor && <TutorInfoModal tutor={infoTutor} onClose={() => setInfoTutor(null)} />}
     </div>
@@ -6995,7 +6995,7 @@ function AddItemRemessa({ vacinas, onAdd, dosesSugeridas }) {
 }
 
 // ── Etiqueta 10x15cm ──
-function EtiquetaModal({ remessa, rota, onClose, totalParadas }) {
+function EtiquetaModal({ remessa, rota, onClose, totalParadas, remessasDaRota }) {
   const [montadorNome, setMontadorNome] = useState('');
   const toast = useContext(ToastContext);
 
@@ -7033,11 +7033,30 @@ function EtiquetaModal({ remessa, rota, onClose, totalParadas }) {
   const dataRota = rota.data_prevista ? new Date(rota.data_prevista + 'T12:00:00').toLocaleDateString('pt-BR') : '—';
   const dataHoje = new Date().toLocaleDateString('pt-BR');
 
+  const destinoKey = (r) => {
+    if (!r) return '';
+    if (r.destino_tipo === 'aplicador' && r.destino_aplicador_id) return 'aplicador:' + r.destino_aplicador_id;
+    if (r.destino_tipo === 'base' && r.destino_base_id) return 'base:' + r.destino_base_id;
+    const obs = String(r.observacao || '').trim().toLowerCase();
+    const nome = obs.match(/^([^(|]+)/)?.[1]?.trim() || '';
+    const cpf = obs.match(/\(([^)]+)\)/)?.[1]?.trim() || '';
+    return 'obs:' + (cpf || nome || r.codigo_rastreio || r.id || '');
+  };
+  const todasCaixasDestino = (remessasDaRota || []).filter(r => destinoKey(r) === destinoKey(remessa));
+  const caixasOrdenadas = (todasCaixasDestino.length ? todasCaixasDestino : [remessa]).slice().sort((a,b) => {
+    const oa = Number(a.ordem_entrega || 0), ob = Number(b.ordem_entrega || 0);
+    if (oa !== ob) return oa - ob;
+    return String(a.codigo_rastreio || '').localeCompare(String(b.codigo_rastreio || ''));
+  });
+  const totalCaixasDestino = Math.max(caixasOrdenadas.length, 1);
+  const caixaNumero = Math.max(caixasOrdenadas.findIndex(r => r.id === remessa.id || r.codigo_rastreio === remessa.codigo_rastreio) + 1, 1);
+  const caixaTexto = 'Caixa ' + caixaNumero + ' de ' + totalCaixasDestino;
+
   const imprimir = () => {
     const qrData = JSON.stringify({
       rm: remessa.codigo_rastreio, rt: rota.codigo,
       dest: destNome, cpf: destCPF, doses: dosesExibir,
-      parada: remessa.ordem_entrega + '/' + totalParadas,
+      parada: remessa.ordem_entrega + '/' + totalParadas, caixa: caixaTexto,
       motorista: rota.profiles?.nome || '', data: dataRota, montador: montadorNome,
     });
     const qrUrl = window.location.origin + window.location.pathname + '#conferir=' + encodeURIComponent(qrData);
@@ -7052,27 +7071,29 @@ function EtiquetaModal({ remessa, rota, onClose, totalParadas }) {
     const html = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Etiqueta ' + remessa.codigo_rastreio + '</title>'
       + '<style>'
       + '* { margin:0; padding:0; box-sizing:border-box; }'
-      + 'body { width:10cm; height:15cm; font-family:Arial,sans-serif; padding:5mm; background:#fff; color:#000; }'
+      + 'body { width:10cm; height:15cm; font-family:Arial,sans-serif; padding:4mm; background:#fff; color:#000; }'
       + '@page { size:10cm 15cm; margin:0; }'
-      + '@media print { body { margin:0; } }'
-      + '.header { background:#1e3a5f; color:#fff; padding:4px 8px; border-radius:4px; margin-bottom:6px; }'
-      + '.logo { font-size:15px; font-weight:900; }'
-      + '.rastreio { font-family:monospace; font-size:11px; font-weight:700; color:#60a5fa; }'
-      + '.divider { border:none; border-top:1px solid #ddd; margin:4px 0; }'
-      + '.label { font-size:7px; color:#888; text-transform:uppercase; margin-bottom:1px; }'
-      + '.value { font-size:12px; font-weight:700; color:#111; }'
-      + '.value-sm { font-size:10px; color:#333; }'
-      + '.row { margin-bottom:4px; }'
-      + '.grid-top { display:grid; grid-template-columns:1fr 1fr 82px; gap:5px; margin-bottom:5px; }'
-      + '.badge-box { background:#f0f9ff; border:1px solid #bae6fd; border-radius:4px; padding:3px 6px; text-align:center; }'
-      + '.badge-val { font-size:18px; font-weight:900; color:#0369a1; font-family:monospace; }'
-      + '.badge-lbl { font-size:7px; color:#0284c7; text-transform:uppercase; }'
-      + '.itens { background:#f8fafc; border:1px solid #e2e8f0; border-radius:3px; padding:4px 6px; margin-bottom:4px; }'
-      + '.item-row { display:flex; justify-content:space-between; padding:1px 0; font-size:10px; border-bottom:1px solid #eee; }'
-      + '.footer { background:#f1f5f9; border-radius:3px; padding:3px 6px; font-size:8px; color:#475569; }'
-      + '.footer-row { display:flex; justify-content:space-between; margin-bottom:1px; }'
+      + '@media print { body { margin:0; padding:4mm; } }'
+      + '.header { background:#1e3a5f; color:#fff; padding:6px 9px; border-radius:5px; margin-bottom:6px; display:flex; justify-content:space-between; align-items:flex-start; gap:8px; }'
+      + '.logo { font-size:17px; font-weight:900; line-height:1; }'
+      + '.rastreio { font-family:monospace; font-size:12px; font-weight:700; color:#bfdbfe; margin-top:2px; }'
+      + '.caixa-top { background:#fff; color:#0f172a; border-radius:4px; padding:4px 7px; font-size:13px; font-weight:900; text-align:center; white-space:nowrap; }'
+      + '.divider { border:none; border-top:1px solid #cbd5e1; margin:5px 0; }'
+      + '.label { font-size:8px; color:#64748b; text-transform:uppercase; font-weight:700; margin-bottom:2px; }'
+      + '.value { font-size:14px; font-weight:900; color:#111; line-height:1.15; }'
+      + '.value-sm { font-size:10.5px; color:#333; line-height:1.25; }'
+      + '.row { margin-bottom:5px; }'
+      + '.grid-top { display:grid; grid-template-columns:1fr 1fr 92px; gap:6px; margin-bottom:6px; }'
+      + '.badge-box { background:#f0f9ff; border:1px solid #7dd3fc; border-radius:5px; padding:5px 6px; text-align:center; }'
+      + '.badge-val { font-size:22px; font-weight:900; color:#0369a1; font-family:monospace; line-height:1; }'
+      + '.badge-lbl { font-size:8px; color:#0284c7; text-transform:uppercase; font-weight:700; margin-top:2px; }'
+      + '.warning { border:2px solid #000; border-radius:5px; padding:6px 8px; margin:6px 0; text-align:center; font-size:13px; font-weight:900; text-transform:uppercase; letter-spacing:.2px; }'
+      + '.itens { background:#f8fafc; border:1px solid #cbd5e1; border-radius:4px; padding:5px 7px; margin-bottom:5px; min-height:42px; }'
+      + '.item-row { display:flex; justify-content:space-between; gap:8px; padding:2px 0; font-size:11px; border-bottom:1px solid #e5e7eb; }'
+      + '.footer { background:#f1f5f9; border-radius:4px; padding:5px 7px; font-size:8.5px; color:#475569; }'
+      + '.footer-row { display:flex; justify-content:space-between; gap:6px; margin-bottom:2px; }'
       + '</style></head><body>'
-      + '<div class="header"><div class="logo">VacinaLog</div><div class="rastreio">' + remessa.codigo_rastreio + '</div></div>'
+      + '<div class="header"><div><div class="logo">VacinaLog</div><div class="rastreio">' + remessa.codigo_rastreio + '</div></div><div class="caixa-top">' + caixaTexto + '</div></div>'
       + '<div class="grid-top">'
       + '<div class="badge-box"><div class="badge-val">' + dosesExibir + '</div><div class="badge-lbl">Doses</div></div>'
       + '<div class="badge-box"><div class="badge-val">' + remessa.ordem_entrega + '/' + totalParadas + '</div><div class="badge-lbl">Parada</div></div>'
@@ -7088,11 +7109,13 @@ function EtiquetaModal({ remessa, rota, onClose, totalParadas }) {
       + (destCidade ? '<div class="value-sm">' + destCidade + '</div>' : '')
       + (destCPF ? '<div class="value-sm" style="color:#555">CPF: ' + destCPF + '</div>' : '')
       + '</div>'
+      + '<div class="warning">Não riscar e não danificar a caixa</div>'
       + '<hr class="divider"/>'
       + '<div class="label" style="margin-bottom:3px">Vacinas</div>'
       + '<div class="itens">' + itensHtml + '</div>'
       + '<div class="footer">'
       + '<div class="footer-row"><span>Rota: ' + rota.codigo + '</span><span>Entrega: ' + dataRota + '</span></div>'
+      + '<div class="footer-row"><span>' + caixaTexto + '</span><span>Parada: ' + remessa.ordem_entrega + '/' + totalParadas + '</span></div>'
       + '<div class="footer-row"><span>Montado por: ' + (montadorNome || '—') + '</span><span>Em: ' + dataHoje + '</span></div>'
       + '</div>'
       + '</body></html>';
@@ -7106,10 +7129,15 @@ function EtiquetaModal({ remessa, rota, onClose, totalParadas }) {
 
   return (
     <Modal title={'Etiqueta — ' + remessa.codigo_rastreio} onClose={onClose}>
-      <div style={{background:'#fff',color:'#000',padding:14,borderRadius:8,border:'2px dashed var(--border)',marginBottom:16,fontFamily:'Arial,sans-serif',maxWidth:340,margin:'0 auto 16px'}}>
+      <div style={{background:'#fff',color:'#000',padding:14,borderRadius:8,border:'2px dashed var(--border)',marginBottom:16,fontFamily:'Arial,sans-serif',maxWidth:390,margin:'0 auto 16px'}}>
         <div style={{background:'#1e3a5f',color:'#fff',padding:'5px 8px',borderRadius:4,marginBottom:8}}>
-          <div style={{fontSize:14,fontWeight:900}}>VacinaLog</div>
-          <div style={{fontFamily:'monospace',fontSize:11,color:'#93c5fd'}}>{remessa.codigo_rastreio}</div>
+          <div style={{display:'flex',justifyContent:'space-between',gap:8,alignItems:'flex-start'}}>
+            <div>
+              <div style={{fontSize:16,fontWeight:900}}>VacinaLog</div>
+              <div style={{fontFamily:'monospace',fontSize:11,color:'#93c5fd'}}>{remessa.codigo_rastreio}</div>
+            </div>
+            <div style={{background:'#fff',color:'#0f172a',borderRadius:4,padding:'3px 7px',fontSize:12,fontWeight:900,whiteSpace:'nowrap'}}>{caixaTexto}</div>
+          </div>
         </div>
         <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:6,marginBottom:8}}>
           <div style={{background:'#f0f9ff',border:'1px solid #bae6fd',borderRadius:4,padding:'4px 8px',textAlign:'center'}}>
@@ -7127,6 +7155,7 @@ function EtiquetaModal({ remessa, rota, onClose, totalParadas }) {
         <div style={{fontSize:13,fontWeight:600}}>{destNome || '—'}</div>
         {destCidade && <div style={{fontSize:11,color:'#444'}}>{destCidade}</div>}
         {destCPF && <div style={{fontSize:10,color:'#666'}}>CPF: {destCPF}</div>}
+        <div style={{border:'2px solid #000',borderRadius:5,padding:'5px 8px',margin:'8px 0',textAlign:'center',fontSize:12,fontWeight:900,textTransform:'uppercase'}}>Não riscar e não danificar a caixa</div>
         <hr style={{margin:'6px 0',borderColor:'#ccc'}}/>
         <div style={{fontSize:9,color:'#666',textTransform:'uppercase',marginBottom:4}}>Vacinas</div>
         {(remessa.remessa_itens || []).length === 0
@@ -7140,6 +7169,7 @@ function EtiquetaModal({ remessa, rota, onClose, totalParadas }) {
         }
         <div style={{background:'#f1f5f9',borderRadius:4,padding:'4px 8px',marginTop:6,fontSize:9,color:'#475569'}}>
           <div style={{display:'flex',justifyContent:'space-between',marginBottom:2}}><span>Rota: {rota.codigo}</span><span>{dataRota}</span></div>
+          <div style={{display:'flex',justifyContent:'space-between',marginBottom:2}}><span>{caixaTexto}</span><span>Parada: {remessa.ordem_entrega}/{totalParadas}</span></div>
           <div style={{display:'flex',justifyContent:'space-between'}}><span>Montado: {montadorNome || '—'}</span><span>{dataHoje}</span></div>
         </div>
       </div>
@@ -7160,6 +7190,7 @@ function EtiquetasPage() {
   const [remessa, setRemessa] = useState(null);
   const [rota, setRota] = useState(null);
   const [totalParadas, setTotalParadas] = useState(0);
+  const [remessasRota, setRemessasRota] = useState([]);
   const [loading, setLoading] = useState(false);
   const toast = useContext(ToastContext);
 
@@ -7199,8 +7230,12 @@ function EtiquetasPage() {
   const abrirEtiqueta = async (r) => {
     setRemessa(r);
     setRota(r.rotas);
-    const { count } = await sb.from('remessas').select('id', {count:'exact',head:true}).eq('rota_id', r.rota_id);
-    setTotalParadas(count||0);
+    const { data: caixas, count } = await sb.from('remessas')
+      .select('id,codigo_rastreio,ordem_entrega,destino_tipo,destino_aplicador_id,destino_base_id,observacao,created_at', {count:'exact'})
+      .eq('rota_id', r.rota_id)
+      .order('ordem_entrega', { ascending: true });
+    setTotalParadas(count || (caixas || []).length || 0);
+    setRemessasRota(caixas || [r]);
   };
 
   const imprimirRecibo = (rem) => {
@@ -7282,7 +7317,7 @@ function EtiquetasPage() {
           </tbody></table></div>
         )}
       </div>
-      {remessa && rota && <EtiquetaModal remessa={remessa} rota={rota} onClose={()=>setRemessa(null)} totalParadas={totalParadas} />}
+      {remessa && rota && <EtiquetaModal remessa={remessa} rota={rota} onClose={()=>setRemessa(null)} totalParadas={totalParadas} remessasDaRota={remessasRota} />}
     </div>
   );
 }
