@@ -4021,13 +4021,28 @@ function EntradaEstoqueModal({ onClose }) {
   useEffect(() => {
     sb.from('bases').select('id, nome').eq('ativa', true).order('nome').then(r => setBases(r.data || []));
     sb.from('aplicadores').select('id, nome, cpf, cidade, uf').order('nome').then(r => setAplicadores(r.data || []));
-    sb.from('vacinas').select('id, nome, lote').eq('ativa', true).order('nome').then(r => setVacinas(r.data || []));
+    // Entrada de estoque deve ser por PRODUTO, não por lote.
+    // Agrupamos todos os registros da tabela vacinas pelo produto_nome/nome e usamos
+    // apenas um vacina_id representante para gravar o saldo. O lote fica fora da tela.
+    sb.from('vacinas').select('id, nome, lote, produto_nome').eq('ativa', true).order('nome').then(r => {
+      const mapa = new Map();
+      (r.data || []).forEach(v => {
+        const produto = (v.produto_nome || v.nome || '').trim();
+        if (!produto) return;
+        const atual = mapa.get(produto);
+        // Preferir cadastro sem lote como representante; se não houver, fica o primeiro.
+        if (!atual || (!v.lote && atual.lote)) {
+          mapa.set(produto, { id: v.id, nome: produto, lote: null, produto_nome: produto });
+        }
+      });
+      setVacinas(Array.from(mapa.values()).sort((a,b) => a.nome.localeCompare(b.nome)));
+    });
   }, []);
 
   const save = async () => {
     const qtd = parseInt(form.quantidade);
     if (!form.vacina_id || !form.quantidade || isNaN(qtd) || qtd <= 0) {
-      toast('Informe vacina e uma quantidade válida', 'error'); return;
+      toast('Informe produto e uma quantidade válida', 'error'); return;
     }
     if (form.destino_tipo === 'base' && !form.base_id) {
       toast('Selecione a base de destino', 'error'); return;
@@ -4130,11 +4145,12 @@ function EntradaEstoqueModal({ onClose }) {
           </select>
         </div>
         <div className="form-group">
-          <label className="form-label">Vacina / Produto *</label>
+          <label className="form-label">Produto *</label>
           <select className="form-select" value={form.vacina_id} onChange={e=>setForm(f=>({...f,vacina_id:e.target.value}))}>
             <option value="">Selecione...</option>
-            {vacinas.map(v => <option key={v.id} value={v.id}>{v.nome} {v.lote ? `(${v.lote})` : ''}</option>)}
+            {vacinas.map(v => <option key={v.id} value={v.id}>{v.nome}</option>)}
           </select>
+          <div style={{fontSize:10,color:'var(--text-muted)',marginTop:4}}>Saldo será criado/atualizado por produto, ignorando lote.</div>
         </div>
         {form.destino_tipo === 'base' ? (
           <div className="form-group">
