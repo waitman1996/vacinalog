@@ -9446,6 +9446,9 @@ function AumentoDosesPage({ profile }) {
   const [loadingRel, setLoadingRel] = useState(false);
   const [filtros, setFiltros] = useState({ inicio: '', fim: '', aplicador: '', tarefa: '', produto: '' });
 
+  // Status válidos no ENUM do banco para remessas concluídas.
+  // Não usar 'concluido' aqui, porque o enum remessa_status não aceita esse valor.
+  const statusConcluidosBanco = ['concluida'];
   const statusConcluidos = ['concluida','concluido','entregue','finalizada','finalizado'];
   const fmtData = (v) => v ? new Date(v).toLocaleDateString('pt-BR') : '—';
   const fmtNum = (v) => Number(v || 0).toLocaleString('pt-BR');
@@ -9460,7 +9463,7 @@ function AumentoDosesPage({ profile }) {
     try {
       let query = sb.from('remessas')
         .select('id,codigo_rastreio,status,updated_at,observacao,destino_aplicador_id,rota_id,aplicadores(nome,cpf,cidade,uf),rotas(id,codigo,base_origem_id,bases(nome)),remessa_itens(id,quantidade,vacina_id,lote,vacinas(id,nome,produto_nome,lote))')
-        .in('status', statusConcluidos)
+        .in('status', statusConcluidosBanco)
         .order('updated_at', { ascending: false })
         .limit(250);
       const { data, error } = await query;
