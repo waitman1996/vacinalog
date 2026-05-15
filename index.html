@@ -5195,12 +5195,168 @@ function MonitoramentoAoVivo({ onClose }) {
 }
 
 
+
+// ── Chat interno por Rota ──
+function ChatRotaModal({ rota, onClose }) {
+  const [canalId, setCanalId] = useState(null);
+  const [mensagens, setMensagens] = useState([]);
+  const [texto, setTexto] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [enviando, setEnviando] = useState(false);
+  const [gps, setGps] = useState(null);
+  const [meuId, setMeuId] = useState(null);
+  const toast = useContext(ToastContext);
+  const bottomRef = React.useRef(null);
+
+  const pedirGps = () => {
+    if (!navigator.geolocation) return;
+    navigator.geolocation.getCurrentPosition(async pos => {
+      const lat = pos.coords.latitude;
+      const lng = pos.coords.longitude;
+      setGps({ lat, lng });
+      try {
+        await sb.from('rotas').update({
+          current_lat: lat,
+          current_lng: lng,
+          current_location_at: new Date().toISOString(),
+          current_speed: pos.coords.speed ? Math.round(pos.coords.speed * 3.6) : null
+        }).eq('id', rota.id);
+      } catch (_) {}
+    }, () => {}, { enableHighAccuracy: true, timeout: 8000, maximumAge: 30000 });
+  };
+
+  const carregar = async () => {
+    setLoading(true);
+    const authRes = await sb.auth.getUser();
+    setMeuId(authRes?.data?.user?.id || null);
+
+    const { data: canal, error: canalErr } = await sb.rpc('get_or_create_chat_rota', { p_rota_id: rota.id });
+    if (canalErr) {
+      toast('Erro ao abrir chat: ' + canalErr.message, 'error');
+      setLoading(false);
+      return;
+    }
+    setCanalId(canal);
+
+    const { data, error } = await sb.from('chat_mensagens')
+      .select('id, mensagem, tipo, lat, lng, criado_em, usuario_id, profiles(nome, role)')
+      .eq('canal_id', canal)
+      .order('criado_em', { ascending: true });
+
+    if (error) toast('Erro ao carregar mensagens: ' + error.message, 'error');
+    else setMensagens(data || []);
+
+    await sb.rpc('marcar_chat_rota_lido', { p_rota_id: rota.id });
+    setLoading(false);
+    setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: 'smooth' }), 100);
+  };
+
+  useEffect(() => {
+    carregar();
+    pedirGps();
+  }, []);
+
+  useEffect(() => {
+    if (!canalId) return;
+    const channel = sb.channel('chat-rota-' + canalId)
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'chat_mensagens', filter: 'canal_id=eq.' + canalId }, () => carregar())
+      .subscribe();
+    return () => { sb.removeChannel(channel); };
+  }, [canalId]);
+
+  const enviar = async (msg, tipo) => {
+    const conteudo = String(msg || texto || '').trim();
+    if (!conteudo) return;
+    setEnviando(true);
+    pedirGps();
+
+    const { error } = await sb.rpc('enviar_chat_rota', {
+      p_rota_id: rota.id,
+      p_mensagem: conteudo,
+      p_tipo: tipo || 'texto',
+      p_lat: gps?.lat || null,
+      p_lng: gps?.lng || null
+    });
+
+    if (error) toast('Erro ao enviar mensagem: ' + error.message, 'error');
+    else {
+      setTexto('');
+      await carregar();
+    }
+    setEnviando(false);
+  };
+
+  return (
+    <Modal title={`Chat da Rota ${rota.codigo || ''}`} onClose={onClose} large>
+      <div style={{display:'grid',gridTemplateColumns:'1fr auto',gap:8,alignItems:'center',marginBottom:10}}>
+        <div style={{fontSize:12,color:'var(--text-muted)'}}>
+          Motorista: <strong style={{color:'var(--text-primary)'}}>{rota.profiles?.nome || '—'}</strong>
+          {' · '}Status: <strong style={{color:'var(--text-primary)'}}>{rota.status || '—'}</strong>
+          {gps && <span>{' · '}GPS atualizado</span>}
+        </div>
+        <button className="btn btn-secondary btn-sm" onClick={pedirGps}>📍 Atualizar GPS</button>
+      </div>
+
+      <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:10}}>
+        <button className="btn btn-secondary btn-sm" onClick={() => enviar('Estou a caminho', 'texto')}>🚚 Estou a caminho</button>
+        <button className="btn btn-secondary btn-sm" onClick={() => enviar('Cheguei no local', 'texto')}>📍 Cheguei</button>
+        <button className="btn btn-secondary btn-sm" onClick={() => enviar('Cliente ausente', 'problema')}>⚠️ Cliente ausente</button>
+        <button className="btn btn-secondary btn-sm" onClick={() => enviar('Preciso de ajuda da logística', 'problema')}>🆘 Ajuda logística</button>
+      </div>
+
+      <div style={{height:360,overflowY:'auto',border:'1px solid var(--border)',borderRadius:'var(--radius)',padding:12,background:'var(--bg-input)',marginBottom:10}}>
+        {loading ? (
+          <div className="empty-state"><div className="empty-icon">⏳</div><div className="empty-text">Carregando chat...</div></div>
+        ) : mensagens.length === 0 ? (
+          <div className="empty-state"><div className="empty-icon">💬</div><div className="empty-text">Nenhuma mensagem ainda.</div></div>
+        ) : mensagens.map(m => {
+          const minha = m.usuario_id === meuId;
+          return (
+            <div key={m.id} style={{display:'flex',justifyContent:minha?'flex-end':'flex-start',marginBottom:8}}>
+              <div style={{maxWidth:'78%',background:minha?'var(--accent)':'var(--bg-card)',color:minha?'#fff':'var(--text-primary)',border:'1px solid ' + (minha?'var(--accent)':'var(--border)'),borderRadius:12,padding:'8px 10px'}}>
+                <div style={{fontSize:10,opacity:.75,marginBottom:3}}>
+                  {m.profiles?.nome || 'Usuário'} · {new Date(m.criado_em).toLocaleString('pt-BR')}
+                  {m.tipo === 'problema' && <span style={{marginLeft:6}}>⚠️</span>}
+                </div>
+                <div style={{fontSize:13,whiteSpace:'pre-wrap'}}>{m.mensagem}</div>
+                {m.lat && m.lng && (
+                  <button className="btn btn-secondary btn-sm" style={{marginTop:6,fontSize:10,padding:'3px 7px'}}
+                    onClick={() => window.open('https://www.google.com/maps?q=' + m.lat + ',' + m.lng, '_blank')}>
+                    📍 Ver localização
+                  </button>
+                )}
+              </div>
+            </div>
+          );
+        })}
+        <div ref={bottomRef}></div>
+      </div>
+
+      <div style={{display:'grid',gridTemplateColumns:'1fr auto',gap:8}}>
+        <input className="form-input" value={texto} onChange={e=>setTexto(e.target.value)}
+          onKeyDown={e=>{ if(e.key==='Enter'){ e.preventDefault(); enviar(); }}}
+          placeholder="Digite uma mensagem..." />
+        <button className="btn btn-primary" onClick={() => enviar()} disabled={enviando}>
+          {enviando ? 'Enviando...' : 'Enviar'}
+        </button>
+      </div>
+
+      <div className="modal-actions">
+        <button className="btn btn-secondary" onClick={onClose}>Fechar</button>
+      </div>
+    </Modal>
+  );
+}
+
+
 // ── Lista de Rotas ──
 function RotasListPage({ onOpenRoteirizacao }) {
   const [rotas, setRotas] = useState([]);
   const [statusFilter, setStatusFilter] = useState('');
   const [showMonitoramento, setShowMonitoramento] = useState(false);
   const [rotaDetalhe, setRotaDetalhe] = useState(null);
+  const [chatRota, setChatRota] = useState(null);
+  const [naoLidas, setNaoLidas] = useState({});
   const toast = useContext(ToastContext);
 
   const ROTA_ST = { planejada:'Planejada', montagem:'Em Montagem', pronta:'Pronta', em_transito:'Em Trânsito', concluida:'Concluída', cancelada:'Cancelada' };
@@ -5226,6 +5382,11 @@ function RotasListPage({ onOpenRoteirizacao }) {
     const { data, error } = await q;
     if (error) toast(error.message, 'error');
     else setRotas(data || []);
+
+    const { data: chats } = await sb.from('vw_chat_rota_nao_lidas').select('rota_id, nao_lidas');
+    const mapa = {};
+    (chats || []).forEach(c => { mapa[c.rota_id] = c.nao_lidas || 0; });
+    setNaoLidas(mapa);
   };
   useEffect(() => { load(); }, [statusFilter]);
 
@@ -5359,6 +5520,7 @@ function RotasListPage({ onOpenRoteirizacao }) {
   return (
     <div>
       {rotaDetalhe && <ModalDetalheRota rota={rotaDetalhe} onClose={() => setRotaDetalhe(null)} ROTA_ST={ROTA_ST} ROTA_BADGE={ROTA_BADGE} />}
+      {chatRota && <ChatRotaModal rota={chatRota} onClose={() => { setChatRota(null); load(); }} />}
       <div className="page-header">
         <div><div className="page-title">Rotas</div><div className="page-subtitle">Gerencie rotas de entrega e coleta</div></div>
         <div style={{display:'flex',gap:8}}>
@@ -5451,6 +5613,9 @@ function RotasListPage({ onOpenRoteirizacao }) {
             <td><div style={{display:'flex',gap:4,flexWrap:'wrap'}}>
               <button className="btn btn-secondary btn-sm" onClick={() => setRotaDetalhe(r)}>👁 Ver</button>
               <button className="btn btn-secondary btn-sm" onClick={() => imprimirRomaneio(r)}>📄 Romaneio</button>
+              <button className="btn btn-secondary btn-sm" onClick={() => setChatRota(r)}>
+                💬 Chat {naoLidas[r.id] ? <span className="badge badge-red" style={{marginLeft:4}}>{naoLidas[r.id]}</span> : null}
+              </button>
               {r.status==='planejada' && <><button className="btn btn-success btn-sm" onClick={()=>enviarMontagem(r.id)}>→ Montagem</button><button className="btn btn-danger btn-sm" onClick={()=>cancelar(r.id)}>Cancelar</button></>}
               {r.status==='em_transito' && <span style={{fontSize:10,color:'var(--success)'}}>🟢 ao vivo</span>}
             </div></td>
