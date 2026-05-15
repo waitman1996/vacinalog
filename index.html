@@ -5196,6 +5196,42 @@ function MonitoramentoAoVivo({ onClose }) {
 
 
 
+
+// ── Notificações simples do navegador ──
+function pedirPermissaoNotificacao() {
+  try {
+    if (!('Notification' in window)) return;
+    if (Notification.permission === 'default') Notification.requestPermission();
+  } catch (_) {}
+}
+
+function tocarSomChat() {
+  try {
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+    osc.frequency.value = 880;
+    gain.gain.value = 0.06;
+    osc.start();
+    setTimeout(() => { osc.stop(); audioCtx.close(); }, 160);
+  } catch (_) {}
+}
+
+function notificarChat(titulo, corpo) {
+  try {
+    tocarSomChat();
+    if (!('Notification' in window)) return;
+    if (Notification.permission === 'granted') {
+      new Notification(titulo, { body: corpo, icon: '/favicon.ico' });
+    } else if (Notification.permission === 'default') {
+      Notification.requestPermission();
+    }
+  } catch (_) {}
+}
+
+
 // ── Chat interno por Rota ──
 function ChatRotaModal({ rota, onClose }) {
   const [canalId, setCanalId] = useState(null);
@@ -5269,10 +5305,16 @@ function ChatRotaModal({ rota, onClose }) {
   useEffect(() => {
     if (!canalId) return;
     const channel = sb.channel('chat-rota-' + canalId)
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'chat_mensagens', filter: 'canal_id=eq.' + canalId }, () => carregar())
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'chat_mensagens', filter: 'canal_id=eq.' + canalId }, async (payload) => {
+        const nova = payload.new || {};
+        if (nova.usuario_id && nova.usuario_id !== meuId) {
+          notificarChat('💬 Nova mensagem no VacinaLog', `${rota.codigo || 'Rota'}: ${nova.mensagem || ''}`);
+        }
+        await carregar();
+      })
       .subscribe();
     return () => { sb.removeChannel(channel); };
-  }, [canalId]);
+  }, [canalId, meuId]);
 
   const enviar = async (msg, tipo) => {
     const conteudo = String(msg || texto || '').trim();
@@ -5338,7 +5380,10 @@ function ChatRotaModal({ rota, onClose }) {
           {' · '}Status: <strong style={{color:'var(--text-primary)'}}>{rota.status || '—'}</strong>
           {gps && <span>{' · '}GPS atualizado</span>}
         </div>
-        <button className="btn btn-secondary btn-sm" onClick={pedirGps}>📍 Atualizar GPS</button>
+        <div style={{display:'flex',gap:6,justifyContent:'flex-end',flexWrap:'wrap'}}>
+          <button className="btn btn-secondary btn-sm" onClick={pedirPermissaoNotificacao}>🔔 Ativar notificações</button>
+          <button className="btn btn-secondary btn-sm" onClick={pedirGps}>📍 Atualizar GPS</button>
+        </div>
       </div>
 
       <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:10}}>
@@ -5432,7 +5477,22 @@ function RotasListPage({ onOpenRoteirizacao }) {
     (chats || []).forEach(c => { mapa[c.rota_id] = c.nao_lidas || 0; });
     setNaoLidas(mapa);
   };
-  useEffect(() => { load(); }, [statusFilter]);
+  useEffect(() => { load(); pedirPermissaoNotificacao(); }, [statusFilter]);
+
+  useEffect(() => {
+    const channel = sb.channel('chat-rotas-notificacoes')
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'chat_mensagens' }, async (payload) => {
+        const nova = payload.new || {};
+        const userRes = await sb.auth.getUser();
+        const uid = userRes?.data?.user?.id || null;
+        if (nova.usuario_id && nova.usuario_id !== uid) {
+          notificarChat('💬 Nova mensagem no VacinaLog', nova.mensagem || 'Você recebeu uma nova mensagem');
+        }
+        load();
+      })
+      .subscribe();
+    return () => { sb.removeChannel(channel); };
+  }, []);
 
   const enviarMontagem = async (id) => {
     const { error } = await sb.from('rotas').update({ status: 'montagem' }).eq('id', id);
@@ -5445,6 +5505,18 @@ function RotasListPage({ onOpenRoteirizacao }) {
     if (error) toast(error.message, 'error'); else { toast('Rota cancelada', 'success'); load(); }
   };
 
+
+  const abrirDetalheSeguro = (rota) => {
+    try {
+      if (!rota || !rota.id) {
+        toast('Rota inválida para visualização.', 'error');
+        return;
+      }
+      setRotaDetalhe(rota);
+    } catch (err) {
+      toast('Erro ao abrir detalhes da rota: ' + (err.message || err), 'error');
+    }
+  };
 
   const imprimirRomaneio = async (rota) => {
     try {
@@ -5563,7 +5635,11 @@ function RotasListPage({ onOpenRoteirizacao }) {
 
   return (
     <div>
-      {rotaDetalhe && <ModalDetalheRota rota={rotaDetalhe} onClose={() => setRotaDetalhe(null)} ROTA_ST={ROTA_ST} ROTA_BADGE={ROTA_BADGE} />}
+      {rotaDetalhe && (
+        <RotaDetalheBoundary rota={rotaDetalhe} onClose={() => setRotaDetalhe(null)}>
+          <ModalDetalheRota rota={rotaDetalhe} onClose={() => setRotaDetalhe(null)} ROTA_ST={ROTA_ST} ROTA_BADGE={ROTA_BADGE} />
+        </RotaDetalheBoundary>
+      )}
       {chatRota && <ChatRotaModal rota={chatRota} onClose={() => { setChatRota(null); load(); }} />}
       <div className="page-header">
         <div><div className="page-title">Rotas</div><div className="page-subtitle">Gerencie rotas de entrega e coleta</div></div>
@@ -5655,7 +5731,7 @@ function RotasListPage({ onOpenRoteirizacao }) {
             </td>
             <td style={{fontSize:11,fontFamily:'JetBrains Mono',color:'var(--text-muted)'}}>{duracao()}</td>
             <td><div style={{display:'flex',gap:4,flexWrap:'wrap'}}>
-              <button className="btn btn-secondary btn-sm" onClick={() => setRotaDetalhe(r)}>👁 Ver</button>
+              <button className="btn btn-secondary btn-sm" onClick={() => abrirDetalheSeguro(r)}>👁 Ver</button>
               <button className="btn btn-secondary btn-sm" onClick={() => imprimirRomaneio(r)}>📄 Romaneio</button>
               <button className="btn btn-secondary btn-sm" onClick={() => setChatRota(r)}>
                 💬 Chat {naoLidas[r.id] ? <span className="badge badge-red" style={{marginLeft:4}}>{naoLidas[r.id]}</span> : null}
