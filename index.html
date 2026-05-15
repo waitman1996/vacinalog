@@ -4021,27 +4021,27 @@ function EntradaEstoqueModal({ onClose }) {
   useEffect(() => {
     sb.from('bases').select('id, nome').eq('ativa', true).order('nome').then(r => setBases(r.data || []));
     sb.from('aplicadores').select('id, nome, cpf, cidade, uf').order('nome').then(r => setAplicadores(r.data || []));
-    // Entrada de estoque deve ser por PRODUTO, não por lote.
-    // Agrupamos todos os registros da tabela vacinas pelo produto_nome/nome e usamos
-    // apenas um vacina_id representante para gravar o saldo. O lote fica fora da tela.
-    // Entrada de estoque deve listar TODOS os produtos cadastrados, mesmo que algum lote esteja inativo.
-    // O saldo continua consolidado por produto_nome/nome, ignorando lote.
+    // Entrada de estoque deve listar PRODUTO pelo nome comercial da vacina, sem depender de lote.
+    // Importante: NÃO usar produto_nome aqui, porque no banco ele pode estar agrupando
+    // Influenza Tetravalente e Influenza Trivalente como apenas "Influenza".
+    // O lote continua fora da tela; quando houver vários lotes do mesmo nome, usamos
+    // apenas um vacina_id representante para criar/atualizar o saldo do produto.
     sb.from('vacinas').select('id, nome, lote, produto_nome, ativa').order('nome').then(r => {
       const mapa = new Map();
       (r.data || []).forEach(v => {
-        const produto = String(v.produto_nome || v.nome || '').trim();
+        const produto = String(v.nome || '').trim();
         if (!produto) return;
         const key = produto.toLowerCase();
         const atual = mapa.get(key);
         // Preferência do representante:
-        // 1) produto ativo e sem lote; 2) produto ativo; 3) sem lote; 4) primeiro encontrado.
+        // 1) ativo e sem lote; 2) ativo; 3) sem lote; 4) primeiro encontrado.
         const score = (v.ativa === true ? 10 : 0) + (!v.lote ? 2 : 0);
         const atualScore = atual ? ((atual.ativa === true ? 10 : 0) + (!atual.lote ? 2 : 0)) : -1;
         if (!atual || score > atualScore) {
-          mapa.set(key, { id: v.id, nome: produto, lote: v.lote || null, produto_nome: produto, ativa: v.ativa });
+          mapa.set(key, { id: v.id, nome: produto, lote: null, produto_nome: produto, ativa: v.ativa });
         }
       });
-      setVacinas(Array.from(mapa.values()).sort((a,b) => a.nome.localeCompare(b.nome)));
+      setVacinas(Array.from(mapa.values()).sort((a,b) => a.nome.localeCompare(b.nome, 'pt-BR')));
     });
   }, []);
 
@@ -6395,6 +6395,35 @@ function MapaRota({ paradas, bases, baseOrigemId }) {
 }
 
 
+
+// Campo de busca de aplicador fora da página para não perder foco a cada renderização
+function AplicadorBuscaCampo({ value, onChange, result, onSelect, placeholder }) {
+  return (
+    <div>
+      <input
+        className="form-input"
+        value={value || ''}
+        onChange={onChange}
+        placeholder={placeholder || 'Buscar aplicador...'}
+        autoComplete="off"
+      />
+      {Array.isArray(result) && result.length > 0 && (
+        <div style={{maxHeight:120,overflow:'auto',marginTop:2,border:'1px solid var(--border)',borderRadius:4,background:'var(--bg-card)',zIndex:20,position:'relative'}}>
+          {result.map(a => (
+            <div
+              key={a.id}
+              style={{padding:'6px 10px',fontSize:12,cursor:'pointer'}}
+              onMouseDown={(e) => { e.preventDefault(); onSelect(a); }}
+            >
+              {a.nome} · {a.cpf || ''}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function TransferenciaPage() {
   const [bases, setBases] = useState([]);
   const [vacinas, setVacinas] = useState([]);
@@ -6566,15 +6595,6 @@ function TransferenciaPage() {
     setSaving(false);
   };
 
-  const ApBusca = ({value, onChange, result, onSelect, placeholder}) => (
-    <div>
-      <input className="form-input" value={value} onChange={onChange} placeholder={placeholder||'Buscar aplicador...'} />
-      {result.length>0 && <div style={{maxHeight:120,overflow:'auto',marginTop:2,border:'1px solid var(--border)',borderRadius:4,background:'var(--bg-card)'}}>
-        {result.map(a=><div key={a.id} style={{padding:'6px 10px',fontSize:12,cursor:'pointer'}} onClick={()=>onSelect(a)}>{a.nome} · {a.cpf}</div>)}
-      </div>}
-    </div>
-  );
-
   const MODOS = [
     { id:'transferencia', label:'↔ Transferência', desc:'Mover doses entre bases e aplicadores' },
     { id:'entrega_doses', label:'📦 Entrega de Doses', desc:'Doses saem do estoque para uma tarefa de cliente' },
@@ -6609,7 +6629,7 @@ function TransferenciaPage() {
             <div className="form-group"><label className="form-label">Origem *</label>
               {form.origem_tipo==='base'
                 ? <select className="form-select" value={form.origem_id} onChange={e=>setForm(f=>({...f,origem_id:e.target.value}))}><option value="">Selecione...</option>{bases.map(b=><option key={b.id} value={b.id}>{b.nome}</option>)}</select>
-                : <ApBusca value={searchOrig} onChange={e=>{setSearchOrig(e.target.value);setForm(f=>({...f,origem_id:''}));searchAp(e.target.value,setOrigResults)}} result={form.origem_id?[]:origResults} onSelect={a=>{setForm(f=>({...f,origem_id:a.id}));setSearchOrig(a.nome);setOrigResults([])}} />
+                : <AplicadorBuscaCampo value={searchOrig} onChange={e=>{setSearchOrig(e.target.value);setForm(f=>({...f,origem_id:''}));searchAp(e.target.value,setOrigResults)}} result={form.origem_id?[]:origResults} onSelect={a=>{setForm(f=>({...f,origem_id:a.id}));setSearchOrig(a.nome);setOrigResults([])}} />
               }</div>
             <div className="form-group"><label className="form-label">Tipo Destino</label>
               <select className="form-select" value={form.destino_tipo} onChange={e=>setForm(f=>({...f,destino_tipo:e.target.value,destino_id:''}))}>
@@ -6617,7 +6637,7 @@ function TransferenciaPage() {
             <div className="form-group"><label className="form-label">Destino *</label>
               {form.destino_tipo==='base'
                 ? <select className="form-select" value={form.destino_id} onChange={e=>setForm(f=>({...f,destino_id:e.target.value}))}><option value="">Selecione...</option>{bases.map(b=><option key={b.id} value={b.id}>{b.nome}</option>)}</select>
-                : <ApBusca value={searchDest} onChange={e=>{setSearchDest(e.target.value);setForm(f=>({...f,destino_id:''}));searchAp(e.target.value,setDestResults)}} result={form.destino_id?[]:destResults} onSelect={a=>{setForm(f=>({...f,destino_id:a.id}));setSearchDest(a.nome);setDestResults([])}} />
+                : <AplicadorBuscaCampo value={searchDest} onChange={e=>{setSearchDest(e.target.value);setForm(f=>({...f,destino_id:''}));searchAp(e.target.value,setDestResults)}} result={form.destino_id?[]:destResults} onSelect={a=>{setForm(f=>({...f,destino_id:a.id}));setSearchDest(a.nome);setDestResults([])}} />
               }</div>
             <div className="form-group" style={{gridColumn:'1/-1'}}><label className="form-label">Observação</label>
               <input className="form-input" value={form.observacao} onChange={e=>setForm(f=>({...f,observacao:e.target.value}))} /></div>
@@ -6643,7 +6663,7 @@ function TransferenciaPage() {
                 <option value="base">Base</option><option value="aplicador">Aplicador</option></select>
               {form.origem_tipo==='base'
                 ? <select className="form-select" style={{marginTop:6}} value={form.origem_id} onChange={e=>setForm(f=>({...f,origem_id:e.target.value}))}><option value="">Selecione a base...</option>{bases.map(b=><option key={b.id} value={b.id}>{b.nome}</option>)}</select>
-                : <div style={{marginTop:6}}><ApBusca value={searchOrig} onChange={e=>{setSearchOrig(e.target.value);setForm(f=>({...f,origem_id:''}));searchAp(e.target.value,setOrigResults)}} result={form.origem_id?[]:origResults} onSelect={a=>{setForm(f=>({...f,origem_id:a.id}));setSearchOrig(a.nome);setOrigResults([])}} /></div>
+                : <div style={{marginTop:6}}><AplicadorBuscaCampo value={searchOrig} onChange={e=>{setSearchOrig(e.target.value);setForm(f=>({...f,origem_id:''}));searchAp(e.target.value,setOrigResults)}} result={form.origem_id?[]:origResults} onSelect={a=>{setForm(f=>({...f,origem_id:a.id}));setSearchOrig(a.nome);setOrigResults([])}} /></div>
               }</div>
             <div className="form-group"><label className="form-label">Tarefa Destino *</label>
               <input className="form-input" value={tarefaBusca} onChange={e=>{setTarefaBusca(e.target.value);setTarefaSel(null);buscarTarefa(e.target.value)}} placeholder="Código da tarefa (ex: CG2026.SYG...)" />
@@ -6684,7 +6704,7 @@ function TransferenciaPage() {
             <div className="form-group"><label className="form-label">Total devolvido *</label>
               <input className="form-input" type="number" min="1" value={form.quantidade} onChange={e=>setForm(f=>({...f,quantidade:e.target.value}))} placeholder="Ex: 100" /></div>
             <div className="form-group"><label className="form-label">Aplicador (origem) *</label>
-              <ApBusca value={searchOrig} onChange={e=>{setSearchOrig(e.target.value);setForm(f=>({...f,origem_id:''}));searchAp(e.target.value,setOrigResults)}} result={form.origem_id?[]:origResults} onSelect={a=>{setForm(f=>({...f,origem_id:a.id}));setSearchOrig(a.nome);setOrigResults([])}} /></div>
+              <AplicadorBuscaCampo value={searchOrig} onChange={e=>{setSearchOrig(e.target.value);setForm(f=>({...f,origem_id:''}));searchAp(e.target.value,setOrigResults)}} result={form.origem_id?[]:origResults} onSelect={a=>{setForm(f=>({...f,origem_id:a.id}));setSearchOrig(a.nome);setOrigResults([])}} /></div>
             <div className="form-group"><label className="form-label">Saldo disponível do aplicador</label>
               <div style={{padding:'10px 12px',border:'1px solid var(--border)',borderRadius:'var(--radius-sm)',background:'var(--bg-input)',fontSize:13}}>
                 {!form.vacina_id || !form.origem_id ? <span style={{color:'var(--text-muted)'}}>Selecione vacina/produto e aplicador</span> : loadingSaldoDevolucao ? <span style={{color:'var(--text-muted)'}}>Calculando...</span> : <><strong style={{fontFamily:'JetBrains Mono',fontSize:18,color:(Number(saldoDevolucao||0)>0?'var(--success)':'var(--danger)')}}>{Number(saldoDevolucao||0).toLocaleString('pt-BR')}</strong><span style={{marginLeft:6,color:'var(--text-muted)'}}>doses do produto</span></>}
