@@ -5095,311 +5095,96 @@ function VeiculoForm({ initial, bases, motoristas, onSave, onClose }) {
 }
 
 // ── Mapa de Monitoramento em Tempo Real ──
+
 function MonitoramentoAoVivo({ onClose }) {
-  const [motoristas, setMotoristas] = useState([]);
-  const mapRef = React.useRef(null);
-  const mapInstanceRef = React.useRef(null);
-  const markersRef = React.useRef({});
-  const intervalRef = React.useRef(null);
-
-  const loadMotoristas = async () => {
-    const { data } = await sb.from('rotas')
-      .select('id, codigo, current_lat, current_lng, current_location_at, current_speed, veiculo, profiles!rotas_motorista_id_fkey(nome), remessas(status)')
-      .eq('status', 'em_transito')
-      .not('current_lat', 'is', null);
-    setMotoristas(data || []);
-    return data || [];
-  };
-
-  const atualizarMarcadores = (data) => {
-    if (!mapInstanceRef.current) return;
-    const map = mapInstanceRef.current;
-
-    data.forEach(r => {
-      if (!r.current_lat || !r.current_lng) return;
-      const entregues = (r.remessas||[]).filter(rem=>rem.status==='concluida').length;
-      const total = (r.remessas||[]).length;
-      const nome = r.profiles?.nome || r.codigo;
-      const label = `🚚 ${nome}\n${r.veiculo||''}\n${entregues}/${total} entregas${r.current_speed != null ? `\n${r.current_speed} km/h` : ''}`;
-      const ultimaAt = r.current_location_at ? new Date(r.current_location_at) : null;
-      const segundos = ultimaAt ? Math.round((Date.now() - ultimaAt)/1000) : null;
-      const ativo = segundos !== null && segundos < 120;
-
-      const icon = L.divIcon({
-        html: `<div style="background:${ativo?'#16a34a':'#6b7280'};color:#fff;padding:4px 8px;border-radius:20px;font-size:11px;font-weight:700;white-space:nowrap;box-shadow:0 2px 6px rgba(0,0,0,0.3);border:2px solid ${ativo?'#dcfce7':'#e5e7eb'}">
-          🚚 ${nome.split(' ')[0]}${r.current_speed != null && r.current_speed > 0 ? ` · ${r.current_speed}km/h` : ''}
-        </div>`,
-        className: '',
-        iconAnchor: [0, 0]
-      });
-
-      if (markersRef.current[r.id]) {
-        markersRef.current[r.id].setLatLng([r.current_lat, r.current_lng]);
-        markersRef.current[r.id].setIcon(icon);
-        markersRef.current[r.id].setPopupContent(
-          `<strong>${nome}</strong><br/>${r.veiculo||'—'}<br/>${entregues}/${total} entregas${r.current_speed!=null?`<br/>${r.current_speed} km/h`:''}<br/><small style="color:#6b7280">Atualizado: ${segundos!=null?`${segundos}s atrás`:'—'}</small>`
-        );
-      } else {
-        const marker = L.marker([r.current_lat, r.current_lng], { icon });
-        marker.bindPopup(`<strong>${nome}</strong><br/>${r.veiculo||'—'}<br/>${entregues}/${total} entregas${r.current_speed!=null?`<br/>${r.current_speed} km/h`:''}<br/><small style="color:#6b7280">Atualizado: ${segundos!=null?`${segundos}s atrás`:'—'}</small>`);
-        marker.addTo(map);
-        markersRef.current[r.id] = marker;
-      }
-    });
-
-    // Centralizar mapa nos motoristas
-    if (data.length > 0 && data[0].current_lat) {
-      if (data.length === 1) {
-        map.setView([data[0].current_lat, data[0].current_lng], 13);
-      } else {
-        const bounds = L.latLngBounds(data.filter(r=>r.current_lat).map(r=>[r.current_lat, r.current_lng]));
-        map.fitBounds(bounds, { padding: [40, 40] });
-      }
-    }
-  };
-
-  useEffect(() => {
-    if (!mapRef.current) return;
-    if (mapInstanceRef.current) { mapInstanceRef.current.remove(); mapInstanceRef.current = null; }
-    const map = L.map(mapRef.current).setView([-15.78, -47.93], 5);
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OSM' }).addTo(map);
-    mapInstanceRef.current = map;
-
-    // Carregar e iniciar polling a cada 15 segundos
-    loadMotoristas().then(data => atualizarMarcadores(data));
-    intervalRef.current = setInterval(async () => {
-      const data = await loadMotoristas();
-      atualizarMarcadores(data);
-    }, 15000);
-
-    return () => {
-      clearInterval(intervalRef.current);
-      if (mapInstanceRef.current) { mapInstanceRef.current.remove(); mapInstanceRef.current = null; }
-      markersRef.current = {};
-    };
-  }, []);
-
-  return (
-    <Modal title="🗺️ Monitoramento em Tempo Real" onClose={onClose} large>
-      <div style={{marginBottom:10,display:'flex',justifyContent:'space-between',alignItems:'center',flexWrap:'wrap',gap:8}}>
-        <div style={{fontSize:12,color:'var(--text-muted)'}}>
-          {motoristas.length === 0
-            ? 'Nenhum motorista em trânsito no momento.'
-            : `${motoristas.length} motorista${motoristas.length>1?'s':''} em trânsito · Atualiza a cada 15 segundos`}
-        </div>
-        <button className="btn btn-secondary btn-sm" onClick={async () => {
-          const data = await loadMotoristas();
-          atualizarMarcadores(data);
-        }}>↻ Atualizar agora</button>
-      </div>
-      <div style={{display:'flex',gap:8,marginBottom:10,flexWrap:'wrap'}}>
-        {motoristas.map(r => {
-          const entregues = (r.remessas||[]).filter(rem=>rem.status==='concluida').length;
-          const total = (r.remessas||[]).length;
-          const segundos = r.current_location_at ? Math.round((Date.now()-new Date(r.current_location_at))/1000) : null;
-          const ativo = segundos !== null && segundos < 120;
-          return (
-            <div key={r.id} style={{padding:'8px 12px',background:'var(--bg-input)',borderRadius:'var(--radius-sm)',border:`1px solid ${ativo?'rgba(16,185,129,0.4)':'var(--border)'}`,fontSize:12}}>
-              <div style={{fontWeight:600,color:ativo?'var(--success)':'var(--text-muted)'}}>
-                {ativo?'🟢':'⚫'} {r.profiles?.nome || r.codigo}
-              </div>
-              <div style={{color:'var(--text-muted)',fontSize:11}}>
-                🚗 {r.veiculo||'—'} · {entregues}/{total} entregas
-                {r.current_speed != null && r.current_speed > 0 && <span> · {r.current_speed} km/h</span>}
-                {segundos != null && <span> · {segundos < 60 ? `${segundos}s` : `${Math.round(segundos/60)}min`} atrás</span>}
-              </div>
-            </div>
-          );
-        })}
-      </div>
-      <div ref={mapRef} style={{height:420,borderRadius:'var(--radius-sm)',border:'1px solid var(--border)',zIndex:1}} />
-      <div style={{marginTop:8,fontSize:11,color:'var(--text-muted)'}}>
-        🟢 Verde = localização recente (menos de 2 min) · ⚫ Cinza = sem sinal recente
-      </div>
-    </Modal>
-  );
-}
-
-// Modal com todos os detalhes de uma rota
-function ModalDetalheRota({ rota, onClose, ROTA_ST, ROTA_BADGE }) {
-  const [remessas, setRemessas] = useState([]);
+  const [rotas, setRotas] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [entregaDetalheAdmin, setEntregaDetalheAdmin] = useState(null);
   const toast = useContext(ToastContext);
 
-  useEffect(() => {
+  const load = async () => {
     setLoading(true);
-    sb.from('remessas')
-      .select(`
-        *,
-        remessa_itens(*, vacinas(nome, lote)),
-        bases(nome, cidade, uf),
-        aplicadores(nome, cpf, cidade, uf, endereco)
-      `)
-      .eq('rota_id', rota.id)
-      .order('ordem_entrega')
-      .then(({ data, error }) => {
-        if (error) toast(error.message, 'error');
-        else setRemessas(data || []);
-        setLoading(false);
-      });
-  }, [rota.id]);
+    const { data, error } = await sb.from('rotas')
+      .select('id, codigo, data_prevista, status, checkin_at, checkout_at, current_lat, current_lng, current_location_at, current_speed, veiculo, profiles!rotas_motorista_id_fkey(nome), remessas(id,status,ordem_entrega,observacao)')
+      .in('status', ['em_transito','pronta','montagem'])
+      .order('data_prevista', { ascending: false });
 
-  const fmtDT = (dt) => dt ? new Date(dt).toLocaleString('pt-BR', {day:'2-digit',month:'2-digit',year:'2-digit',hour:'2-digit',minute:'2-digit'}) : '—';
-  const duracao = () => {
-    if (!rota.checkin_at || !rota.checkout_at) return null;
-    const mins = Math.round((new Date(rota.checkout_at) - new Date(rota.checkin_at)) / 60000);
-    return mins < 60 ? `${mins}min` : `${Math.floor(mins/60)}h${mins%60>0?String(mins%60).padStart(2,'0')+'min':''}`;
+    if (error) {
+      toast('Erro ao carregar monitoramento: ' + error.message, 'error');
+      setRotas([]);
+    } else {
+      setRotas(data || []);
+    }
+    setLoading(false);
   };
 
-  const totalDoses = remessas.reduce((s,r) => s + (r.remessa_itens||[]).reduce((ss,i) => ss+Number(i.quantidade||0),0), 0);
-  const entregues = remessas.filter(r=>r.status==='concluida').length;
-  const REM_ST = { planejada:'Planejada', montagem:'Montagem', pronta:'Pronta', carregada:'Carregada', em_transito:'Em Trânsito', concluida:'Entregue', cancelada:'Cancelada' };
-  const REM_BADGE = { planejada:'badge-gray', montagem:'badge-yellow', pronta:'badge-cyan', carregada:'badge-blue', em_transito:'badge-green', concluida:'badge-green', cancelada:'badge-red' };
+  useEffect(() => { load(); }, []);
+
+  const abrirMapa = (lat, lng) => {
+    if (!lat || !lng) {
+      toast('Esta rota ainda não possui localização GPS registrada.', 'info');
+      return;
+    }
+    const url = 'https://www.google.com/maps?q=' + encodeURIComponent(lat + ',' + lng);
+    window.open(url, '_blank', 'noopener,noreferrer');
+  };
 
   return (
-    <Modal title={`📋 Rota ${rota.codigo}`} onClose={onClose} large>
-      {/* Cabeçalho da rota */}
-      <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(160px,1fr))',gap:10,marginBottom:16}}>
-        <div className="stat-card" style={{padding:10}}>
-          <div className="stat-label">Status</div>
-          <span className={`badge ${ROTA_BADGE[rota.status]}`} style={{fontSize:13,padding:'4px 10px'}}>{ROTA_ST[rota.status]}</span>
+    <Modal title="Monitoramento ao Vivo" onClose={onClose} large>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8,marginBottom:12}}>
+        <div style={{fontSize:13,color:'var(--text-muted)'}}>
+          Rotas em montagem, prontas ou em trânsito. O mapa abre em nova aba quando houver GPS.
         </div>
-        <div className="stat-card" style={{padding:10}}>
-          <div className="stat-label">Data Prevista</div>
-          <div style={{fontWeight:600}}>{rota.data_prevista ? new Date(rota.data_prevista+'T12:00:00').toLocaleDateString('pt-BR',{weekday:'short',day:'2-digit',month:'2-digit'}) : '—'}</div>
-        </div>
-        <div className="stat-card" style={{padding:10}}>
-          <div className="stat-label">Base Origem</div>
-          <div style={{fontWeight:600,fontSize:13}}>{rota.bases?.nome || '—'}</div>
-          <div style={{fontSize:11,color:'var(--text-muted)'}}>{rota.bases?.cidade}/{rota.bases?.uf}</div>
-        </div>
-        <div className="stat-card" style={{padding:10}}>
-          <div className="stat-label">Motorista</div>
-          <div style={{fontWeight:600,fontSize:13}}>{rota.profiles?.nome || '—'}</div>
-          <div style={{fontSize:11,color:'var(--text-muted)'}}>{rota.veiculos ? `${rota.veiculos.modelo} · ${rota.veiculos.placa}` : (rota.veiculo||'—')}</div>
-        </div>
-        <div className="stat-card" style={{padding:10}}>
-          <div className="stat-label">Paradas / Doses</div>
-          <div style={{fontWeight:700,fontSize:18,color:'var(--accent)'}}>{remessas.length} paradas</div>
-          <div style={{fontSize:12,color:'var(--text-muted)'}}>{totalDoses.toLocaleString('pt-BR')} doses · {entregues}/{remessas.length} entregues</div>
-        </div>
+        <button className="btn btn-secondary btn-sm" onClick={load}>↻ Atualizar</button>
       </div>
 
-      {/* Checkin/Checkout */}
-      {(rota.checkin_at || rota.checkout_at) && (
-        <div style={{display:'flex',gap:10,marginBottom:16,flexWrap:'wrap'}}>
-          {rota.checkin_at && (
-            <div style={{flex:1,padding:10,background:'rgba(16,185,129,0.08)',border:'1px solid rgba(16,185,129,0.2)',borderRadius:'var(--radius-sm)'}}>
-              <div style={{fontSize:10,color:'var(--success)',textTransform:'uppercase',fontWeight:600}}>Check-in</div>
-              <div style={{fontSize:14,fontWeight:700,marginTop:2}}>{fmtDT(rota.checkin_at)}</div>
-              {rota.checkin_lat && <a href={`https://maps.google.com?q=${rota.checkin_lat},${rota.checkin_lng}`} target="_blank" style={{fontSize:11,color:'var(--accent)'}}>📍 ver no mapa</a>}
-            </div>
-          )}
-          {rota.checkout_at && (
-            <div style={{flex:1,padding:10,background:'rgba(37,99,235,0.08)',border:'1px solid rgba(37,99,235,0.2)',borderRadius:'var(--radius-sm)'}}>
-              <div style={{fontSize:10,color:'var(--accent)',textTransform:'uppercase',fontWeight:600}}>Check-out {duracao() && `· ${duracao()}`}</div>
-              <div style={{fontSize:14,fontWeight:700,marginTop:2}}>{fmtDT(rota.checkout_at)}</div>
-              {rota.checkout_lat && <a href={`https://maps.google.com?q=${rota.checkout_lat},${rota.checkout_lng}`} target="_blank" style={{fontSize:11,color:'var(--accent)'}}>📍 ver no mapa</a>}
-            </div>
-          )}
+      {loading ? (
+        <div className="empty-state"><div className="empty-icon">⏳</div><div className="empty-text">Carregando monitoramento...</div></div>
+      ) : rotas.length === 0 ? (
+        <div className="empty-state"><div className="empty-icon">🗺️</div><div className="empty-text">Nenhuma rota ativa encontrada.</div></div>
+      ) : (
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Rota</th>
+                <th>Motorista</th>
+                <th>Veículo</th>
+                <th>Status</th>
+                <th>Entregas</th>
+                <th>Última posição</th>
+                <th>Ação</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rotas.map(r => {
+                const total = (r.remessas || []).length;
+                const concluidas = (r.remessas || []).filter(x => x.status === 'concluida').length;
+                return (
+                  <tr key={r.id}>
+                    <td className="mono" style={{fontWeight:700,color:'var(--accent)'}}>{r.codigo}</td>
+                    <td>{r.profiles?.nome || '—'}</td>
+                    <td>{r.veiculo || '—'}</td>
+                    <td><span className={`badge ${r.status === 'em_transito' ? 'badge-green' : r.status === 'pronta' ? 'badge-cyan' : 'badge-yellow'}`}>{r.status}</span></td>
+                    <td>{concluidas}/{total}</td>
+                    <td>
+                      {r.current_lat && r.current_lng ? (
+                        <div>
+                          <div className="mono">{Number(r.current_lat).toFixed(5)}, {Number(r.current_lng).toFixed(5)}</div>
+                          <div style={{fontSize:10,color:'var(--text-muted)'}}>{r.current_location_at ? new Date(r.current_location_at).toLocaleString('pt-BR') : 'Sem horário'}</div>
+                        </div>
+                      ) : '—'}
+                    </td>
+                    <td>
+                      <button className="btn btn-secondary btn-sm" onClick={() => abrirMapa(r.current_lat, r.current_lng)}>
+                        📍 Mapa
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         </div>
-      )}
-
-      {/* Progress bar */}
-      <div style={{marginBottom:16}}>
-        <div style={{display:'flex',justifyContent:'space-between',fontSize:12,marginBottom:4}}>
-          <span style={{color:'var(--text-muted)'}}>Progresso das entregas</span>
-          <span style={{fontWeight:600}}>{entregues}/{remessas.length}</span>
-        </div>
-        <div style={{height:6,background:'var(--border)',borderRadius:3,overflow:'hidden'}}>
-          <div style={{height:'100%',width:(remessas.length>0?entregues/remessas.length*100:0)+'%',background:'var(--success)',transition:'width 0.3s'}} />
-        </div>
-      </div>
-
-      {/* Remessas */}
-      {loading ? <div className="empty-state"><div className="empty-text">Carregando...</div></div> : (
-        <div style={{display:'flex',flexDirection:'column',gap:10}}>
-          {remessas.map(rem => {
-            const destNome = rem.aplicadores?.nome || rem.bases?.nome || '—';
-            const destCidade = rem.aplicadores?.cidade || rem.bases?.cidade || '';
-            const destUF = rem.aplicadores?.uf || rem.bases?.uf || '';
-            const destEnd = rem.aplicadores?.endereco || '';
-            const destCPF = rem.aplicadores?.cpf || '';
-            const doses = (rem.remessa_itens||[]).reduce((s,i)=>s+Number(i.quantidade||0),0);
-            const isConcluida = rem.status === 'concluida';
-            return (
-              <div key={rem.id} style={{border:`1px solid ${isConcluida?'rgba(16,185,129,0.3)':'var(--border)'}`,borderRadius:'var(--radius-sm)',overflow:'hidden'}}>
-                {/* Header remessa */}
-                <div style={{padding:'10px 14px',background:isConcluida?'rgba(16,185,129,0.05)':'var(--bg-card)',display:'flex',justifyContent:'space-between',alignItems:'flex-start',flexWrap:'wrap',gap:8}}>
-                  <div style={{display:'flex',gap:10,alignItems:'center'}}>
-                    <div style={{width:28,height:28,borderRadius:'50%',background:isConcluida?'var(--success)':'var(--accent)',color:'#fff',display:'flex',alignItems:'center',justifyContent:'center',fontWeight:700,fontSize:13,flexShrink:0}}>
-                      {rem.ordem_entrega}
-                    </div>
-                    <div>
-                      <div style={{fontFamily:'JetBrains Mono',fontSize:11,color:'var(--accent)',marginBottom:2}}>{rem.codigo_rastreio}</div>
-                      <div style={{fontWeight:600,fontSize:14}}>{destNome}</div>
-                      <div style={{fontSize:12,color:'var(--text-muted)'}}>{destCPF && `CPF: ${destCPF} · `}{destCidade}{destUF&&`/${destUF}`}</div>
-                      {destEnd && <div style={{fontSize:11,color:'var(--text-muted)'}}>{destEnd}</div>}
-                    </div>
-                  </div>
-                  <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>
-                    <span className={`badge ${REM_BADGE[rem.status]||'badge-gray'}`}>{REM_ST[rem.status]||rem.status}</span>
-                    <span className="badge badge-cyan">{doses} doses</span>
-                  </div>
-                </div>
-                {/* Itens da remessa */}
-                {(rem.remessa_itens||[]).length > 0 && (
-                  <div style={{padding:'8px 14px',borderTop:'1px solid var(--border)',background:'var(--bg-input)'}}>
-                    <table style={{width:'100%',borderCollapse:'collapse',fontSize:12}}>
-                      <thead>
-                        <tr style={{color:'var(--text-muted)'}}>
-                          <th style={{textAlign:'left',padding:'3px 0',fontWeight:600,fontSize:10,textTransform:'uppercase'}}>Vacina</th>
-                          <th style={{textAlign:'left',padding:'3px 8px',fontWeight:600,fontSize:10,textTransform:'uppercase'}}>Lote</th>
-                          <th style={{textAlign:'right',padding:'3px 0',fontWeight:600,fontSize:10,textTransform:'uppercase'}}>Doses</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {rem.remessa_itens.map((it,idx) => (
-                          <tr key={idx}>
-                            <td style={{padding:'3px 0'}}>
-                              <span style={{fontSize:11,fontWeight:600,padding:'2px 7px',borderRadius:3,
-                                background:(it.vacinas?.nome||'').toLowerCase().includes('tetrav')?'rgba(37,99,235,0.15)':'rgba(16,185,129,0.15)',
-                                color:(it.vacinas?.nome||'').toLowerCase().includes('tetrav')?'var(--accent)':'var(--success)'}}>
-                                {it.vacinas?.nome||'—'}
-                              </span>
-                            </td>
-                            <td style={{padding:'3px 8px',fontFamily:'JetBrains Mono',fontSize:11,color:'var(--text-muted)'}}>{it.lote||it.vacinas?.lote||'—'}</td>
-                            <td style={{padding:'3px 0',textAlign:'right',fontFamily:'JetBrains Mono',fontWeight:700,color:it.quantidade>0?'var(--text-primary)':'var(--text-muted)'}}>{it.quantidade}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-                {/* Obs da remessa (sem mostrar assinatura raw) */}
-                {rem.observacao && (
-                  <div style={{padding:'6px 14px',borderTop:'1px solid var(--border)',fontSize:11,color:'var(--text-muted)'}}>
-                    {rem.observacao.split('|').filter(p => !p.includes('[SIG_IMG') && !p.includes('[ENTREGA_LOCAL')).map((p,i) => <span key={i}>{p.trim()}{i < rem.observacao.split('|').length-1 ? ' · ' : ''}</span>)}
-                  </div>
-                )}
-                {/* Botão Ver Entrega para concluídas */}
-                {isConcluida && (
-                  <div style={{padding:'8px 14px',borderTop:'1px solid var(--border)',display:'flex',gap:8}}>
-                    <button className="btn btn-secondary btn-sm" onClick={() => setEntregaDetalheAdmin(rem)}>
-                      📋 Ver Entrega
-                    </button>
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      )}
-
-      {/* Modal de detalhes da entrega */}
-      {entregaDetalheAdmin && (
-        <EntregaDetalheModal remessa={entregaDetalheAdmin} rota={rota} onClose={() => setEntregaDetalheAdmin(null)} />
       )}
 
       <div className="modal-actions">
@@ -5408,6 +5193,7 @@ function ModalDetalheRota({ rota, onClose, ROTA_ST, ROTA_BADGE }) {
     </Modal>
   );
 }
+
 
 // ── Lista de Rotas ──
 function RotasListPage({ onOpenRoteirizacao }) {
@@ -5419,6 +5205,20 @@ function RotasListPage({ onOpenRoteirizacao }) {
 
   const ROTA_ST = { planejada:'Planejada', montagem:'Em Montagem', pronta:'Pronta', em_transito:'Em Trânsito', concluida:'Concluída', cancelada:'Cancelada' };
   const ROTA_BADGE = { planejada:'badge-blue', montagem:'badge-yellow', pronta:'badge-cyan', em_transito:'badge-green', concluida:'badge-gray', cancelada:'badge-red' };
+
+  const statusCards = [
+    { key: '', label: 'Total', icon: '🚚', cls: 'badge-blue' },
+    { key: 'planejada', label: 'Planejadas', icon: '📝', cls: 'badge-blue' },
+    { key: 'montagem', label: 'Montagem', icon: '📦', cls: 'badge-yellow' },
+    { key: 'pronta', label: 'Prontas', icon: '✅', cls: 'badge-cyan' },
+    { key: 'em_transito', label: 'Em Trânsito', icon: '🛣️', cls: 'badge-green' },
+    { key: 'concluida', label: 'Concluídas', icon: '🏁', cls: 'badge-gray' },
+    { key: 'cancelada', label: 'Canceladas', icon: '🚫', cls: 'badge-red' },
+  ];
+
+  const countStatus = (key) => key
+    ? rotas.filter(r => r.status === key).length
+    : rotas.length;
 
   const load = async () => {
     let q = sb.from('rotas').select('*, bases!rotas_base_origem_id_fkey(nome,cidade,uf), profiles!rotas_motorista_id_fkey(nome), veiculos(placa, modelo)').order('created_at', { ascending: false });
@@ -5569,6 +5369,33 @@ function RotasListPage({ onOpenRoteirizacao }) {
         </div>
       </div>
       {showMonitoramento && <MonitoramentoAoVivo onClose={() => setShowMonitoramento(false)} />}
+
+      <div className="kpi-grid-compact" style={{marginBottom:16}}>
+        {statusCards.map(card => {
+          const active = statusFilter === card.key;
+          return (
+            <div
+              key={card.key || 'total'}
+              className="kpi-card-compact"
+              onClick={() => setStatusFilter(card.key)}
+              style={{
+                cursor:'pointer',
+                minHeight:86,
+                borderColor: active ? 'var(--accent)' : 'var(--border)',
+                boxShadow: active ? '0 0 0 2px var(--accent-subtle)' : undefined
+              }}
+            >
+              <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:8}}>
+                <div className={`badge ${card.cls}`}>{card.icon}</div>
+                {active && <span style={{fontSize:10,color:'var(--accent)',fontWeight:700}}>Filtro ativo</span>}
+              </div>
+              <div className="kpi-value">{countStatus(card.key).toLocaleString('pt-BR')}</div>
+              <div className="kpi-label">{card.label}</div>
+            </div>
+          );
+        })}
+      </div>
+
       <div className="card" style={{marginBottom:16}}>
         <div className="form-group" style={{maxWidth:200}}>
           <label className="form-label">Status</label>
