@@ -5238,10 +5238,20 @@ function ChatRotaModal({ rota, onClose }) {
     }
     setCanalId(canal);
 
-    const { data, error } = await sb.from('chat_mensagens')
+    let { data, error } = await sb.from('chat_mensagens')
       .select('id, mensagem, tipo, lat, lng, criado_em, usuario_id, profiles(nome, role)')
       .eq('canal_id', canal)
       .order('criado_em', { ascending: true });
+
+    // Fallback: se o Supabase não conseguir fazer o join com profiles, carrega sem o join.
+    if (error) {
+      const fallback = await sb.from('chat_mensagens')
+        .select('id, mensagem, tipo, lat, lng, criado_em, usuario_id')
+        .eq('canal_id', canal)
+        .order('criado_em', { ascending: true });
+      data = fallback.data;
+      error = fallback.error;
+    }
 
     if (error) toast('Erro ao carregar mensagens: ' + error.message, 'error');
     else setMensagens(data || []);
@@ -5266,11 +5276,14 @@ function ChatRotaModal({ rota, onClose }) {
 
   const enviar = async (msg, tipo) => {
     const conteudo = String(msg || texto || '').trim();
-    if (!conteudo) return;
+    if (!conteudo) {
+      toast('Digite uma mensagem antes de enviar.', 'info');
+      return;
+    }
     setEnviando(true);
     pedirGps();
 
-    const { error } = await sb.rpc('enviar_chat_rota', {
+    const { data, error } = await sb.rpc('enviar_chat_rota', {
       p_rota_id: rota.id,
       p_mensagem: conteudo,
       p_tipo: tipo || 'texto',
@@ -5278,10 +5291,14 @@ function ChatRotaModal({ rota, onClose }) {
       p_lng: gps?.lng || null
     });
 
-    if (error) toast('Erro ao enviar mensagem: ' + error.message, 'error');
-    else {
+    if (error) {
+      toast('Erro ao enviar mensagem: ' + error.message, 'error');
+      alert('Erro ao enviar mensagem: ' + error.message);
+    } else {
+      toast('Mensagem enviada.', 'success');
       setTexto('');
       await carregar();
+      setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: 'smooth' }), 150);
     }
     setEnviando(false);
   };
@@ -5315,7 +5332,7 @@ function ChatRotaModal({ rota, onClose }) {
             <div key={m.id} style={{display:'flex',justifyContent:minha?'flex-end':'flex-start',marginBottom:8}}>
               <div style={{maxWidth:'78%',background:minha?'var(--accent)':'var(--bg-card)',color:minha?'#fff':'var(--text-primary)',border:'1px solid ' + (minha?'var(--accent)':'var(--border)'),borderRadius:12,padding:'8px 10px'}}>
                 <div style={{fontSize:10,opacity:.75,marginBottom:3}}>
-                  {m.profiles?.nome || 'Usuário'} · {new Date(m.criado_em).toLocaleString('pt-BR')}
+                  {m.profiles?.nome || (m.usuario_id === meuId ? 'Eu' : 'Usuário')} · {new Date(m.criado_em).toLocaleString('pt-BR')}
                   {m.tipo === 'problema' && <span style={{marginLeft:6}}>⚠️</span>}
                 </div>
                 <div style={{fontSize:13,whiteSpace:'pre-wrap'}}>{m.mensagem}</div>
