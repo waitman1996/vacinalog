@@ -5096,143 +5096,137 @@ function VeiculoForm({ initial, bases, motoristas, onSave, onClose }) {
 
 // ── Mapa de Monitoramento em Tempo Real ──
 
-function MonitoramentoAoVivo({ onClose }) {
+
+function MonitoramentoLista({ onClose }) {
   const [rotas, setRotas] = useState([]);
   const [loading, setLoading] = useState(true);
   const toast = useContext(ToastContext);
-
   const load = async () => {
     setLoading(true);
     const { data, error } = await sb.from('rotas')
-      .select('id, codigo, data_prevista, status, checkin_at, checkout_at, current_lat, current_lng, current_location_at, current_speed, veiculo, profiles!rotas_motorista_id_fkey(nome), remessas(id,status,ordem_entrega,observacao)')
+      .select('id,codigo,data_prevista,status,checkin_at,checkout_at,current_lat,current_lng,current_location_at,current_speed,veiculo,profiles!rotas_motorista_id_fkey(nome),remessas(id,status,ordem_entrega,observacao)')
       .in('status', ['em_transito','pronta','montagem'])
       .order('data_prevista', { ascending: false });
-
-    if (error) {
-      toast('Erro ao carregar monitoramento: ' + error.message, 'error');
-      setRotas([]);
-    } else {
-      setRotas(data || []);
-    }
+    if (error) { toast('Erro ao carregar monitoramento: ' + error.message, 'error'); setRotas([]); }
+    else setRotas(data || []);
     setLoading(false);
   };
-
   useEffect(() => { load(); }, []);
-
   const abrirMapa = (lat, lng) => {
-    if (!lat || !lng) {
-      toast('Esta rota ainda não possui localização GPS registrada.', 'info');
-      return;
-    }
-    const url = 'https://www.google.com/maps?q=' + encodeURIComponent(lat + ',' + lng);
-    window.open(url, '_blank', 'noopener,noreferrer');
+    if (!lat || !lng) { toast('Esta rota ainda não possui localização GPS registrada.', 'info'); return; }
+    window.open('https://www.google.com/maps?q=' + encodeURIComponent(lat + ',' + lng), '_blank', 'noopener,noreferrer');
   };
-
   return (
-    <Modal title="Monitoramento ao Vivo" onClose={onClose} large>
+    <Modal title="Consulta de Monitoramento" onClose={onClose} large>
       <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8,marginBottom:12}}>
-        <div style={{fontSize:13,color:'var(--text-muted)'}}>
-          Rotas em montagem, prontas ou em trânsito. O mapa abre em nova aba quando houver GPS.
-        </div>
+        <div style={{fontSize:13,color:'var(--text-muted)'}}>Visão em lista das rotas ativas e últimas posições.</div>
         <button className="btn btn-secondary btn-sm" onClick={load}>↻ Atualizar</button>
       </div>
-
-      {loading ? (
-        <div className="empty-state"><div className="empty-icon">⏳</div><div className="empty-text">Carregando monitoramento...</div></div>
-      ) : rotas.length === 0 ? (
-        <div className="empty-state"><div className="empty-icon">🗺️</div><div className="empty-text">Nenhuma rota ativa encontrada.</div></div>
-      ) : (
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Rota</th>
-                <th>Motorista</th>
-                <th>Veículo</th>
-                <th>Status</th>
-                <th>Entregas</th>
-                <th>Última posição</th>
-                <th>Ação</th>
+      {loading ? <div className="empty-state"><div className="empty-icon">⏳</div><div className="empty-text">Carregando monitoramento...</div></div> : (
+        <div className="table-wrap"><table><thead><tr><th>Rota</th><th>Motorista</th><th>Veículo</th><th>Status</th><th>Entregas</th><th>Última posição</th><th>Ação</th></tr></thead><tbody>
+          {rotas.length === 0 && <tr><td colSpan={7}><div className="empty-state"><div className="empty-icon">🗺️</div><div className="empty-text">Nenhuma rota ativa encontrada.</div></div></td></tr>}
+          {rotas.map(r => {
+            const total = (r.remessas || []).length;
+            const concluidas = (r.remessas || []).filter(x => x.status === 'concluida').length;
+            return (
+              <tr key={r.id}>
+                <td className="mono" style={{fontWeight:700,color:'var(--accent)'}}>{r.codigo}</td>
+                <td>{r.profiles?.nome || '—'}</td><td>{r.veiculo || '—'}</td>
+                <td><span className={`badge ${r.status === 'em_transito' ? 'badge-green' : r.status === 'pronta' ? 'badge-cyan' : 'badge-yellow'}`}>{r.status}</span></td>
+                <td>{concluidas}/{total}</td>
+                <td>{r.current_lat && r.current_lng ? <div><div className="mono">{Number(r.current_lat).toFixed(5)}, {Number(r.current_lng).toFixed(5)}</div><div style={{fontSize:10,color:'var(--text-muted)'}}>{r.current_location_at ? new Date(r.current_location_at).toLocaleString('pt-BR') : 'Sem horário'}</div></div> : '—'}</td>
+                <td><button className="btn btn-secondary btn-sm" onClick={() => abrirMapa(r.current_lat, r.current_lng)}>📍 Mapa</button></td>
               </tr>
-            </thead>
-            <tbody>
-              {rotas.map(r => {
-                const total = (r.remessas || []).length;
-                const concluidas = (r.remessas || []).filter(x => x.status === 'concluida').length;
-                return (
-                  <tr key={r.id}>
-                    <td className="mono" style={{fontWeight:700,color:'var(--accent)'}}>{r.codigo}</td>
-                    <td>{r.profiles?.nome || '—'}</td>
-                    <td>{r.veiculo || '—'}</td>
-                    <td><span className={`badge ${r.status === 'em_transito' ? 'badge-green' : r.status === 'pronta' ? 'badge-cyan' : 'badge-yellow'}`}>{r.status}</span></td>
-                    <td>{concluidas}/{total}</td>
-                    <td>
-                      {r.current_lat && r.current_lng ? (
-                        <div>
-                          <div className="mono">{Number(r.current_lat).toFixed(5)}, {Number(r.current_lng).toFixed(5)}</div>
-                          <div style={{fontSize:10,color:'var(--text-muted)'}}>{r.current_location_at ? new Date(r.current_location_at).toLocaleString('pt-BR') : 'Sem horário'}</div>
-                        </div>
-                      ) : '—'}
-                    </td>
-                    <td>
-                      <button className="btn btn-secondary btn-sm" onClick={() => abrirMapa(r.current_lat, r.current_lng)}>
-                        📍 Mapa
-                      </button>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+            );
+          })}
+        </tbody></table></div>
       )}
+      <div className="modal-actions"><button className="btn btn-secondary" onClick={onClose}>Fechar</button></div>
+    </Modal>
+  );
+}
 
-      <div className="modal-actions">
-        <button className="btn btn-secondary" onClick={onClose}>Fechar</button>
+function MonitoramentoAoVivo({ onClose, onOpenLista }) {
+  const [rotas, setRotas] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const mapRef = React.useRef(null);
+  const mapInstanceRef = React.useRef(null);
+  const markersRef = React.useRef({});
+  const intervalRef = React.useRef(null);
+  const toast = useContext(ToastContext);
+
+  const loadMotoristas = async () => {
+    const { data, error } = await sb.from('rotas')
+      .select('id,codigo,current_lat,current_lng,current_location_at,current_speed,veiculo,status,profiles!rotas_motorista_id_fkey(nome),remessas(status)')
+      .in('status', ['em_transito','pronta','montagem'])
+      .not('current_lat', 'is', null);
+    if (error) { toast('Erro ao carregar mapa: ' + error.message, 'error'); return []; }
+    setRotas(data || []);
+    return data || [];
+  };
+  const atualizarMarcadores = (data) => {
+    if (!mapInstanceRef.current || !window.L) return;
+    const map = mapInstanceRef.current;
+    const bounds = [];
+    data.forEach(r => {
+      const lat = Number(r.current_lat), lng = Number(r.current_lng);
+      if (Number.isNaN(lat) || Number.isNaN(lng)) return;
+      const entregues = (r.remessas || []).filter(rem => rem.status === 'concluida').length;
+      const total = (r.remessas || []).length;
+      const nome = r.profiles?.nome || r.codigo;
+      const ultima = r.current_location_at ? new Date(r.current_location_at).toLocaleString('pt-BR') : 'Sem horário';
+      const label = `<div style="font-family:Arial,sans-serif;min-width:190px"><div style="font-weight:700;margin-bottom:4px">🚚 ${nome}</div><div><strong>Rota:</strong> ${r.codigo || '—'}</div><div><strong>Status:</strong> ${r.status || '—'}</div><div><strong>Veículo:</strong> ${r.veiculo || '—'}</div><div><strong>Entregas:</strong> ${entregues}/${total}</div>${r.current_speed != null ? `<div><strong>Velocidade:</strong> ${r.current_speed} km/h</div>` : ''}<div style="font-size:11px;color:#666;margin-top:4px">${ultima}</div><button onclick="window.open('https://www.google.com/maps?q=${lat},${lng}','_blank')" style="margin-top:6px;padding:5px 8px;border:1px solid #ccc;border-radius:4px;background:#f8f8f8;cursor:pointer">Abrir no Google Maps</button></div>`;
+      if (markersRef.current[r.id]) markersRef.current[r.id].setLatLng([lat, lng]).setPopupContent(label);
+      else markersRef.current[r.id] = L.marker([lat, lng]).addTo(map).bindPopup(label);
+      bounds.push([lat, lng]);
+    });
+    Object.keys(markersRef.current).forEach(id => {
+      if (!data.find(r => r.id === id)) { map.removeLayer(markersRef.current[id]); delete markersRef.current[id]; }
+    });
+    if (bounds.length > 0) map.fitBounds(bounds, { padding: [30, 30], maxZoom: 13 });
+  };
+  const atualizar = async () => {
+    const data = await loadMotoristas();
+    atualizarMarcadores(data);
+  };
+  useEffect(() => {
+    const inicializar = async () => {
+      setLoading(true);
+      try {
+        if (!window.L) { toast('Mapa não carregou. Verifique a conexão com a internet.', 'error'); setLoading(false); return; }
+        if (!mapInstanceRef.current && mapRef.current) {
+          const map = L.map(mapRef.current).setView([-23.5505, -46.6333], 6);
+          mapInstanceRef.current = map;
+          L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; OpenStreetMap' }).addTo(map);
+          setTimeout(() => map.invalidateSize(), 250);
+        }
+        await atualizar();
+      } catch (err) { toast('Erro no monitoramento: ' + (err.message || err), 'error'); }
+      setLoading(false);
+    };
+    inicializar();
+    intervalRef.current = setInterval(atualizar, 15000);
+    return () => { if (intervalRef.current) clearInterval(intervalRef.current); if (mapInstanceRef.current) { try { mapInstanceRef.current.remove(); } catch (_) {} mapInstanceRef.current = null; } };
+  }, []);
+  const online = rotas.filter(r => r.current_lat && r.current_lng).length;
+  return (
+    <Modal title="Monitoramento ao Vivo — Mapa" onClose={onClose} large>
+      <div style={{display:'grid',gridTemplateColumns:'1fr auto auto',gap:8,alignItems:'center',marginBottom:12}}>
+        <div style={{fontSize:13,color:'var(--text-muted)'}}>{online} rota(s) com GPS registrado. Atualiza a cada 15 segundos.</div>
+        <button className="btn btn-secondary btn-sm" onClick={onOpenLista}>📋 Ver lista</button>
+        <button className="btn btn-secondary btn-sm" onClick={atualizar}>↻ Atualizar</button>
       </div>
+      <div style={{height:520,border:'1px solid var(--border)',borderRadius:'var(--radius)',overflow:'hidden',position:'relative',background:'var(--bg-input)'}}>
+        {loading && <div style={{position:'absolute',inset:0,display:'flex',alignItems:'center',justifyContent:'center',zIndex:500,background:'rgba(0,0,0,0.08)',fontSize:13,color:'var(--text-secondary)'}}>Carregando mapa...</div>}
+        <div ref={mapRef} style={{width:'100%',height:'100%'}}></div>
+      </div>
+      {online === 0 && !loading && <div style={{marginTop:10,padding:10,borderRadius:'var(--radius-sm)',background:'var(--warning-bg)',color:'var(--warning)',fontSize:12}}>Nenhuma rota ativa com GPS ainda. O GPS será atualizado automaticamente quando o motorista abrir o chat ou enviar mensagem.</div>}
+      <div className="modal-actions"><button className="btn btn-secondary" onClick={onClose}>Fechar</button></div>
     </Modal>
   );
 }
 
 
-
-
-// ── Notificações simples do navegador ──
-function pedirPermissaoNotificacao() {
-  try {
-    if (!('Notification' in window)) return;
-    if (Notification.permission === 'default') Notification.requestPermission();
-  } catch (_) {}
-}
-
-function tocarSomChat() {
-  try {
-    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    const osc = audioCtx.createOscillator();
-    const gain = audioCtx.createGain();
-    osc.connect(gain);
-    gain.connect(audioCtx.destination);
-    osc.frequency.value = 880;
-    gain.gain.value = 0.06;
-    osc.start();
-    setTimeout(() => { osc.stop(); audioCtx.close(); }, 160);
-  } catch (_) {}
-}
-
-function notificarChat(titulo, corpo) {
-  try {
-    tocarSomChat();
-    if (!('Notification' in window)) return;
-    if (Notification.permission === 'granted') {
-      new Notification(titulo, { body: corpo, icon: '/favicon.ico' });
-    } else if (Notification.permission === 'default') {
-      Notification.requestPermission();
-    }
-  } catch (_) {}
-}
-
-
-// ── Chat interno por Rota ──
 function ChatRotaModal({ rota, onClose }) {
   const [canalId, setCanalId] = useState(null);
   const [mensagens, setMensagens] = useState([]);
@@ -5244,21 +5238,29 @@ function ChatRotaModal({ rota, onClose }) {
   const toast = useContext(ToastContext);
   const bottomRef = React.useRef(null);
 
-  const pedirGps = () => {
-    if (!navigator.geolocation) return;
-    navigator.geolocation.getCurrentPosition(async pos => {
-      const lat = pos.coords.latitude;
-      const lng = pos.coords.longitude;
-      setGps({ lat, lng });
-      try {
-        await sb.from('rotas').update({
-          current_lat: lat,
-          current_lng: lng,
-          current_location_at: new Date().toISOString(),
-          current_speed: pos.coords.speed ? Math.round(pos.coords.speed * 3.6) : null
-        }).eq('id', rota.id);
-      } catch (_) {}
-    }, () => {}, { enableHighAccuracy: true, timeout: 8000, maximumAge: 30000 });
+  const atualizarGpsAutomatico = async () => {
+    if (!navigator.geolocation) return gps;
+
+    return new Promise(resolve => {
+      navigator.geolocation.getCurrentPosition(async pos => {
+        const lat = pos.coords.latitude;
+        const lng = pos.coords.longitude;
+        const velocidade = pos.coords.speed ? Math.round(pos.coords.speed * 3.6) : null;
+        const novoGps = { lat, lng };
+        setGps(novoGps);
+
+        try {
+          await sb.from('rotas').update({
+            current_lat: lat,
+            current_lng: lng,
+            current_location_at: new Date().toISOString(),
+            current_speed: velocidade
+          }).eq('id', rota.id);
+        } catch (_) {}
+
+        resolve(novoGps);
+      }, () => resolve(gps), { enableHighAccuracy: true, timeout: 8000, maximumAge: 15000 });
+    });
   };
 
   const carregar = async () => {
@@ -5299,7 +5301,7 @@ function ChatRotaModal({ rota, onClose }) {
 
   useEffect(() => {
     carregar();
-    pedirGps();
+    atualizarGpsAutomatico();
   }, []);
 
   useEffect(() => {
@@ -5326,7 +5328,7 @@ function ChatRotaModal({ rota, onClose }) {
     setEnviando(true);
 
     try {
-      pedirGps();
+      const gpsAtual = await atualizarGpsAutomatico();
 
       let cid = canalId;
       if (!cid) {
@@ -5345,8 +5347,8 @@ function ChatRotaModal({ rota, onClose }) {
         usuario_id: uid,
         mensagem: conteudo,
         tipo: tipo || 'texto',
-        lat: gps?.lat || null,
-        lng: gps?.lng || null
+        lat: gpsAtual?.lat || gps?.lat || null,
+        lng: gpsAtual?.lng || gps?.lng || null
       }).select('id, mensagem, tipo, lat, lng, criado_em, usuario_id').single();
 
       if (insertRes.error) throw insertRes.error;
@@ -5378,11 +5380,10 @@ function ChatRotaModal({ rota, onClose }) {
         <div style={{fontSize:12,color:'var(--text-muted)'}}>
           Motorista: <strong style={{color:'var(--text-primary)'}}>{rota.profiles?.nome || '—'}</strong>
           {' · '}Status: <strong style={{color:'var(--text-primary)'}}>{rota.status || '—'}</strong>
-          {gps && <span>{' · '}GPS atualizado</span>}
+          {gps && <span>{' · '}GPS atualizado automaticamente</span>}
         </div>
         <div style={{display:'flex',gap:6,justifyContent:'flex-end',flexWrap:'wrap'}}>
           <button className="btn btn-secondary btn-sm" onClick={pedirPermissaoNotificacao}>🔔 Ativar notificações</button>
-          <button className="btn btn-secondary btn-sm" onClick={pedirGps}>📍 Atualizar GPS</button>
         </div>
       </div>
 
@@ -5443,6 +5444,7 @@ function RotasListPage({ onOpenRoteirizacao }) {
   const [rotas, setRotas] = useState([]);
   const [statusFilter, setStatusFilter] = useState('');
   const [showMonitoramento, setShowMonitoramento] = useState(false);
+  const [showMonitoramentoLista, setShowMonitoramentoLista] = useState(false);
   const [rotaDetalhe, setRotaDetalhe] = useState(null);
   const [chatRota, setChatRota] = useState(null);
   const [naoLidas, setNaoLidas] = useState({});
@@ -5647,10 +5649,14 @@ function RotasListPage({ onOpenRoteirizacao }) {
           <button className="btn btn-secondary" onClick={() => setShowMonitoramento(true)}>
             🗺️ Monitoramento ao Vivo
           </button>
+          <button className="btn btn-secondary" onClick={() => setShowMonitoramentoLista(true)}>
+            📋 Consulta
+          </button>
           <button className="btn btn-primary" onClick={onOpenRoteirizacao}>+ Nova Roteirização</button>
         </div>
       </div>
-      {showMonitoramento && <MonitoramentoAoVivo onClose={() => setShowMonitoramento(false)} />}
+      {showMonitoramento && <MonitoramentoAoVivo onClose={() => setShowMonitoramento(false)} onOpenLista={() => setShowMonitoramentoLista(true)} />}
+      {showMonitoramentoLista && <MonitoramentoLista onClose={() => setShowMonitoramentoLista(false)} />}
 
       <div className="kpi-grid-compact" style={{marginBottom:16}}>
         {statusCards.map(card => {
