@@ -9533,8 +9533,34 @@ function AumentoDosesPage({ profile }) {
   const produtoItem = (it) => it?.vacinas?.produto_nome || it?.vacinas?.nome || 'Produto não informado';
   const extrairCodigoTarefa = (r) => {
     const txt = String(r?.observacao || '');
-    const m = txt.match(/[A-Z0-9]+(?:\.[A-Z0-9&]+)+/i);
-    return m ? m[0] : '';
+    if (!txt) return '';
+
+    // Evita confundir CPF/CNPJ com código de tarefa.
+    // Antes estava pegando valores como 353.893.428.
+    const normalizar = (v) => String(v || '').trim().replace(/[;,|]+$/g, '');
+
+    // 1) Preferir quando a observação traz o texto Tarefa/Tarefas/Código.
+    const padroesContexto = [
+      /(?:tarefa|tarefas|c[oó]digo(?: da)? tarefa)[:\s-]+([^|;\n]+)/i,
+      /(?:task|tasks)[:\s-]+([^|;\n]+)/i
+    ];
+    for (const re of padroesContexto) {
+      const m = txt.match(re);
+      if (m && m[1]) {
+        const candidatos = m[1].match(/[A-Z0-9]+(?:[.\/-][A-Z0-9&]+)+/gi) || [];
+        const valido = candidatos.map(normalizar).find(c => /[A-Z]/i.test(c) || c.includes('&'));
+        if (valido) return valido;
+      }
+    }
+
+    // 2) Procurar todos os códigos com separadores, ignorando CPF/CNPJ/números puros.
+    const candidatos = txt.match(/[A-Z0-9]+(?:[.\/-][A-Z0-9&]+)+/gi) || [];
+    const valido = candidatos.map(normalizar).find(c => {
+      const soNumerosEPontos = /^[0-9.\/-]+$/.test(c);
+      if (soNumerosEPontos) return false; // CPF/CNPJ/data/etc.
+      return /[A-Z]/i.test(c) || c.includes('&');
+    });
+    return valido || '';
   };
 
   useEffect(() => {
