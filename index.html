@@ -5280,26 +5280,53 @@ function ChatRotaModal({ rota, onClose }) {
       toast('Digite uma mensagem antes de enviar.', 'info');
       return;
     }
+
     setEnviando(true);
-    pedirGps();
 
-    const { data, error } = await sb.rpc('enviar_chat_rota', {
-      p_rota_id: rota.id,
-      p_mensagem: conteudo,
-      p_tipo: tipo || 'texto',
-      p_lat: gps?.lat || null,
-      p_lng: gps?.lng || null
-    });
+    try {
+      pedirGps();
 
-    if (error) {
-      toast('Erro ao enviar mensagem: ' + error.message, 'error');
-      alert('Erro ao enviar mensagem: ' + error.message);
-    } else {
-      toast('Mensagem enviada.', 'success');
+      let cid = canalId;
+      if (!cid) {
+        const canalRes = await sb.rpc('get_or_create_chat_rota', { p_rota_id: rota.id });
+        if (canalRes.error) throw canalRes.error;
+        cid = canalRes.data;
+        setCanalId(cid);
+      }
+
+      const userRes = await sb.auth.getUser();
+      const uid = userRes?.data?.user?.id || null;
+
+      // Envia direto na tabela para evitar retorno silencioso da RPC
+      const insertRes = await sb.from('chat_mensagens').insert({
+        canal_id: cid,
+        usuario_id: uid,
+        mensagem: conteudo,
+        tipo: tipo || 'texto',
+        lat: gps?.lat || null,
+        lng: gps?.lng || null
+      }).select('id, mensagem, tipo, lat, lng, criado_em, usuario_id').single();
+
+      if (insertRes.error) throw insertRes.error;
+
+      // Marca como lido, mas não bloqueia o envio se der erro
+      try { await sb.rpc('marcar_chat_rota_lido', { p_rota_id: rota.id }); } catch (_) {}
+
+      const novaMsg = {
+        ...insertRes.data,
+        profiles: { nome: 'Eu' }
+      };
+
+      setMensagens(prev => [...prev, novaMsg]);
       setTexto('');
-      await carregar();
+      toast('Mensagem enviada.', 'success');
       setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: 'smooth' }), 150);
+
+    } catch (err) {
+      toast('Erro ao enviar mensagem: ' + (err.message || err), 'error');
+      alert('Erro ao enviar mensagem: ' + (err.message || err));
     }
+
     setEnviando(false);
   };
 
