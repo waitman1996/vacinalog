@@ -2040,18 +2040,20 @@ function ImportacaoPage() {
       <div className="page-header">
         <div>
           <div className="page-title">Importação de Dados</div>
-          <div className="page-subtitle">Importe planilhas de Consulta (Tarefas) e Tutores (Escalas)</div>
+          <div className="page-subtitle">Importe planilhas de Consulta, Tutores, Estoque e Clínicas Parceiras</div>
         </div>
       </div>
       <div className="tabs">
         <button className={`tab ${tab==='consulta'?'active':''}`} onClick={()=>setTab('consulta')}>📋 Consulta (Tarefas)</button>
         <button className={`tab ${tab==='tutores'?'active':''}`} onClick={()=>setTab('tutores')}>👩‍⚕️ Tutores (Escalas)</button>
         <button className={`tab ${tab==='estoque'?'active':''}`} onClick={()=>setTab('estoque')}>📦 Estoque</button>
+        <button className={`tab ${tab==='clinicas'?'active':''}`} onClick={()=>setTab('clinicas')}>🏥 Clínicas Parceiras</button>
         <button className={`tab ${tab==='historico'?'active':''}`} onClick={()=>setTab('historico')}>📜 Histórico</button>
       </div>
       {tab === 'consulta' && <ImportConsulta />}
       {tab === 'tutores' && <ImportTutores />}
       {tab === 'estoque' && <ImportEstoque />}
+      {tab === 'clinicas' && <ImportClinicas />}
       {tab === 'historico' && <ImportHistorico />}
     </div>
   );
@@ -2757,6 +2759,252 @@ function ImportTutores() {
   );
 }
 
+
+
+function ImportClinicas() {
+  const [tab, setTab] = useState('saldo');
+  const [file, setFile] = useState(null);
+  const [preview, setPreview] = useState(null);
+  const [importing, setImporting] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [result, setResult] = useState(null);
+  const [modoSaldo, setModoSaldo] = useState('substituir');
+  const toast = useContext(ToastContext);
+  const fileRef = useRef();
+
+  const norm = (v) => String(v || '').trim();
+  const key = (v) => norm(v).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  const onlyDigits = (v) => String(v || '').replace(/\D/g, '');
+  const parseQtd = (v) => {
+    const raw = String(v ?? '0').replace(/\./g, '').replace(',', '.');
+    const n = Number(raw);
+    return Number.isFinite(n) ? Math.round(n) : 0;
+  };
+  const get = (row, aliases) => {
+    const map = {};
+    Object.keys(row || {}).forEach(k => { map[key(k)] = row[k]; });
+    for (const a of aliases) {
+      const v = map[key(a)];
+      if (v !== undefined && v !== null && String(v).trim() !== '') return v;
+    }
+    return '';
+  };
+  const modalidadeByCodigo = (codigo) => {
+    const c = String(codigo || '').toUpperCase();
+    if (c.includes('.IC')) return 'in_company';
+    if (c.includes('.VD')) return 'venda_doses';
+    return 'rede_credenciada';
+  };
+  const modalidadeLabel = (m) => ({ in_company: 'In Company', rede_credenciada: 'Rede Credenciada', venda_doses: 'Venda de Doses' }[m] || m);
+
+  const baixarModeloClinicas = () => {
+    const rows = tab === 'saldo' ? [
+      { clinica: 'Clínica Exemplo', cnpj: '00.000.000/0001-00', cidade: 'São Paulo', uf: 'SP', endereco: 'Rua Exemplo, 123', vacina: 'Influenza', quantidade: 100 }
+    ] : [
+      { clinica: 'Clínica Exemplo', cnpj: '00.000.000/0001-00', data: '2026-05-15', vacina: 'Influenza', doses_aplicadas: 25, observacao: 'Campanha clínica parceira' }
+    ];
+    const ws = XLSX.utils.json_to_sheet(rows);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, tab === 'saldo' ? 'Saldo Clinicas' : 'Vacinados Clinicas');
+    XLSX.writeFile(wb, tab === 'saldo' ? 'modelo_saldo_clinicas.xlsx' : 'modelo_vacinados_clinicas.xlsx');
+  };
+
+  const handleFile = (f) => {
+    if (!f) return;
+    setFile(f); setResult(null); setProgress(0);
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const wb = XLSX.read(e.target.result, { type: 'array', raw: true });
+      const sheet = wb.Sheets[wb.SheetNames[0]];
+      const data = XLSX.utils.sheet_to_json(sheet, { raw: true, defval: '' });
+      const rows = data.map((r, idx) => {
+        const clinica = norm(get(r, ['clinica','clínica','nome_clinica','nome clínica','nome','local']));
+        const cnpj = onlyDigits(get(r, ['cnpj','cpf/cnpj','documento']));
+        const vacina = norm(get(r, ['vacina','produto','imunizante','tipo_vacina','tipo de vacina'])) || 'Influenza';
+        const qtd = tab === 'saldo' ? parseQtd(get(r, ['quantidade','saldo','doses','qtd','qtd doses'])) : parseQtd(get(r, ['doses_aplicadas','doses aplicadas','vacinados','aplicadas','quantidade','qtd'])) ;
+        const dataRef = excelDateToString(get(r, ['data','data_aplicacao','data aplicação','data de aplicação'])) || new Date().toISOString().slice(0,10);
+        return {
+          linha: idx + 2,
+          clinica,
+          cnpj,
+          cidade: norm(get(r, ['cidade','municipio','município'])),
+          uf: norm(get(r, ['uf','estado'])).toUpperCase(),
+          endereco: norm(get(r, ['endereco','endereço','logradouro'])),
+          vacina,
+          quantidade: qtd,
+          data: dataRef,
+          observacao: norm(get(r, ['observacao','observação','obs'])),
+          modalidade: 'rede_credenciada',
+          valido: !!clinica && qtd > 0,
+        };
+      });
+      const valid = rows.filter(r => r.valido);
+      const totalDoses = valid.reduce((s,r)=>s+Number(r.quantidade||0),0);
+      setPreview({ total: rows.length, valid: valid.length, invalid: rows.length - valid.length, totalDoses, data: rows });
+    };
+    reader.readAsArrayBuffer(f);
+  };
+
+  const ensureClinica = async (row) => {
+    let query = sb.from('clinicas').select('id,nome,cnpj').limit(1);
+    if (row.cnpj) query = query.eq('cnpj', row.cnpj);
+    else query = query.ilike('nome', row.clinica);
+    const { data, error } = await query;
+    if (error) throw error;
+    if (data && data.length) {
+      const id = data[0].id;
+      await sb.from('clinicas').update({ nome: row.clinica, cidade: row.cidade || null, uf: row.uf || null, endereco: row.endereco || null, status: 'ativa' }).eq('id', id);
+      return id;
+    }
+    const { data: inserted, error: insErr } = await sb.from('clinicas').insert({ nome: row.clinica, cnpj: row.cnpj || null, cidade: row.cidade || null, uf: row.uf || null, endereco: row.endereco || null, status: 'ativa' }).select('id').single();
+    if (insErr) throw insErr;
+    return inserted.id;
+  };
+
+  const findVacina = async (nome) => {
+    const { data, error } = await sb.from('vacinas').select('id,nome,produto_nome').or(`nome.ilike.%${nome}%,produto_nome.ilike.%${nome}%`).limit(1);
+    if (error) throw error;
+    if (!data || !data.length) throw new Error(`Vacina/produto não encontrado: ${nome}`);
+    return data[0];
+  };
+
+  const doImport = async () => {
+    if (!preview) return;
+    setImporting(true); setProgress(0);
+    const userId = (await sb.auth.getUser()).data.user.id;
+    let imported = 0, updated = 0, ignored = 0, errors = [];
+    try {
+      const { data: imp } = await sb.from('importacoes').insert({
+        tipo: tab === 'saldo' ? 'clinicas_saldo' : 'clinicas_vacinados',
+        nome_arquivo: file?.name || 'clinicas.xlsx',
+        registros_total: preview.valid,
+        usuario_id: userId,
+        detalhes: { modalidade: 'rede_credenciada', modo: tab, modo_saldo: modoSaldo }
+      }).select().single();
+
+      const rows = preview.data.filter(r => r.valido);
+      for (let i=0; i<rows.length; i++) {
+        const r = rows[i];
+        try {
+          const clinicaId = await ensureClinica(r);
+          const vacina = await findVacina(r.vacina);
+
+          if (tab === 'saldo') {
+            const { data: existing, error: exErr } = await sb.from('estoque')
+              .select('id,quantidade')
+              .eq('localizacao_tipo','clinica')
+              .eq('clinica_id', clinicaId)
+              .eq('vacina_id', vacina.id)
+              .limit(1);
+            if (exErr) throw exErr;
+            if (existing && existing.length) {
+              const novaQtd = modoSaldo === 'somar' ? Number(existing[0].quantidade || 0) + r.quantidade : r.quantidade;
+              const { error } = await sb.from('estoque').update({ quantidade: novaQtd }).eq('id', existing[0].id);
+              if (error) throw error;
+              updated++;
+            } else {
+              const { error } = await sb.from('estoque').insert({ vacina_id: vacina.id, localizacao_tipo: 'clinica', clinica_id: clinicaId, quantidade: r.quantidade });
+              if (error) throw error;
+              imported++;
+            }
+          } else {
+            const { data: estoques, error: estErr } = await sb.from('estoque')
+              .select('id,quantidade,vacina_id,vacinas(nome,produto_nome)')
+              .eq('localizacao_tipo','clinica')
+              .eq('clinica_id', clinicaId)
+              .gt('quantidade', 0);
+            if (estErr) throw estErr;
+            const produtoRef = String(vacina.produto_nome || vacina.nome || '').toLowerCase().trim();
+            const candidatos = (estoques || []).filter(e => String(e.vacinas?.produto_nome || e.vacinas?.nome || '').toLowerCase().trim() === produtoRef || String(e.vacina_id) === String(vacina.id));
+            const disponivel = candidatos.reduce((s,e)=>s+Number(e.quantidade||0),0);
+            if (disponivel < r.quantidade) throw new Error(`Saldo insuficiente na clínica. Disponível ${disponivel}, solicitado ${r.quantidade}`);
+            let restante = r.quantidade;
+            const ordenados = candidatos.sort((a,b)=>Number(b.quantidade||0)-Number(a.quantidade||0));
+            for (const e of ordenados) {
+              if (restante <= 0) break;
+              const debito = Math.min(Number(e.quantidade||0), restante);
+              const { error } = await sb.from('estoque').update({ quantidade: Number(e.quantidade||0) - debito }).eq('id', e.id);
+              if (error) throw error;
+              restante -= debito;
+            }
+            const { error: movErr } = await sb.from('movimentacoes').insert({
+              tipo: 'aplicacao', vacina_id: ordenados[0]?.vacina_id || vacina.id, quantidade: r.quantidade,
+              origem_tipo: 'clinica', origem_clinica_id: clinicaId,
+              observacao: `Rede Credenciada: ${r.quantidade} doses aplicadas | Clínica ${r.clinica} | Data ${r.data}${r.observacao ? ' | ' + r.observacao : ''}`,
+              criado_por: userId,
+            });
+            if (movErr) throw movErr;
+            imported++;
+          }
+        } catch (err) {
+          ignored++;
+          if (errors.length < 10) errors.push(`Linha ${r.linha}: ${err.message}`);
+        }
+        setProgress(Math.round(((i+1) / Math.max(rows.length,1)) * 100));
+      }
+      if (imp?.id) await sb.from('importacoes').update({ registros_importados: imported + updated, registros_ignorados: ignored, detalhes: { modalidade: 'rede_credenciada', modo: tab, erros: errors } }).eq('id', imp.id);
+      setResult({ imported, updated, ignored, total: rows.length, errors });
+      toast(`Importação de clínicas concluída: ${imported + updated} registros processados.`, ignored ? 'info' : 'success');
+    } catch (err) {
+      toast('Erro na importação de clínicas: ' + err.message, 'error');
+    } finally { setImporting(false); }
+  };
+
+  return (
+    <div className="card">
+      <div className="card-header">
+        <div>
+          <div className="card-title">Importar Clínicas Parceiras</div>
+          <div className="page-subtitle">Rede Credenciada — saldos e vacinados separados do In Company</div>
+        </div>
+        <button className="btn btn-secondary btn-sm" type="button" onClick={baixarModeloClinicas}>⬇️ Baixar modelo</button>
+      </div>
+
+      <div style={{display:'flex',gap:8,marginBottom:14,flexWrap:'wrap'}}>
+        <button className={`btn btn-sm ${tab==='saldo'?'btn-primary':'btn-secondary'}`} onClick={()=>{setTab('saldo');setPreview(null);setResult(null);setFile(null);}}>📦 Importar saldo das clínicas</button>
+        <button className={`btn btn-sm ${tab==='vacinados'?'btn-primary':'btn-secondary'}`} onClick={()=>{setTab('vacinados');setPreview(null);setResult(null);setFile(null);}}>💉 Importar vacinados das clínicas</button>
+      </div>
+
+      <div style={{padding:12,background:'var(--info-bg)',border:'1px solid rgba(8,145,178,0.2)',borderRadius:'var(--radius-sm)',marginBottom:12,fontSize:12,color:'var(--text-secondary)'}}>
+        Modalidades: <strong>In Company</strong> = tarefas com <code>.IC</code>, <strong>Rede Credenciada</strong> = clínicas parceiras desta tela, <strong>Venda de Doses</strong> = tarefas com <code>.VD</code>.
+      </div>
+
+      {tab === 'saldo' && (
+        <div style={{padding:12,background:'var(--bg-input)',border:'1px solid var(--border)',borderRadius:'var(--radius-sm)',marginBottom:12}}>
+          <label style={{fontSize:12,fontWeight:600,marginRight:10}}>Como tratar saldo importado:</label>
+          <select className="form-select" style={{width:220,display:'inline-block'}} value={modoSaldo} onChange={e=>setModoSaldo(e.target.value)}>
+            <option value="substituir">Substituir saldo atual</option>
+            <option value="somar">Somar ao saldo atual</option>
+          </select>
+        </div>
+      )}
+
+      <div className="upload-area" onClick={() => fileRef.current?.click()}
+        onDragOver={e=>{e.preventDefault();e.currentTarget.classList.add('drag-over')}}
+        onDragLeave={e=>e.currentTarget.classList.remove('drag-over')}
+        onDrop={e=>{e.preventDefault();e.currentTarget.classList.remove('drag-over');handleFile(e.dataTransfer.files[0])}}>
+        <div className="upload-icon">🏥</div>
+        <div className="upload-text">{file ? file.name : 'Clique ou arraste o arquivo Excel das clínicas'}</div>
+        <div className="upload-hint">Colunas: clínica, cnpj, vacina/produto, quantidade. Para vacinados: doses_aplicadas e data.</div>
+        <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv" style={{display:'none'}} onChange={e=>handleFile(e.target.files[0])} />
+      </div>
+
+      {preview && (
+        <div style={{marginTop:16}}>
+          <div style={{display:'flex',gap:12,marginBottom:12,flexWrap:'wrap'}}>
+            <div className="stat-card" style={{flex:1,minWidth:120}}><div className="stat-label">Linhas</div><div className="stat-value" style={{fontSize:22}}>{preview.total}</div></div>
+            <div className="stat-card" style={{flex:1,minWidth:120}}><div className="stat-label">Válidas</div><div className="stat-value" style={{fontSize:22,color:'var(--success)'}}>{preview.valid}</div></div>
+            <div className="stat-card" style={{flex:1,minWidth:120}}><div className="stat-label">Doses</div><div className="stat-value" style={{fontSize:22,color:'var(--accent)'}}>{preview.totalDoses.toLocaleString('pt-BR')}</div></div>
+            <div className="stat-card" style={{flex:1,minWidth:120}}><div className="stat-label">Ignoradas</div><div className="stat-value" style={{fontSize:22,color:preview.invalid?'var(--warning)':'var(--text-muted)'}}>{preview.invalid}</div></div>
+          </div>
+          {importing && <div style={{marginBottom:12}}><div style={{fontSize:13,color:'var(--text-secondary)',marginBottom:6}}>Importando... {progress}%</div><div className="progress-bar"><div className="progress-fill" style={{width:progress+'%'}} /></div></div>}
+          {result && <div style={{padding:14,background:'var(--success-bg)',borderRadius:'var(--radius-sm)',border:'1px solid rgba(16,185,129,0.2)',marginBottom:12}}><div style={{fontSize:14,fontWeight:600,color:'var(--success)'}}>✓ Importação concluída</div><div style={{fontSize:13,color:'var(--text-secondary)',marginTop:4}}>{result.imported} novos · {result.updated} atualizados · {result.ignored} ignorados</div>{result.errors?.length > 0 && <div style={{fontSize:11,color:'var(--warning)',marginTop:8}}>{result.errors.map((e,i)=><div key={i}>{e}</div>)}</div>}</div>}
+          <button className="btn btn-primary" onClick={doImport} disabled={importing || preview.valid === 0}>{importing ? 'Importando...' : `Importar ${preview.valid} registros de ${tab === 'saldo' ? 'saldo' : 'vacinados'}`}</button>
+        </div>
+      )}
+    </div>
+  );
+}
 
 function ImportEstoque() {
   const [file, setFile] = useState(null);
@@ -3560,7 +3808,7 @@ function EstoquePage() {
           <button className="btn btn-secondary" onClick={() => exportarEstoqueXLSX(itemsFiltrados, filterVacina, filterTipo)}>
             📥 Exportar XLSX
           </button>
-          <button className="btn btn-primary" onClick={() => setShowEntrada(true)}>+ Entrada de Estoque</button>
+          <button className="btn btn-primary" onClick={() => setShowEntrada(true)}>+ Entrada / Criar Estoque</button>
         </div>
       </div>
 
@@ -3764,110 +4012,164 @@ function EstoquePage() {
 
 function EntradaEstoqueModal({ onClose }) {
   const [bases, setBases] = useState([]);
+  const [aplicadores, setAplicadores] = useState([]);
   const [vacinas, setVacinas] = useState([]);
-  const [form, setForm] = useState({ vacina_id: '', base_id: '', quantidade: '', observacao: '' });
+  const [form, setForm] = useState({ destino_tipo: 'base', vacina_id: '', base_id: '', aplicador_id: '', quantidade: '', observacao: '' });
   const [saving, setSaving] = useState(false);
   const toast = useContext(ToastContext);
 
   useEffect(() => {
     sb.from('bases').select('id, nome').eq('ativa', true).order('nome').then(r => setBases(r.data || []));
+    sb.from('aplicadores').select('id, nome, cpf, cidade, uf').order('nome').then(r => setAplicadores(r.data || []));
     sb.from('vacinas').select('id, nome, lote').eq('ativa', true).order('nome').then(r => setVacinas(r.data || []));
   }, []);
 
   const save = async () => {
-    if (!form.vacina_id || !form.base_id || !form.quantidade) {
-      toast('Preencha todos os campos obrigatórios', 'error'); return;
-    }
-    setSaving(true);
     const qtd = parseInt(form.quantidade);
+    if (!form.vacina_id || !form.quantidade || isNaN(qtd) || qtd <= 0) {
+      toast('Informe vacina e uma quantidade válida', 'error'); return;
+    }
+    if (form.destino_tipo === 'base' && !form.base_id) {
+      toast('Selecione a base de destino', 'error'); return;
+    }
+    if (form.destino_tipo === 'aplicador' && !form.aplicador_id) {
+      toast('Selecione o aplicador de destino', 'error'); return;
+    }
 
-    // Tentar via RPC primeiro
-    const { error: rpcErr } = await sb.rpc('entrada_estoque', {
-      p_vacina_id: form.vacina_id,
-      p_base_id: form.base_id,
-      p_quantidade: qtd,
-      p_observacao: form.observacao || null
-    });
+    setSaving(true);
+    const userId = (await sb.auth.getUser()).data.user.id;
+    const destinoBase = form.destino_tipo === 'base';
 
-    if (rpcErr) {
-      // Fallback: UPSERT direto na tabela (soma se já existe, cria se não)
-      const { data: existing } = await sb.from('estoque')
+    try {
+      // Para base, tenta usar RPC existente primeiro. Para aplicador, faz upsert direto.
+      let rpcErr = null;
+      if (destinoBase) {
+        const rpc = await sb.rpc('entrada_estoque', {
+          p_vacina_id: form.vacina_id,
+          p_base_id: form.base_id,
+          p_quantidade: qtd,
+          p_observacao: form.observacao || null
+        });
+        rpcErr = rpc.error;
+        if (!rpcErr) {
+          toast('Entrada registrada com sucesso!', 'success');
+          onClose();
+          setSaving(false);
+          return;
+        }
+      }
+
+      // Fallback/entrada manual: soma se já existe, cria se ainda não existe.
+      let query = sb.from('estoque')
         .select('id, quantidade')
         .eq('vacina_id', form.vacina_id)
-        .eq('base_id', form.base_id)
-        .eq('localizacao_tipo', 'base')
-        .is('aplicador_id', null)
-        .maybeSingle();
+        .eq('localizacao_tipo', form.destino_tipo);
+
+      if (destinoBase) {
+        query = query.eq('base_id', form.base_id).is('aplicador_id', null);
+      } else {
+        query = query.eq('aplicador_id', form.aplicador_id).is('base_id', null);
+      }
+
+      const { data: existing, error: existingErr } = await query.maybeSingle();
+      if (existingErr) throw existingErr;
 
       let dbErr;
       if (existing) {
-        // Já existe — somar
         const { error } = await sb.from('estoque')
-          .update({ quantidade: existing.quantidade + qtd })
+          .update({ quantidade: Number(existing.quantidade || 0) + qtd })
           .eq('id', existing.id);
         dbErr = error;
       } else {
-        // Não existe — criar
-        const { error } = await sb.from('estoque').insert({
+        const payload = {
           vacina_id: form.vacina_id,
-          base_id: form.base_id,
-          localizacao_tipo: 'base',
-          quantidade: qtd
-        });
+          localizacao_tipo: form.destino_tipo,
+          quantidade: qtd,
+          base_id: destinoBase ? form.base_id : null,
+          aplicador_id: destinoBase ? null : form.aplicador_id
+        };
+        const { error } = await sb.from('estoque').insert(payload);
         dbErr = error;
       }
+      if (dbErr) throw dbErr;
 
-      if (dbErr) { toast(dbErr.message, 'error'); setSaving(false); return; }
+      const obsPadrao = destinoBase
+        ? 'Entrada manual de estoque em base'
+        : 'Criação/entrada manual de estoque do aplicador sem entrevista prévia';
 
-      // Registrar movimentação
-      const userId = (await sb.auth.getUser()).data.user.id;
-      await sb.from('movimentacoes').insert({
-        tipo: 'entrada',
+      const { error: movErr } = await sb.from('movimentacoes').insert({
+        tipo: destinoBase ? 'entrada' : 'ajuste',
         vacina_id: form.vacina_id,
         quantidade: qtd,
-        origem_tipo: 'base',
-        destino_tipo: 'base',
-        destino_base_id: form.base_id,
-        observacao: form.observacao || null,
+        destino_tipo: form.destino_tipo,
+        destino_base_id: destinoBase ? form.base_id : null,
+        destino_aplicador_id: destinoBase ? null : form.aplicador_id,
+        observacao: form.observacao || obsPadrao,
         criado_por: userId
       });
-    }
+      if (movErr) throw movErr;
 
-    toast('Entrada registrada com sucesso!', 'success');
-    onClose();
-    setSaving(false);
+      toast(destinoBase ? 'Entrada registrada com sucesso!' : 'Estoque do aplicador criado/atualizado com sucesso!', 'success');
+      onClose();
+    } catch (err) {
+      toast(err.message || 'Erro ao registrar estoque', 'error');
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
     <Modal title="Entrada de Estoque" onClose={onClose}>
-      <p style={{fontSize:13,color:'var(--text-secondary)',marginBottom:16}}>Registre o recebimento de doses do fabricante/distribuidor.</p>
+      <p style={{fontSize:13,color:'var(--text-secondary)',marginBottom:16}}>Registre entrada em base ou crie estoque inicial para aplicador que ainda não estava no sistema.</p>
       <div className="form-grid">
         <div className="form-group">
-          <label className="form-label">Vacina *</label>
+          <label className="form-label">Destino *</label>
+          <select className="form-select" value={form.destino_tipo} onChange={e=>setForm(f=>({...f,destino_tipo:e.target.value,base_id:'',aplicador_id:''}))}>
+            <option value="base">Base</option>
+            <option value="aplicador">Aplicador</option>
+          </select>
+        </div>
+        <div className="form-group">
+          <label className="form-label">Vacina / Produto *</label>
           <select className="form-select" value={form.vacina_id} onChange={e=>setForm(f=>({...f,vacina_id:e.target.value}))}>
             <option value="">Selecione...</option>
             {vacinas.map(v => <option key={v.id} value={v.id}>{v.nome} {v.lote ? `(${v.lote})` : ''}</option>)}
           </select>
         </div>
-        <div className="form-group">
-          <label className="form-label">Base de destino *</label>
-          <select className="form-select" value={form.base_id} onChange={e=>setForm(f=>({...f,base_id:e.target.value}))}>
-            <option value="">Selecione...</option>
-            {bases.map(b => <option key={b.id} value={b.id}>{b.nome}</option>)}
-          </select>
-        </div>
+        {form.destino_tipo === 'base' ? (
+          <div className="form-group">
+            <label className="form-label">Base de destino *</label>
+            <select className="form-select" value={form.base_id} onChange={e=>setForm(f=>({...f,base_id:e.target.value}))}>
+              <option value="">Selecione...</option>
+              {bases.map(b => <option key={b.id} value={b.id}>{b.nome}</option>)}
+            </select>
+          </div>
+        ) : (
+          <div className="form-group">
+            <label className="form-label">Aplicador de destino *</label>
+            <select className="form-select" value={form.aplicador_id} onChange={e=>setForm(f=>({...f,aplicador_id:e.target.value}))}>
+              <option value="">Selecione...</option>
+              {aplicadores.map(a => <option key={a.id} value={a.id}>{a.nome} {a.cpf ? `— ${a.cpf}` : ''} {a.cidade ? `(${a.cidade}/${a.uf || ''})` : ''}</option>)}
+            </select>
+          </div>
+        )}
         <div className="form-group">
           <label className="form-label">Quantidade (doses) *</label>
-          <input className="form-input" type="number" value={form.quantidade} onChange={e=>setForm(f=>({...f,quantidade:e.target.value}))} />
+          <input className="form-input" type="number" min="1" value={form.quantidade} onChange={e=>setForm(f=>({...f,quantidade:e.target.value}))} />
         </div>
-        <div className="form-group">
+        <div className="form-group" style={{gridColumn:'1 / -1'}}>
           <label className="form-label">Observação</label>
-          <input className="form-input" value={form.observacao} onChange={e=>setForm(f=>({...f,observacao:e.target.value}))} placeholder="NF, fornecedor, etc." />
+          <input className="form-input" value={form.observacao} onChange={e=>setForm(f=>({...f,observacao:e.target.value}))} placeholder={form.destino_tipo === 'aplicador' ? 'Ex: estoque inicial informado pelo aplicador' : 'NF, fornecedor, etc.'} />
         </div>
       </div>
+      {form.destino_tipo === 'aplicador' && (
+        <div style={{marginTop:12,padding:10,border:'1px solid var(--warning)',background:'var(--warning-bg)',borderRadius:6,fontSize:12,color:'var(--warning)'}}>
+          Esse lançamento cria saldo direto no aplicador e também registra uma movimentação de ajuste no extrato.
+        </div>
+      )}
       <div className="modal-actions">
         <button className="btn btn-secondary" onClick={onClose}>Cancelar</button>
-        <button className="btn btn-primary" onClick={save} disabled={saving}>{saving ? 'Salvando...' : 'Registrar Entrada'}</button>
+        <button className="btn btn-primary" onClick={save} disabled={saving}>{saving ? 'Salvando...' : 'Registrar Estoque'}</button>
       </div>
     </Modal>
   );
@@ -7486,82 +7788,21 @@ async function transferirEstoqueDireto({ vacina_id, quantidade, origem_base_id, 
       return false;
     }
 
-    // 1. Debitar da base. Usa .select() sem .single(), pois pode existir mais de uma linha da mesma vacina/base.
-    const { data: origemRows, error: origemErr } = await sb.from('estoque')
-      .select('id, quantidade')
-      .eq('vacina_id', vacina_id)
-      .eq('base_id', origem_base_id)
-      .eq('localizacao_tipo', 'base')
-      .order('quantidade', { ascending: false });
-
-    if (origemErr) throw origemErr;
-    if (!origemRows || origemRows.length === 0) {
-      console.error('Origem não encontrada no estoque');
-      return false;
-    }
-
-    const totalOrigem = origemRows.reduce((s, r) => s + Number(r.quantidade || 0), 0);
-    if (totalOrigem < quantidade) {
-      console.error(`Saldo insuficiente: ${totalOrigem} < ${quantidade}`);
-      return false;
-    }
-
-    let restante = quantidade;
-    for (const row of origemRows) {
-      if (restante <= 0) break;
-      const saldoLinha = Number(row.quantidade || 0);
-      if (saldoLinha <= 0) continue;
-      const debitar = Math.min(restante, saldoLinha);
-      const { error: debErr } = await sb.from('estoque')
-        .update({ quantidade: saldoLinha - debitar })
-        .eq('id', row.id);
-      if (debErr) throw debErr;
-      restante -= debitar;
-    }
-
-    // 2. Creditar no aplicador. Também aceita múltiplas linhas e soma na primeira.
-    const { data: destRows, error: destErr } = await sb.from('estoque')
-      .select('id, quantidade')
-      .eq('vacina_id', vacina_id)
-      .eq('aplicador_id', destino_aplicador_id)
-      .eq('localizacao_tipo', 'aplicador')
-      .order('quantidade', { ascending: false });
-
-    if (destErr) throw destErr;
-
-    if (destRows && destRows.length > 0) {
-      const atual = Number(destRows[0].quantidade || 0);
-      const { error: updErr } = await sb.from('estoque')
-        .update({ quantidade: atual + quantidade })
-        .eq('id', destRows[0].id);
-      if (updErr) throw updErr;
-    } else {
-      const { error: insErr } = await sb.from('estoque').insert({
-        vacina_id,
-        aplicador_id: destino_aplicador_id,
-        base_id: null,
-        localizacao_tipo: 'aplicador',
-        quantidade
-      });
-      if (insErr) throw insErr;
-    }
-
-    // 3. Registrar movimentação
+    // Transferência atômica no Supabase:
+    // debita a base por PRODUTO consolidado, credita o aplicador e grava o extrato.
+    // Se qualquer etapa falhar, nada é concluído parcialmente.
     const { data: { user } } = await sb.auth.getUser();
-    const { error: movErr } = await sb.from('movimentacoes').insert({
-      tipo: 'envio_aplicador',
-      vacina_id,
-      quantidade,
-      origem_tipo: 'base',
-      origem_base_id,
-      destino_tipo: 'aplicador',
-      destino_aplicador_id,
-      remessa_id,
-      observacao,
-      criado_por: user?.id
+    const { error } = await sb.rpc('transferir_estoque_produto', {
+      p_vacina_id: vacina_id,
+      p_quantidade: quantidade,
+      p_origem_base_id: origem_base_id,
+      p_destino_aplicador_id: destino_aplicador_id,
+      p_remessa_id: remessa_id,
+      p_observacao: observacao,
+      p_criado_por: user?.id || null
     });
-    if (movErr) throw movErr;
 
+    if (error) throw error;
     return true;
   } catch (err) {
     console.error('transferirEstoqueDireto error:', err);
@@ -8077,7 +8318,7 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
   const confirmarEntrega = async (remId) => {
     // Buscar dados completos da remessa com itens
     const { data: rem, error: remErr } = await sb.from('remessas')
-      .select('*, remessa_itens(id, vacina_id, quantidade, vacinas(nome)), aplicadores(nome, cpf)')
+      .select('*, remessa_itens(id, vacina_id, quantidade, vacinas(nome, produto_nome)), aplicadores(nome, cpf)')
       .eq('id', remId).single();
     if (remErr) { toast(remErr.message, 'error'); return; }
 
@@ -8107,23 +8348,8 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
       return;
     }
 
-    // Verificar saldo antes de transferir.
-    // Importante: sem .single(), porque pode existir mais de uma linha de estoque para a mesma vacina/base.
-    if (itens.length > 0) {
-      for (const item of itens) {
-        const { data: estoqueRows, error: estoqueErr } = await sb.from('estoque')
-          .select('quantidade')
-          .eq('vacina_id', item.vacina_id)
-          .eq('base_id', rota.base_origem_id)
-          .eq('localizacao_tipo', 'base');
-        if (estoqueErr) { toast('Erro ao consultar estoque da base: ' + estoqueErr.message, 'error'); return; }
-        const saldo = (estoqueRows || []).reduce((s, r) => s + Number(r.quantidade || 0), 0);
-        if (saldo < Number(item.quantidade || 0)) {
-          toast(`⚠ Saldo insuficiente para ${item.vacinas?.nome || 'vacina'}: disponível ${saldo}, necessário ${item.quantidade}. Entrega NÃO foi concluída.`, 'error');
-          return;
-        }
-      }
-    }
+    // A validação de saldo agora é feita dentro da função SQL transferir_estoque_produto,
+    // de forma atômica e por produto consolidado, sem prender no lote.
 
     // Transferir estoque base → aplicador para cada item.
     // Usa a rotina direta robusta para garantir: debita base, credita aplicador e registra movimentação.
