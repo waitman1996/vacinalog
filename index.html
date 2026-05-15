@@ -5540,8 +5540,8 @@ function RoteirizacaoPage({ onBack }) {
 
   useEffect(() => {
     sb.from('bases').select('id, nome, latitude, longitude').eq('ativa', true).order('nome').then(r => setBases(r.data||[]));
-    sb.from('veiculos').select('id, placa, modelo, capacidade_doses, motorista_padrao_id').eq('ativo', true).order('modelo').then(r => setVeiculos(r.data||[]));
-    sb.from('profiles').select('id, nome').eq('role', 'motorista').eq('ativo', true).order('nome').then(r => setMotoristas(r.data||[]));
+    sb.from('veiculos').select('id, placa, modelo, capacidade_doses, motorista_padrao_id, base_id').eq('ativo', true).order('modelo').then(r => setVeiculos(r.data||[]));
+    sb.from('profiles').select('id, nome, base_id').eq('role', 'motorista').eq('ativo', true).order('nome').then(r => setMotoristas(r.data||[]));
     loadEscalas();
   }, []);
 
@@ -5834,12 +5834,37 @@ function RoteirizacaoPage({ onBack }) {
     setFilteredTutores(f);
   }, [tutores, paradas, filterPP, filterStatus, showJaRoteirizado, filterDateStart, filterDateEnd, searchTarefa]);
 
+  const motoristasFiltrados = baseOrigem
+    ? motoristas.filter(m => !m.base_id || String(m.base_id) === String(baseOrigem))
+    : motoristas;
+
+  const veiculosFiltrados = baseOrigem
+    ? veiculos.filter(v => !v.base_id || String(v.base_id) === String(baseOrigem))
+    : veiculos;
+
+  useEffect(() => {
+    if (!baseOrigem) return;
+    if (motoristaId) {
+      const motoristaAtual = motoristas.find(m => m.id === motoristaId);
+      if (motoristaAtual?.base_id && String(motoristaAtual.base_id) !== String(baseOrigem)) setMotoristaId('');
+    }
+    if (veiculoId) {
+      const veiculoAtual = veiculos.find(v => v.id === veiculoId);
+      if (veiculoAtual?.base_id && String(veiculoAtual.base_id) !== String(baseOrigem)) setVeiculoId('');
+    }
+  }, [baseOrigem, motoristas, veiculos]);
+
   useEffect(() => {
     if (veiculoId) {
       const v = veiculos.find(x => x.id === veiculoId);
-      if (v?.motorista_padrao_id && !motoristaId) setMotoristaId(v.motorista_padrao_id);
+      if (v?.motorista_padrao_id && !motoristaId) {
+        const motoristaPadrao = motoristas.find(m => m.id === v.motorista_padrao_id);
+        if (!baseOrigem || !motoristaPadrao?.base_id || String(motoristaPadrao.base_id) === String(baseOrigem)) {
+          setMotoristaId(v.motorista_padrao_id);
+        }
+      }
     }
-  }, [veiculoId]);
+  }, [veiculoId, baseOrigem, motoristas]);
 
   const geocode = async (query) => {
     if (geocodeCache[query]) return geocodeCache[query];
@@ -6082,12 +6107,12 @@ function RoteirizacaoPage({ onBack }) {
                 <div className="form-group"><label className="form-label" style={{fontSize:10}}>Data</label>
                   <input className="form-input" style={{padding:'5px 6px',fontSize:11}} type="date" onClick={openDatePicker} onFocus={openDatePicker} value={rotaData} onChange={e=>setRotaData(e.target.value)} /></div>
                 <div className="form-group"><label className="form-label" style={{fontSize:10}}>Motorista</label>
-                  <select className="form-select" style={{padding:'5px 6px',fontSize:11}} value={motoristaId} onChange={e=>setMotoristaId(e.target.value)}>
-                    <option value="">Selecione</option>{motoristas.map(m=><option key={m.id} value={m.id}>{m.nome}</option>)}
+                  <select className="form-select" style={{padding:'5px 6px',fontSize:11}} value={motoristaId} onChange={e=>setMotoristaId(e.target.value)} disabled={!baseOrigem}>
+                    <option value="">{baseOrigem ? 'Selecione' : 'Escolha a base primeiro'}</option>{motoristasFiltrados.map(m=><option key={m.id} value={m.id}>{m.nome}</option>)}
                   </select></div>
                 <div className="form-group"><label className="form-label" style={{fontSize:10}}>Veículo</label>
-                  <select className="form-select" style={{padding:'5px 6px',fontSize:11}} value={veiculoId} onChange={e=>setVeiculoId(e.target.value)}>
-                    <option value="">Selecione</option>{veiculos.map(v=><option key={v.id} value={v.id}>{v.modelo} {v.placa}</option>)}
+                  <select className="form-select" style={{padding:'5px 6px',fontSize:11}} value={veiculoId} onChange={e=>setVeiculoId(e.target.value)} disabled={!baseOrigem}>
+                    <option value="">{baseOrigem ? 'Selecione' : 'Escolha a base primeiro'}</option>{veiculosFiltrados.map(v=><option key={v.id} value={v.id}>{v.modelo} {v.placa}</option>)}
                   </select></div>
               </div>
             </div>
@@ -6362,11 +6387,13 @@ function TransferenciaPage() {
   const [tarefaResultados, setTarefaResultados] = useState([]);
   const [tarefaSel, setTarefaSel] = useState(null);
   const [historicoDescarte, setHistoricoDescarte] = useState([]);
+  const [saldoDevolucao, setSaldoDevolucao] = useState(null);
+  const [loadingSaldoDevolucao, setLoadingSaldoDevolucao] = useState(false);
   const toast = useContext(ToastContext);
 
   useEffect(() => {
     sb.from('bases').select('id, nome').eq('ativa', true).order('nome').then(r => setBases(r.data||[]));
-    sb.from('vacinas').select('id, nome, lote').eq('ativa', true).order('nome').then(r => setVacinas(r.data||[]));
+    sb.from('vacinas').select('id, nome, lote, produto_nome').eq('ativa', true).order('nome').then(r => setVacinas(r.data||[]));
     carregarDescarte();
   }, []);
 
@@ -6391,17 +6418,38 @@ function TransferenciaPage() {
     setTarefaResultados(data || []);
   };
 
+  const getProdutoNomeByVacinaId = (vacina_id) => {
+    const v = vacinas.find(x => String(x.id) === String(vacina_id));
+    return (v?.produto_nome || v?.nome || '').trim();
+  };
+
+  const buscarEstoquePorProduto = async (vacina_id, localizacao_tipo, local_id) => {
+    const produto = getProdutoNomeByVacinaId(vacina_id);
+    if (!produto) return [];
+    const filter = localizacao_tipo === 'base' ? { base_id: local_id } : { aplicador_id: local_id };
+    const { data, error } = await sb.from('estoque')
+      .select('id, vacina_id, quantidade, vacinas(nome, produto_nome)')
+      .eq('localizacao_tipo', localizacao_tipo)
+      .match(filter);
+    if (error) throw error;
+    return (data || []).filter(r => String(r.vacinas?.produto_nome || r.vacinas?.nome || '').trim() === produto);
+  };
+
+  const calcularSaldoProduto = async (vacina_id, localizacao_tipo, local_id) => {
+    const rows = await buscarEstoquePorProduto(vacina_id, localizacao_tipo, local_id);
+    return rows.reduce((s, r) => s + Number(r.quantidade || 0), 0);
+  };
+
   const debitarEstoque = async (vacina_id, origem_tipo, origem_id, qtd) => {
-    const filter = origem_tipo === 'base' ? { base_id: origem_id } : { aplicador_id: origem_id };
-    const { data: rows } = await sb.from('estoque').select('id,quantidade').eq('vacina_id', vacina_id).eq('localizacao_tipo', origem_tipo).match(filter);
-    if (!rows?.length) throw new Error('Origem não encontrada no estoque');
+    const rows = await buscarEstoquePorProduto(vacina_id, origem_tipo, origem_id);
+    if (!rows?.length) throw new Error('Origem não encontrada no estoque para este produto');
     const total = rows.reduce((s,r) => s+Number(r.quantidade||0), 0);
-    if (total < qtd) throw new Error(`Saldo insuficiente: ${total} disponível, ${qtd} necessário`);
+    if (total < qtd) throw new Error(`Saldo insuficiente do produto: ${total} disponível, ${qtd} necessário`);
     let restante = qtd;
-    for (const row of rows) {
+    for (const row of rows.sort((a,b)=>Number(b.quantidade||0)-Number(a.quantidade||0))) {
       if (restante <= 0) break;
       const deb = Math.min(restante, Number(row.quantidade||0));
-      await sb.from('estoque').update({ quantidade: row.quantidade - deb }).eq('id', row.id);
+      await sb.from('estoque').update({ quantidade: Number(row.quantidade||0) - deb }).eq('id', row.id);
       restante -= deb;
     }
   };
@@ -6453,6 +6501,22 @@ function TransferenciaPage() {
     setSaving(false);
   };
 
+  useEffect(() => {
+    const loadSaldo = async () => {
+      if (modo !== 'devolucao' || !form.vacina_id || !form.origem_id) { setSaldoDevolucao(null); return; }
+      setLoadingSaldoDevolucao(true);
+      try {
+        const saldo = await calcularSaldoProduto(form.vacina_id, 'aplicador', form.origem_id);
+        setSaldoDevolucao(saldo);
+      } catch (_) {
+        setSaldoDevolucao(null);
+      } finally {
+        setLoadingSaldoDevolucao(false);
+      }
+    };
+    loadSaldo();
+  }, [modo, form.vacina_id, form.origem_id, vacinas]);
+
   const executarDevolucao = async () => {
     if (!form.vacina_id || !form.quantidade || !form.lote?.trim() || !form.origem_id || !form.destino_id) { toast('Preencha vacina, lote, quantidade, aplicador e base destino', 'error'); return; }
     const qtdTotal = parseInt(form.quantidade);
@@ -6462,6 +6526,8 @@ function TransferenciaPage() {
     setSaving(true);
     const userId = (await sb.auth.getUser()).data.user.id;
     try {
+      const saldoAtual = await calcularSaldoProduto(form.vacina_id, 'aplicador', form.origem_id);
+      if (saldoAtual < qtdTotal) throw new Error(`Saldo insuficiente do aplicador para este produto: ${saldoAtual} disponível, ${qtdTotal} necessário`);
       await debitarEstoque(form.vacina_id, 'aplicador', form.origem_id, qtdTotal);
       if (qtdBoa > 0) {
         await creditarEstoque(form.vacina_id, 'base', form.destino_id, qtdBoa);
@@ -6597,6 +6663,12 @@ function TransferenciaPage() {
               <input className="form-input" type="number" min="1" value={form.quantidade} onChange={e=>setForm(f=>({...f,quantidade:e.target.value}))} placeholder="Ex: 100" /></div>
             <div className="form-group"><label className="form-label">Aplicador (origem) *</label>
               <ApBusca value={searchOrig} onChange={e=>{setSearchOrig(e.target.value);setForm(f=>({...f,origem_id:''}));searchAp(e.target.value,setOrigResults)}} result={form.origem_id?[]:origResults} onSelect={a=>{setForm(f=>({...f,origem_id:a.id}));setSearchOrig(a.nome);setOrigResults([])}} /></div>
+            <div className="form-group"><label className="form-label">Saldo disponível do aplicador</label>
+              <div style={{padding:'10px 12px',border:'1px solid var(--border)',borderRadius:'var(--radius-sm)',background:'var(--bg-input)',fontSize:13}}>
+                {!form.vacina_id || !form.origem_id ? <span style={{color:'var(--text-muted)'}}>Selecione vacina/produto e aplicador</span> : loadingSaldoDevolucao ? <span style={{color:'var(--text-muted)'}}>Calculando...</span> : <><strong style={{fontFamily:'JetBrains Mono',fontSize:18,color:(Number(saldoDevolucao||0)>0?'var(--success)':'var(--danger)')}}>{Number(saldoDevolucao||0).toLocaleString('pt-BR')}</strong><span style={{marginLeft:6,color:'var(--text-muted)'}}>doses do produto</span></>}
+              </div>
+              <div style={{fontSize:11,color:'var(--text-muted)',marginTop:4}}>Saldo consolidado por produto, ignorando lote.</div>
+            </div>
             <div className="form-group"><label className="form-label">Base destino (doses boas) *</label>
               <select className="form-select" value={form.destino_id} onChange={e=>setForm(f=>({...f,destino_id:e.target.value}))}><option value="">Selecione...</option>{bases.map(b=><option key={b.id} value={b.id}>{b.nome}</option>)}</select></div>
             <div className="form-group" style={{gridColumn:'1/-1'}}>
