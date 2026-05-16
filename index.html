@@ -674,6 +674,7 @@ function Sidebar({ profile, currentPage, onNavigate, open, onClose, collapsed, o
       { id: 'importacao', icon: '📥', label: 'Importação' },
       { id: 'tarefas', icon: '📋', label: 'Tarefas' },
       { id: 'escalas', icon: '👩‍⚕️', label: 'Escalas' },
+      { id: 'tarefas-escalas', icon: '🔗', label: 'Tarefas × Escalas' },
       { id: 'demanda', icon: '⚖️', label: 'Demanda vs Oferta' },
       { section: 'Logística' },
       { id: 'rotas', icon: '🚚', label: 'Rotas' },
@@ -692,6 +693,7 @@ function Sidebar({ profile, currentPage, onNavigate, open, onClose, collapsed, o
       { id: 'demanda', icon: '⚖️', label: 'Demanda vs Oferta' },
       { id: 'tarefas', icon: '📋', label: 'Tarefas' },
       { id: 'escalas', icon: '👩‍⚕️', label: 'Escalas' },
+      { id: 'tarefas-escalas', icon: '🔗', label: 'Tarefas × Escalas' },
       { id: 'rotas', icon: '🚚', label: 'Rotas' },
       { id: 'transferencia', icon: '↔️', label: 'Transferência' },
       { id: 'aumentos-doses', icon: '➕', label: 'Aumento de Doses' },
@@ -3586,6 +3588,261 @@ function TarefasPage({ profile }) {
 }
 
 // ═══════════════════════════════════════════════
+// TAREFAS × ESCALAS (visão combinada)
+// ═══════════════════════════════════════════════
+function TarefasEscalasPage({ profile }) {
+  const [rows, setRows] = useState([]);
+  const [count, setCount] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState('');
+  const [statusFilter, setStatusFilter] = useState('');
+  const [logisticaFilter, setLogisticaFilter] = useState('');
+  const [dataInicioFilter, setDataInicioFilter] = useState('');
+  const [dataFimFilter, setDataFimFilter] = useState('');
+  const [page, setPage] = useState(0);
+  const PAGE_SIZE = 50;
+  const toast = useContext(ToastContext);
+  const isAdmin = profile?.role === 'admin';
+
+  const LOGISTICA_LABELS = {
+    nao_roteirizado:'Não roteirizado', roteirizado:'Roteirizado',
+    montagem:'Montagem', pronta:'Pronta', em_rota:'Em rota', concluido:'Concluído'
+  };
+  const LOGISTICA_BADGES = {
+    nao_roteirizado:'badge-gray', roteirizado:'badge-blue',
+    montagem:'badge-yellow', pronta:'badge-cyan', em_rota:'badge-green', concluido:'badge-green'
+  };
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      // Buscar tarefas com paginação
+      let q = sb.from('tarefas')
+        .select('id,codigo,cliente,cidade_campanha,uf_campanha,data_inicio,doses_previstas,doses_aplicadas,status,status_logistica,vacina,base_nome', { count: 'exact' })
+        .order('data_inicio', { ascending: true })
+        .range(page * PAGE_SIZE, (page + 1) * PAGE_SIZE - 1);
+      if (search) q = q.or(`codigo.ilike.%${search}%,cliente.ilike.%${search}%,cidade_campanha.ilike.%${search}%`);
+      if (statusFilter) q = q.eq('status', statusFilter);
+      if (dataInicioFilter) q = q.gte('data_inicio', dataInicioFilter);
+      if (dataFimFilter) q = q.lte('data_inicio', dataFimFilter);
+      if (logisticaFilter) q = q.eq('status_logistica', logisticaFilter);
+      const { data: tarefas, error, count: total } = await q;
+      if (error) throw error;
+
+      const codigosSet = [...new Set((tarefas||[]).map(t => String(t.codigo||'').trim()).filter(Boolean))];
+      const tarefaIds = (tarefas||[]).map(t => t.id).filter(Boolean);
+
+      // Buscar escalas vinculadas por codigo_tarefa E tarefa_id
+      let escalasMap = {}; // codigo → [escala]
+      if (codigosSet.length > 0) {
+        const BATCH = 100;
+        for (let i = 0; i < codigosSet.length; i += BATCH) {
+          const { data: esc } = await sb.from('escalas')
+            .select('id,tutor_nome,tutor_cpf,doses_necessarias,doses_aplicadas,doses_perdidas,doses_danificadas,status,status_original,base_nome,tipo_vacina,data_inicio,codigo_tarefa,tarefa_id')
+            .in('codigo_tarefa', codigosSet.slice(i, i + BATCH));
+          (esc||[]).forEach(e => {
+            const k = String(e.codigo_tarefa||'').trim();
+            if (!escalasMap[k]) escalasMap[k] = [];
+            escalasMap[k].push(e);
+          });
+        }
+        // também por tarefa_id
+        if (tarefaIds.length > 0) {
+          for (let i = 0; i < tarefaIds.length; i += BATCH) {
+            const { data: esc2 } = await sb.from('escalas')
+              .select('id,tutor_nome,tutor_cpf,doses_necessarias,doses_aplicadas,doses_perdidas,doses_danificadas,status,status_original,base_nome,tipo_vacina,data_inicio,codigo_tarefa,tarefa_id')
+              .in('tarefa_id', tarefaIds.slice(i, i + BATCH));
+            (esc2||[]).forEach(e => {
+              const k = String(e.codigo_tarefa||'').trim();
+              if (!k) return;
+              if (!escalasMap[k]) escalasMap[k] = [];
+              // deduplicar por id
+              if (!escalasMap[k].find(x => x.id === e.id)) escalasMap[k].push(e);
+            });
+          }
+        }
+      }
+
+      // Montar rows: cada tarefa expandida com suas escalas
+      const combined = [];
+      (tarefas||[]).forEach(t => {
+        const codigo = String(t.codigo||'').trim();
+        const sl = t.status_logistica || 'nao_roteirizado';
+        const escalas = escalasMap[codigo] || [];
+        combined.push({ _type:'tarefa', tarefa: t, escalas, status_logistica: sl });
+      });
+
+      setRows(combined);
+      setCount(total || 0);
+    } catch(e) {
+      toast(e.message, 'error');
+    }
+    setLoading(false);
+  };
+
+  useEffect(() => { load(); }, [page, statusFilter, logisticaFilter, dataInicioFilter, dataFimFilter]);
+
+  const updateStatusLogistica = async (tarefaId, novoStatus) => {
+    if (!isAdmin) return;
+    setRows(prev => prev.map(r => r.tarefa.id === tarefaId ? { ...r, status_logistica: novoStatus, tarefa: { ...r.tarefa, status_logistica: novoStatus } } : r));
+    const { error } = await sb.from('tarefas').update({ status_logistica: novoStatus }).eq('id', tarefaId);
+    if (error) { toast(error.message, 'error'); load(); }
+    else toast('Status logística atualizado!', 'success');
+  };
+
+  const fmtDate = d => d ? new Date(d+'T12:00:00').toLocaleDateString('pt-BR') : '—';
+
+  return (
+    <div>
+      <div className="page-header">
+        <div>
+          <div className="page-title">Tarefas × Escalas</div>
+          <div className="page-subtitle">{count} tarefas · visão combinada com escalas vinculadas</div>
+        </div>
+      </div>
+
+      {/* Filtros */}
+      <div className="card" style={{marginBottom:16}}>
+        <form onSubmit={e=>{e.preventDefault();setPage(0);load();}} style={{display:'flex',gap:10,flexWrap:'wrap',alignItems:'flex-end'}}>
+          <div className="form-group" style={{flex:1,minWidth:200}}>
+            <label className="form-label">Buscar</label>
+            <input className="form-input sm" value={search} onChange={e=>setSearch(e.target.value)} placeholder="Código, cliente ou cidade..." />
+          </div>
+          <div className="form-group">
+            <label className="form-label">Data inicial</label>
+            <input className="form-input sm" type="date" onClick={openDatePicker} onFocus={openDatePicker} value={dataInicioFilter} onChange={e=>{setDataInicioFilter(e.target.value);setPage(0);}} />
+          </div>
+          <div className="form-group">
+            <label className="form-label">Data final</label>
+            <input className="form-input sm" type="date" onClick={openDatePicker} onFocus={openDatePicker} value={dataFimFilter} onChange={e=>{setDataFimFilter(e.target.value);setPage(0);}} />
+          </div>
+          <div className="form-group">
+            <label className="form-label">Status Tarefa</label>
+            <select className="form-select" style={{padding:'7px 10px',fontSize:13}} value={statusFilter} onChange={e=>{setStatusFilter(e.target.value);setPage(0);}}>
+              <option value="">Todos</option>
+              {Object.entries(STATUS_LABELS).map(([k,v]) => <option key={k} value={k}>{v}</option>)}
+            </select>
+          </div>
+          <div className="form-group">
+            <label className="form-label">Status Logística</label>
+            <select className="form-select" style={{padding:'7px 10px',fontSize:13}} value={logisticaFilter} onChange={e=>{setLogisticaFilter(e.target.value);setPage(0);}}>
+              <option value="">Todos</option>
+              {Object.entries(LOGISTICA_LABELS).map(([k,v]) => <option key={k} value={k}>{v}</option>)}
+            </select>
+          </div>
+          <button className="btn btn-secondary btn-sm" type="button" onClick={()=>{setDataInicioFilter('');setDataFimFilter('');setStatusFilter('');setLogisticaFilter('');setPage(0);}}>Limpar</button>
+          <button className="btn btn-primary btn-sm" type="submit">Buscar</button>
+        </form>
+      </div>
+
+      {/* Tabela combinada */}
+      <div className="card">
+        {loading ? <div style={{padding:32,textAlign:'center',color:'var(--text-muted)'}}>Carregando...</div> : (
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th style={{minWidth:180}}>Código / Cliente</th>
+                  <th>Data</th>
+                  <th>UF</th>
+                  <th>Vacina</th>
+                  <th style={{textAlign:'right'}}>Doses Prev.</th>
+                  <th style={{textAlign:'right'}}>Doses Aplic.</th>
+                  <th>Status Tarefa</th>
+                  <th style={{minWidth:150}}>Status Logística</th>
+                  <th>Base</th>
+                  {/* Colunas de escala */}
+                  <th style={{borderLeft:'2px solid var(--border)',paddingLeft:12}}>Tutor / CPF</th>
+                  <th style={{textAlign:'right'}}>Nec.</th>
+                  <th style={{textAlign:'right'}}>Aplic.</th>
+                  <th style={{textAlign:'right'}}>Perd.</th>
+                  <th style={{textAlign:'right'}}>Danos</th>
+                  <th>Status Escala</th>
+                  <th>Vacina Escala</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.length === 0 && (
+                  <tr><td colSpan={16} style={{textAlign:'center',padding:24,color:'var(--text-muted)'}}>Nenhum resultado.</td></tr>
+                )}
+                {rows.map((row, ri) => {
+                  const t = row.tarefa;
+                  const escalas = row.escalas;
+                  const sl = row.status_logistica;
+                  const rowSpan = Math.max(1, escalas.length);
+
+                  // Células comuns da tarefa (com rowSpan)
+                  const tarefaCells = (
+                    <>
+                      <td rowSpan={rowSpan} style={{verticalAlign:'top',maxWidth:220}}>
+                        <div className="mono" style={{fontSize:10,color:'var(--accent)',marginBottom:2,overflow:'hidden',textOverflow:'ellipsis'}}>{t.codigo}</div>
+                        <div style={{fontSize:12,fontWeight:600,overflow:'hidden',textOverflow:'ellipsis'}}>{t.cliente}</div>
+                        <div style={{fontSize:10,color:'var(--text-muted)'}}>{t.cidade_campanha}</div>
+                      </td>
+                      <td rowSpan={rowSpan} style={{verticalAlign:'top'}}>{fmtDate(t.data_inicio)}</td>
+                      <td rowSpan={rowSpan} style={{verticalAlign:'top'}} className="mono">{t.uf_campanha}</td>
+                      <td rowSpan={rowSpan} style={{verticalAlign:'top'}}><span style={{fontSize:11,fontWeight:600,color:'var(--accent)'}}>{t.vacina||'—'}</span></td>
+                      <td rowSpan={rowSpan} style={{verticalAlign:'top',textAlign:'right'}} className="mono">{t.doses_previstas}</td>
+                      <td rowSpan={rowSpan} style={{verticalAlign:'top',textAlign:'right'}} className="mono" style={{color:t.doses_aplicadas>0?'var(--success)':'inherit'}}>{t.doses_aplicadas||0}</td>
+                      <td rowSpan={rowSpan} style={{verticalAlign:'top'}}><span className={`badge ${STATUS_BADGES[t.status]||'badge-gray'}`}>{STATUS_LABELS[t.status]||t.status}</span></td>
+                      <td rowSpan={rowSpan} style={{verticalAlign:'top'}}>
+                        {isAdmin ? (
+                          <select className="form-select" style={{padding:'5px 8px',fontSize:11,minWidth:140}} value={sl||'nao_roteirizado'} onChange={e=>updateStatusLogistica(t.id, e.target.value)}>
+                            {Object.entries(LOGISTICA_LABELS).map(([k,v]) => <option key={k} value={k}>{v}</option>)}
+                          </select>
+                        ) : (
+                          <span className={`badge ${LOGISTICA_BADGES[sl]||'badge-gray'}`}>{LOGISTICA_LABELS[sl]||'Não roteirizado'}</span>
+                        )}
+                      </td>
+                      <td rowSpan={rowSpan} style={{verticalAlign:'top'}}>{t.base_nome||'—'}</td>
+                    </>
+                  );
+
+                  if (escalas.length === 0) {
+                    return (
+                      <tr key={t.id} style={{borderTop: ri > 0 ? '2px solid var(--border)' : undefined}}>
+                        {tarefaCells}
+                        <td style={{borderLeft:'2px solid var(--border)',paddingLeft:12,color:'var(--text-muted)',fontSize:11}} colSpan={6}>Sem escala vinculada</td>
+                      </tr>
+                    );
+                  }
+
+                  return escalas.map((e, ei) => (
+                    <tr key={`${t.id}-${e.id}`} style={{borderTop: ei === 0 && ri > 0 ? '2px solid var(--border)' : (ei === 0 ? undefined : '1px dashed rgba(100,116,139,0.2)')}}>
+                      {ei === 0 && tarefaCells}
+                      <td style={{borderLeft:'2px solid var(--border)',paddingLeft:12,verticalAlign:'top'}}>
+                        <div style={{fontWeight:600,fontSize:12}}>{e.tutor_nome||'—'}</div>
+                        <div className="mono" style={{fontSize:10,color:'var(--text-muted)'}}>{e.tutor_cpf}</div>
+                      </td>
+                      <td style={{textAlign:'right',verticalAlign:'top'}} className="mono">{e.doses_necessarias||0}</td>
+                      <td style={{textAlign:'right',verticalAlign:'top'}} className="mono" style={{color:e.doses_aplicadas>0?'var(--success)':'inherit'}}>{e.doses_aplicadas||0}</td>
+                      <td style={{textAlign:'right',verticalAlign:'top'}} className="mono" style={{color:e.doses_perdidas>0?'var(--warning)':'inherit'}}>{e.doses_perdidas||0}</td>
+                      <td style={{textAlign:'right',verticalAlign:'top'}} className="mono" style={{color:e.doses_danificadas>0?'var(--danger)':'inherit'}}>{e.doses_danificadas||0}</td>
+                      <td style={{verticalAlign:'top'}}><span className={`badge ${STATUS_BADGES[e.status]||'badge-gray'}`}>{STATUS_LABELS[e.status]||e.status}</span></td>
+                      <td style={{verticalAlign:'top',fontSize:11,color:'var(--text-muted)'}}>{e.tipo_vacina||'—'}</td>
+                    </tr>
+                  ));
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+        {count > PAGE_SIZE && (
+          <div style={{display:'flex',justifyContent:'center',gap:8,marginTop:16}}>
+            <button className="btn btn-secondary btn-sm" disabled={page===0} onClick={()=>setPage(p=>p-1)}>← Anterior</button>
+            <span style={{padding:'6px 12px',fontSize:13,color:'var(--text-muted)'}}>
+              {page*PAGE_SIZE+1}–{Math.min((page+1)*PAGE_SIZE,count)} de {count}
+            </span>
+            <button className="btn btn-secondary btn-sm" disabled={(page+1)*PAGE_SIZE>=count} onClick={()=>setPage(p=>p+1)}>Próxima →</button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+
+// ═══════════════════════════════════════════════
 // ESCALAS (visualização)
 // ═══════════════════════════════════════════════
 function EscalasPage() {
@@ -5776,7 +6033,7 @@ function RotasListPage({ onOpenRoteirizacao }) {
 
   const enviarMontagem = async (id) => {
     const { error } = await sb.from('rotas').update({ status: 'montagem' }).eq('id', id);
-    if (error) toast(error.message, 'error'); else { toast('Rota enviada para montagem!', 'success'); load(); }
+    if (error) toast(error.message, 'error'); else { await atualizarTarefasDaRota(id, 'montagem'); toast('Rota enviada para montagem!', 'success'); load(); }
   };
 
   const cancelar = async (id) => {
@@ -6015,6 +6272,75 @@ function RotasPage() {
   const [mode, setMode] = useState('list'); // 'list' ou 'roteirizacao'
   if (mode === 'roteirizacao') return <RoteirizacaoPage onBack={() => setMode('list')} />;
   return <RotasListPage onOpenRoteirizacao={() => setMode('roteirizacao')} />;
+}
+
+
+// ─── Helper: atualiza status_logistica das tarefas vinculadas a uma rota ───
+// statusMap: { planejada:'roteirizado', montagem:'montagem', pronta:'pronta', em_transito:'em_rota', concluida:'concluido', entregue:'concluido' }
+const ROTA_TO_LOGISTICA = {
+  planejada:   'roteirizado',
+  montagem:    'montagem',
+  pronta:      'pronta',
+  em_transito: 'em_rota',
+  concluida:   'concluido',
+  entregue:    'concluido',
+};
+
+async function atualizarTarefasDaRota(rotaId, novoStatusLogistica) {
+  try {
+    // 1. Buscar remessas da rota (com destino_aplicador_id)
+    const { data: remessas } = await sb.from('remessas')
+      .select('id, observacao, destino_aplicador_id, aplicadores(cpf)')
+      .eq('rota_id', rotaId);
+    if (!remessas || remessas.length === 0) return;
+
+    // 2. Extrair códigos de tarefa da observação das remessas
+    const codigos = [...new Set(
+      remessas.flatMap(r => (String(r.observacao || '').match(/[A-Z0-9]+(?:\.[A-Z0-9&]+){2,}/g) || []))
+    )];
+
+    // 3. Buscar tarefa IDs pelos códigos
+    const tarefaIds = [];
+    if (codigos.length > 0) {
+      const BATCH = 100;
+      for (let i = 0; i < codigos.length; i += BATCH) {
+        const { data: ts } = await sb.from('tarefas')
+          .select('id')
+          .in('codigo', codigos.slice(i, i + BATCH));
+        (ts || []).forEach(t => tarefaIds.push(t.id));
+      }
+    }
+
+    // 4. Buscar IDs de tarefas via escalas vinculadas aos aplicadores desta rota
+    const cpfs = [...new Set(remessas.map(r => r.aplicadores?.cpf).filter(Boolean))];
+    if (cpfs.length > 0) {
+      const { data: esc } = await sb.from('escalas')
+        .select('tarefa_id')
+        .in('tutor_cpf', cpfs)
+        .not('tarefa_id', 'is', null);
+      (esc || []).forEach(e => { if (e.tarefa_id && !tarefaIds.includes(e.tarefa_id)) tarefaIds.push(e.tarefa_id); });
+    }
+
+    if (tarefaIds.length === 0) return;
+
+    // 5. Só avança o status (nunca regride)
+    const ORDEM = ['nao_roteirizado','roteirizado','montagem','pronta','em_rota','concluido'];
+    const novaOrdem = ORDEM.indexOf(novoStatusLogistica);
+    if (novaOrdem < 0) {
+      await sb.from('tarefas').update({ status_logistica: novoStatusLogistica }).in('id', tarefaIds);
+      return;
+    }
+    // Buscar status atual das tarefas para não regredir
+    const { data: tarefasAtuais } = await sb.from('tarefas').select('id, status_logistica').in('id', tarefaIds);
+    const idsParaAtualizar = (tarefasAtuais || [])
+      .filter(t => ORDEM.indexOf(String(t.status_logistica || 'nao_roteirizado')) < novaOrdem)
+      .map(t => t.id);
+    if (idsParaAtualizar.length > 0) {
+      await sb.from('tarefas').update({ status_logistica: novoStatusLogistica }).in('id', idsParaAtualizar);
+    }
+  } catch (e) {
+    console.warn('atualizarTarefasDaRota:', e.message);
+  }
 }
 
 function RoteirizacaoPage({ onBack }) {
@@ -6580,6 +6906,11 @@ function RoteirizacaoPage({ onBack }) {
         codigo_rastreio: ''
       });
       if (error) errs++;
+    }
+    // Atualizar status_logistica das tarefas vinculadas → roteirizado
+    const tarefaIdsRot = [...new Set(paradas.flatMap(p => (p.tarefas||[]).map(t => t.tarefa_id).filter(Boolean)))];
+    if (tarefaIdsRot.length > 0) {
+      await sb.from('tarefas').update({ status_logistica: 'roteirizado' }).in('id', tarefaIdsRot);
     }
     setSaving(false);
     if (errs > 0) toast('Rota '+rota.codigo+' criada com '+errs+' erros em remessas', 'error');
@@ -7553,6 +7884,7 @@ function MontagemPage() {
     const { error } = await sb.from('rotas').update({ status: 'pronta' }).eq('id', rotaSel.id);
     if (error) toast(error.message, 'error');
     else {
+      await atualizarTarefasDaRota(rotaSel.id, 'pronta');
       toast('Rota liberada para o motorista!', 'success');
       setRotaSel(null); setRemessas([]);
       sb.from('rotas').select('id, codigo, data_prevista, status, tipo, bases!rotas_base_origem_id_fkey(nome), profiles!rotas_motorista_id_fkey(nome), veiculo').in('status', ['montagem','planejada']).order('data_prevista').then(r => setRotas(r.data||[]));
@@ -8823,6 +9155,7 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
     const { error } = await sb.from('rotas').update(payload).eq('id', rota.id);
     if (error) { toast(error.message, 'error'); return; }
     await sb.from('remessas').update({ status: 'em_transito' }).eq('rota_id', rota.id).in('status', ['pronta','carregada','montagem']);
+    await atualizarTarefasDaRota(rota.id, 'em_rota');
     toast('Check-in registrado! Boa viagem! 🚀', 'success');
     setCheckinModal(false);
     iniciarTracking();
@@ -10852,6 +11185,7 @@ function App() {
       case 'importacao': return <ImportacaoPage />;
       case 'tarefas': return <TarefasPage profile={profile} />;
       case 'escalas': return <EscalasPage />;
+      case 'tarefas-escalas': return <TarefasEscalasPage profile={profile} />;
       case 'estoque': return <EstoquePage />;
       case 'demanda': return <DemandaOfertaPage profile={profile} />;
       case 'movimentacoes': return <MovimentacoesPage />;
