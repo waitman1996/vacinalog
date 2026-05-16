@@ -2235,7 +2235,19 @@ function ImportConsulta() {
         return true;
       };
 
-      const rows = preview.data;
+      // Deduplicar linhas do arquivo pelo código — quando o mesmo código aparece mais de uma vez
+      // (ex: planilha com status antigo e novo), manter apenas a última ocorrência (status mais recente)
+      const rowsDeduped = [];
+      const codigoVisto = {};
+      for (let ri = preview.data.length - 1; ri >= 0; ri--) {
+        const r = preview.data[ri];
+        const cod = String(r['Código'] || '').trim();
+        if (!cod || codigoVisto[cod]) continue;
+        codigoVisto[cod] = true;
+        rowsDeduped.unshift(r); // reinsere na ordem original
+      }
+
+      const rows = rowsDeduped;
       const batchSize = 50;
       let imported = 0, ignored = 0, atualizados = 0, abatimentos = 0;
 
@@ -2633,7 +2645,26 @@ function ImportTutores() {
         }
       }
 
-      // Segundo pass: inserir escalas
+      // Buscar escalas existentes para deduplicar por (codigo_tarefa + tutor_cpf)
+      toast('Verificando escalas existentes...', 'info');
+      const codigosTarefa = [...new Set(rows.map(r => String(r['Código da tarefa'] || '').trim()).filter(Boolean))];
+      const escalaExistMap = {}; // chave: `${codigo_tarefa}||${tutor_cpf}` → { id, status, ... }
+      const LOOKUP_BATCH_E = 100;
+      for (let i = 0; i < codigosTarefa.length; i += LOOKUP_BATCH_E) {
+        const { data: escExist } = await sb.from('escalas')
+          .select('id, codigo_tarefa, tutor_cpf, status, doses_necessarias')
+          .in('codigo_tarefa', codigosTarefa.slice(i, i + LOOKUP_BATCH_E));
+        (escExist || []).forEach(e => {
+          const key = `${e.codigo_tarefa}||${e.tutor_cpf}`;
+          // Se existir mais de uma (duplicata antiga), guarda a mais recente (maior id)
+          if (!escalaExistMap[key] || e.id > escalaExistMap[key].id) {
+            escalaExistMap[key] = e;
+          }
+        });
+      }
+
+      // Segundo pass: upsert escalas (update se existir, insert se nova)
+      let atualizados = 0;
       for (let i = 0; i < rows.length; i += batchSize) {
         const batch = rows.slice(i, i + batchSize).map(r => {
           const cpf = String(r['CPF'] || '').trim();
@@ -2647,7 +2678,7 @@ function ImportTutores() {
           const horaInicio = excelTimeToString(r['Horas - Início']);
           const horaTermino = excelTimeToString(r['Horas  - Término']);
 
-          return {
+          const payload = {
             codigo_tarefa: codigoTarefa,
             tarefa_id: tarefaMap[codigoTarefa] || null,
             aplicador_id: apMap[cpf] || null,
@@ -2673,26 +2704,66 @@ function ImportTutores() {
             status_original: statusRaw,
             importacao_id: imp.id,
           };
+
+          const key = `${codigoTarefa}||${cpf}`;
+          const existente = escalaExistMap[key];
+          return existente ? { ...payload, _existenteId: existente.id } : payload;
         });
 
-        const { data: inserted, error } = await sb.from('escalas').insert(batch).select('id');
-        if (error) {
-          console.error('Batch error escalas:', error.message, error.details);
-          ignored += batch.length;
-          if (ignored <= batch.length) toast(`Aviso lote ${Math.ceil(i/batchSize)+1}: ${error.message}`, 'error');
-        } else {
-          imported += (inserted?.length || batch.length);
+        const novos = batch.filter(r => !r._existenteId);
+        const paraAtualizar = batch.filter(r => r._existenteId);
+
+        // INSERT novas escalas
+        if (novos.length > 0) {
+          const { data: inserted, error } = await sb.from('escalas').insert(novos).select('id');
+          if (error) {
+            console.error('Batch error escalas insert:', error.message);
+            ignored += novos.length;
+          } else {
+            imported += (inserted?.length || novos.length);
+          }
         }
+
+        // UPDATE escalas existentes (status, doses_necessarias e demais campos)
+        for (const e of paraAtualizar) {
+          const { _existenteId, importacao_id, ...campos } = e;
+          const { error } = await sb.from('escalas')
+            .update({
+              status: campos.status,
+              status_original: campos.status_original,
+              doses_necessarias: campos.doses_necessarias,
+              tutor_nome: campos.tutor_nome,
+              aplicador_id: campos.aplicador_id,
+              tarefa_id: campos.tarefa_id,
+              base_id: campos.base_id,
+              base_nome: campos.base_nome,
+              vacina_id: campos.vacina_id,
+              tipo_vacina: campos.tipo_vacina,
+              data_inicio: campos.data_inicio,
+              data_termino: campos.data_termino,
+              hora_inicio: campos.hora_inicio,
+              hora_termino: campos.hora_termino,
+              ponto_partida: campos.ponto_partida,
+            })
+            .eq('id', _existenteId);
+          if (error) {
+            console.error('Erro ao atualizar escala:', error.message);
+            ignored++;
+          } else {
+            atualizados++;
+          }
+        }
+
         setProgress(Math.round(((i + batch.length) / rows.length) * 100));
       }
 
       await sb.from('importacoes').update({
-        registros_importados: imported, registros_ignorados: ignored,
-        detalhes: { aplicadores_criados: aplicadoresCriados }
+        registros_importados: imported + atualizados, registros_ignorados: ignored,
+        detalhes: { aplicadores_criados: aplicadoresCriados, novas: imported, atualizadas: atualizados }
       }).eq('id', imp.id);
 
-      setResult({ imported, ignored, total: rows.length, aplicadoresCriados });
-      toast(`Importação concluída! ${imported} escalas, ${aplicadoresCriados} aplicadores criados.`, 'success');
+      setResult({ imported, atualizados, ignored, total: rows.length, aplicadoresCriados });
+      toast(`Importação concluída! ${imported} novas · ${atualizados} atualizadas · ${aplicadoresCriados} aplicadores criados.`, 'success');
     } catch (err) {
       toast('Erro na importação: ' + err.message, 'error');
     } finally {
@@ -2745,7 +2816,7 @@ function ImportTutores() {
             <div style={{padding:14,background:'var(--success-bg)',borderRadius:'var(--radius-sm)',border:'1px solid rgba(16,185,129,0.2)',marginBottom:12}}>
               <div style={{fontSize:14,fontWeight:600,color:'var(--success)'}}>✓ Importação concluída</div>
               <div style={{fontSize:13,color:'var(--text-secondary)',marginTop:4}}>
-                {result.imported} escalas importadas · {result.aplicadoresCriados} aplicadores criados · {result.ignored} com erro
+                {result.imported} novas · {result.atualizados || 0} atualizadas · {result.aplicadoresCriados} aplicadores criados · {result.ignored} com erro
               </div>
             </div>
           )}
