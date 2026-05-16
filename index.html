@@ -677,6 +677,7 @@ function Sidebar({ profile, currentPage, onNavigate, open, onClose, collapsed, o
       { id: 'tarefas-escalas', icon: '🔗', label: 'Tarefas × Escalas' },
       { id: 'demanda', icon: '⚖️', label: 'Demanda vs Oferta' },
       { id: 'previsao', icon: '🔮', label: 'Previsão de Demanda' },
+      { id: 'relatorio', icon: '📊', label: 'Relatório Executivo' },
       { section: 'Logística' },
       { id: 'rotas', icon: '🚚', label: 'Rotas' },
       { id: 'veiculos', icon: '🚗', label: 'Veículos' },
@@ -697,6 +698,7 @@ function Sidebar({ profile, currentPage, onNavigate, open, onClose, collapsed, o
       { id: 'tarefas-escalas', icon: '🔗', label: 'Tarefas × Escalas' },
       { id: 'demanda', icon: '⚖️', label: 'Demanda vs Oferta' },
       { id: 'previsao', icon: '🔮', label: 'Previsão de Demanda' },
+      { id: 'relatorio', icon: '📊', label: 'Relatório Executivo' },
       { id: 'rotas', icon: '🚚', label: 'Rotas' },
       { id: 'transferencia', icon: '↔️', label: 'Transferência' },
       { id: 'aumentos-doses', icon: '➕', label: 'Aumento de Doses' },
@@ -4246,6 +4248,499 @@ function TarefasEscalasPage({ profile }) {
 // ═══════════════════════════════════════════════
 // PREVISÃO DE DEMANDA
 // ═══════════════════════════════════════════════
+// ═══════════════════════════════════════════════
+// RELATÓRIO EXECUTIVO
+// ═══════════════════════════════════════════════
+function RelatorioExecutivoPage() {
+  const [loading, setLoading] = useState(false);
+  const [gerando, setGerando] = useState(false);
+  const [dados, setDados] = useState(null);
+  const [filtros, setFiltros] = useState({
+    dataInicio: '',
+    dataFim: '',
+    vacina: '',
+    base: '',
+    uf: '',
+  });
+  const [vacinas, setVacinas] = useState([]);
+  const [bases, setBases] = useState([]);
+  const [ufs, setUfs] = useState([]);
+  const toast = useContext(ToastContext);
+
+  useEffect(() => {
+    // Carrega opções de filtro
+    Promise.all([
+      sb.from('vacinas').select('id,nome').order('nome'),
+      sb.from('bases').select('id,nome,uf').order('nome'),
+    ]).then(([v, b]) => {
+      setVacinas(v.data || []);
+      setBases(b.data || []);
+      const ufsUnicas = [...new Set((b.data || []).map(x => x.uf).filter(Boolean))].sort();
+      setUfs(ufsUnicas);
+    });
+  }, []);
+
+  const normVac = (v) => {
+    const s = String(v || '').trim().toLowerCase();
+    if (!s || s === 'gripe' || s.includes('tetrav')) return 'Influenza Tetravalente';
+    if (s.includes('triv') || s === 'gripe trivalente') return 'Influenza Trivalente';
+    if (s.includes('pneumo')) return 'Pneumo15';
+    if (s.includes('covid') || s.includes('corona')) return 'COVID-19';
+    if (s.includes('febre amarela')) return 'Febre Amarela';
+    if (s.includes('hepat') && s.includes('a')) return 'Hepatite A';
+    if (s.includes('hepat') && s.includes('b')) return 'Hepatite B';
+    return String(v || '').trim();
+  };
+
+  const gerarRelatorio = async () => {
+    setLoading(true);
+    setDados(null);
+    try {
+      // ── Fetch tarefas ────────────────────────────────────────────────
+      const allTarefas = [];
+      const pageSize = 1000;
+      for (let from = 0; ; from += pageSize) {
+        let q = sb.from('tarefas')
+          .select('id,codigo,cliente,ponto_partida,cidade_campanha,uf_campanha,data_inicio,doses_previstas,doses_aplicadas,status,status_logistica,vacina,vacina_id,base_nome')
+          .order('data_inicio', { ascending: true })
+          .range(from, from + pageSize - 1);
+        if (filtros.dataInicio) q = q.gte('data_inicio', filtros.dataInicio);
+        if (filtros.dataFim) q = q.lte('data_inicio', filtros.dataFim);
+        if (filtros.uf) q = q.eq('uf_campanha', filtros.uf);
+        if (filtros.base) q = q.eq('base_nome', filtros.base);
+        const { data, error } = await q;
+        if (error) throw error;
+        if (!data || data.length === 0) break;
+        allTarefas.push(...data);
+        if (data.length < pageSize) break;
+      }
+
+      // Filtrar por vacina (client-side, nome normalizado)
+      const vacinaFiltroNome = filtros.vacina
+        ? (vacinas.find(v => v.id === filtros.vacina)?.nome || '')
+        : '';
+      const tarefas = filtros.vacina
+        ? allTarefas.filter(t => normVac(t.vacina) === vacinaFiltroNome)
+        : allTarefas;
+
+      // ── Fetch escalas para perdas/danos ──────────────────────────────
+      const allEscalas = [];
+      for (let from = 0; ; from += pageSize) {
+        let q = sb.from('escalas')
+          .select('id,codigo_tarefa,tutor_nome,tutor_cpf,doses_necessarias,doses_aplicadas,doses_perdidas,doses_danificadas,vacina_id,tipo_vacina,base_nome,data_inicio')
+          .order('data_inicio', { ascending: true })
+          .range(from, from + pageSize - 1);
+        if (filtros.dataInicio) q = q.gte('data_inicio', filtros.dataInicio);
+        if (filtros.dataFim) q = q.lte('data_inicio', filtros.dataFim);
+        if (filtros.base) q = q.eq('base_nome', filtros.base);
+        const { data } = await q;
+        if (!data || data.length === 0) break;
+        allEscalas.push(...data);
+        if (data.length < pageSize) break;
+      }
+      const escalas = filtros.vacina
+        ? allEscalas.filter(e => normVac(e.tipo_vacina) === vacinaFiltroNome)
+        : allEscalas;
+
+      // ── Fetch rotas/remessas para status logístico ───────────────────
+      const { data: rotasData } = await sb.from('rotas')
+        .select('id,codigo,status,data_prevista,checkin_at,checkout_at,bases!rotas_base_origem_id_fkey(nome),profiles!rotas_motorista_id_fkey(nome),remessas(id,status,observacao,remessa_itens(quantidade))')
+        .order('data_prevista', { ascending: false });
+
+      // ── KPIs GERAIS ──────────────────────────────────────────────────
+      const totalPrevistas = tarefas.reduce((s, t) => s + Number(t.doses_previstas || 0), 0);
+      const totalAplicadas = tarefas.reduce((s, t) => s + Number(t.doses_aplicadas || 0), 0);
+      const totalPerdidas = escalas.reduce((s, e) => s + Number(e.doses_perdidas || 0), 0);
+      const totalDanificadas = escalas.reduce((s, e) => s + Number(e.doses_danificadas || 0), 0);
+      const adesao = totalPrevistas > 0 ? (totalAplicadas / totalPrevistas * 100) : 0;
+      const totalTarefas = tarefas.length;
+      const concluidas = tarefas.filter(t => ['concluido','entregue'].includes(t.status_logistica)).length;
+      const rotasConcluidas = (rotasData || []).filter(r => r.status === 'concluida').length;
+      const rotasTotal = (rotasData || []).length;
+
+      // ── POR CLIENTE ──────────────────────────────────────────────────
+      const porCliente = {};
+      tarefas.forEach(t => {
+        const k = t.cliente || 'Sem cliente';
+        if (!porCliente[k]) porCliente[k] = { cliente: k, uf: t.uf_campanha || '—', cidade: t.cidade_campanha || '—', base: t.base_nome || '—', tarefas: 0, previstas: 0, aplicadas: 0, concluidas: 0 };
+        porCliente[k].tarefas++;
+        porCliente[k].previstas += Number(t.doses_previstas || 0);
+        porCliente[k].aplicadas += Number(t.doses_aplicadas || 0);
+        if (['concluido','entregue'].includes(t.status_logistica)) porCliente[k].concluidas++;
+      });
+      const clienteRows = Object.values(porCliente).sort((a, b) => b.previstas - a.previstas);
+
+      // ── POR BASE ─────────────────────────────────────────────────────
+      const porBase = {};
+      tarefas.forEach(t => {
+        const k = t.base_nome || 'Sem base';
+        if (!porBase[k]) porBase[k] = { base: k, tarefas: 0, previstas: 0, aplicadas: 0, concluidas: 0 };
+        porBase[k].tarefas++;
+        porBase[k].previstas += Number(t.doses_previstas || 0);
+        porBase[k].aplicadas += Number(t.doses_aplicadas || 0);
+        if (['concluido','entregue'].includes(t.status_logistica)) porBase[k].concluidas++;
+      });
+      escalas.forEach(e => {
+        const k = e.base_nome || 'Sem base';
+        if (!porBase[k]) porBase[k] = { base: k, tarefas: 0, previstas: 0, aplicadas: 0, concluidas: 0, perdidas: 0, danificadas: 0 };
+        if (!porBase[k].perdidas) porBase[k].perdidas = 0;
+        if (!porBase[k].danificadas) porBase[k].danificadas = 0;
+        porBase[k].perdidas += Number(e.doses_perdidas || 0);
+        porBase[k].danificadas += Number(e.doses_danificadas || 0);
+      });
+      const baseRows = Object.values(porBase).sort((a, b) => b.previstas - a.previstas);
+
+      // ── POR VACINA ───────────────────────────────────────────────────
+      const porVacina = {};
+      tarefas.forEach(t => {
+        const k = normVac(t.vacina) || 'Sem vacina';
+        if (!porVacina[k]) porVacina[k] = { vacina: k, tarefas: 0, previstas: 0, aplicadas: 0 };
+        porVacina[k].tarefas++;
+        porVacina[k].previstas += Number(t.doses_previstas || 0);
+        porVacina[k].aplicadas += Number(t.doses_aplicadas || 0);
+      });
+      escalas.forEach(e => {
+        const k = normVac(e.tipo_vacina) || 'Sem vacina';
+        if (!porVacina[k]) porVacina[k] = { vacina: k, tarefas: 0, previstas: 0, aplicadas: 0, perdidas: 0, danificadas: 0 };
+        if (!porVacina[k].perdidas) porVacina[k].perdidas = 0;
+        if (!porVacina[k].danificadas) porVacina[k].danificadas = 0;
+        porVacina[k].perdidas += Number(e.doses_perdidas || 0);
+        porVacina[k].danificadas += Number(e.doses_danificadas || 0);
+      });
+      const vacinaRows = Object.values(porVacina).sort((a, b) => b.previstas - a.previstas);
+
+      // ── POR UF ───────────────────────────────────────────────────────
+      const porUF = {};
+      tarefas.forEach(t => {
+        const k = t.uf_campanha || 'N/A';
+        if (!porUF[k]) porUF[k] = { uf: k, tarefas: 0, previstas: 0, aplicadas: 0 };
+        porUF[k].tarefas++;
+        porUF[k].previstas += Number(t.doses_previstas || 0);
+        porUF[k].aplicadas += Number(t.doses_aplicadas || 0);
+      });
+      const ufRows = Object.values(porUF).sort((a, b) => b.previstas - a.previstas);
+
+      // ── TAREFAS DETALHADAS ───────────────────────────────────────────
+      const tarefasDetalhe = tarefas.map(t => ({
+        codigo: t.codigo || '—',
+        cliente: t.cliente || '—',
+        cidade: t.cidade_campanha || '—',
+        uf: t.uf_campanha || '—',
+        base: t.base_nome || '—',
+        data: t.data_inicio ? new Date(t.data_inicio + 'T12:00:00').toLocaleDateString('pt-BR') : '—',
+        vacina: normVac(t.vacina) || '—',
+        previstas: Number(t.doses_previstas || 0),
+        aplicadas: Number(t.doses_aplicadas || 0),
+        adesao: t.doses_previstas > 0 ? (t.doses_aplicadas / t.doses_previstas * 100).toFixed(1) + '%' : '—',
+        status: t.status || '—',
+        logistica: t.status_logistica || 'nao_roteirizado',
+      }));
+
+      setDados({
+        geradoEm: new Date().toLocaleString('pt-BR'),
+        periodo: {
+          inicio: filtros.dataInicio ? new Date(filtros.dataInicio + 'T12:00:00').toLocaleDateString('pt-BR') : 'Início da campanha',
+          fim: filtros.dataFim ? new Date(filtros.dataFim + 'T12:00:00').toLocaleDateString('pt-BR') : 'Hoje',
+        },
+        filtros: { ...filtros, vacinaNome: vacinaFiltroNome },
+        kpis: { totalPrevistas, totalAplicadas, totalPerdidas, totalDanificadas, adesao, totalTarefas, concluidas, rotasConcluidas, rotasTotal },
+        clienteRows, baseRows, vacinaRows, ufRows, tarefasDetalhe,
+      });
+    } catch(err) {
+      toast('Erro ao gerar relatório: ' + err.message, 'error');
+    }
+    setLoading(false);
+  };
+
+  const exportarXLSX = () => {
+    if (!dados) return;
+    setGerando(true);
+    try {
+      const wb = XLSX.utils.book_new();
+      const agora = dados.geradoEm;
+      const fmt = (n) => Number(n || 0);
+      const pct = (aplic, prev) => prev > 0 ? Number((aplic / prev * 100).toFixed(1)) : 0;
+
+      // ── Aba 1: Resumo Executivo ──────────────────────────────────────
+      const resumo = [
+        ['RELATÓRIO EXECUTIVO — VacinaLog / S&A Imunizações'],
+        ['Gerado em:', agora],
+        ['Período:', dados.periodo.inicio + ' a ' + dados.periodo.fim],
+        dados.filtros.vacinaNome ? ['Vacina:', dados.filtros.vacinaNome] : ['Vacina:', 'Todas'],
+        dados.filtros.base ? ['Base:', dados.filtros.base] : ['Base:', 'Todas'],
+        dados.filtros.uf ? ['UF:', dados.filtros.uf] : ['UF:', 'Todas'],
+        [],
+        ['KPI', 'Valor'],
+        ['Doses Previstas', fmt(dados.kpis.totalPrevistas)],
+        ['Doses Aplicadas', fmt(dados.kpis.totalAplicadas)],
+        ['% Adesão', pct(dados.kpis.totalAplicadas, dados.kpis.totalPrevistas)],
+        ['Doses Perdidas', fmt(dados.kpis.totalPerdidas)],
+        ['Doses Danificadas', fmt(dados.kpis.totalDanificadas)],
+        ['Total de Tarefas', fmt(dados.kpis.totalTarefas)],
+        ['Tarefas Concluídas', fmt(dados.kpis.concluidas)],
+        ['% Tarefas Concluídas', pct(dados.kpis.concluidas, dados.kpis.totalTarefas)],
+        ['Total de Rotas', fmt(dados.kpis.rotasTotal)],
+        ['Rotas Concluídas', fmt(dados.kpis.rotasConcluidas)],
+        [],
+        ['Por Vacina'],
+        ['Vacina', 'Tarefas', 'Doses Previstas', 'Doses Aplicadas', '% Adesão', 'Perdidas', 'Danificadas'],
+        ...dados.vacinaRows.map(r => [r.vacina, fmt(r.tarefas), fmt(r.previstas), fmt(r.aplicadas), pct(r.aplicadas, r.previstas), fmt(r.perdidas), fmt(r.danificadas)]),
+      ];
+      const wsResumo = XLSX.utils.aoa_to_sheet(resumo);
+      wsResumo['!cols'] = [{ wch: 28 }, { wch: 18 }, { wch: 16 }, { wch: 16 }, { wch: 12 }, { wch: 12 }, { wch: 14 }];
+      XLSX.utils.book_append_sheet(wb, wsResumo, 'Resumo Executivo');
+
+      // ── Aba 2: Por Cliente ───────────────────────────────────────────
+      const headerCliente = ['Cliente', 'Cidade', 'UF', 'Base', 'Tarefas', 'Doses Previstas', 'Doses Aplicadas', '% Adesão', 'Tarefas Concluídas', '% Conclusão'];
+      const wsCliente = XLSX.utils.aoa_to_sheet([
+        headerCliente,
+        ...dados.clienteRows.map(r => [
+          r.cliente, r.cidade, r.uf, r.base,
+          fmt(r.tarefas), fmt(r.previstas), fmt(r.aplicadas),
+          pct(r.aplicadas, r.previstas),
+          fmt(r.concluidas), pct(r.concluidas, r.tarefas),
+        ])
+      ]);
+      wsCliente['!cols'] = [{ wch: 32 }, { wch: 18 }, { wch: 6 }, { wch: 20 }, { wch: 10 }, { wch: 16 }, { wch: 16 }, { wch: 12 }, { wch: 18 }, { wch: 13 }];
+      XLSX.utils.book_append_sheet(wb, wsCliente, 'Por Cliente');
+
+      // ── Aba 3: Por Base ──────────────────────────────────────────────
+      const headerBase = ['Base', 'Tarefas', 'Doses Previstas', 'Doses Aplicadas', '% Adesão', 'Perdidas', 'Danificadas', 'Tarefas Concluídas'];
+      const wsBase = XLSX.utils.aoa_to_sheet([
+        headerBase,
+        ...dados.baseRows.map(r => [
+          r.base, fmt(r.tarefas), fmt(r.previstas), fmt(r.aplicadas),
+          pct(r.aplicadas, r.previstas), fmt(r.perdidas || 0), fmt(r.danificadas || 0), fmt(r.concluidas),
+        ])
+      ]);
+      wsBase['!cols'] = [{ wch: 22 }, { wch: 10 }, { wch: 16 }, { wch: 16 }, { wch: 12 }, { wch: 12 }, { wch: 14 }, { wch: 18 }];
+      XLSX.utils.book_append_sheet(wb, wsBase, 'Por Base');
+
+      // ── Aba 4: Por UF ────────────────────────────────────────────────
+      const headerUF = ['UF', 'Tarefas', 'Doses Previstas', 'Doses Aplicadas', '% Adesão'];
+      const wsUF = XLSX.utils.aoa_to_sheet([
+        headerUF,
+        ...dados.ufRows.map(r => [r.uf, fmt(r.tarefas), fmt(r.previstas), fmt(r.aplicadas), pct(r.aplicadas, r.previstas)])
+      ]);
+      wsUF['!cols'] = [{ wch: 8 }, { wch: 10 }, { wch: 16 }, { wch: 16 }, { wch: 12 }];
+      XLSX.utils.book_append_sheet(wb, wsUF, 'Por UF');
+
+      // ── Aba 5: Tarefas Detalhadas ────────────────────────────────────
+      const headerTarefas = ['Código', 'Cliente', 'Cidade', 'UF', 'Base', 'Data', 'Vacina', 'Doses Prev.', 'Doses Aplic.', '% Adesão', 'Status', 'Status Logística'];
+      const wsTarefas = XLSX.utils.aoa_to_sheet([
+        headerTarefas,
+        ...dados.tarefasDetalhe.map(t => [t.codigo, t.cliente, t.cidade, t.uf, t.base, t.data, t.vacina, t.previstas, t.aplicadas, t.adesao, t.status, t.logistica])
+      ]);
+      wsTarefas['!cols'] = [{ wch: 28 }, { wch: 30 }, { wch: 18 }, { wch: 6 }, { wch: 18 }, { wch: 12 }, { wch: 22 }, { wch: 12 }, { wch: 12 }, { wch: 10 }, { wch: 14 }, { wch: 18 }];
+      XLSX.utils.book_append_sheet(wb, wsTarefas, 'Tarefas Detalhadas');
+
+      const dataStr = new Date().toISOString().slice(0, 10);
+      XLSX.writeFile(wb, `relatorio_vacinalog_${dataStr}.xlsx`);
+      toast('Relatório exportado com sucesso!', 'success');
+    } catch(err) {
+      toast('Erro ao exportar: ' + err.message, 'error');
+    }
+    setGerando(false);
+  };
+
+  const fmt = (n) => Number(n || 0).toLocaleString('pt-BR');
+  const pctFmt = (aplic, prev) => prev > 0 ? (aplic / prev * 100).toFixed(1).replace('.', ',') + '%' : '—';
+  const cor = (pct) => pct >= 80 ? 'var(--success)' : pct >= 60 ? 'var(--warning)' : 'var(--danger)';
+
+  return (
+    <div>
+      <div className="page-header">
+        <div>
+          <div className="page-title">Relatório Executivo</div>
+          <div className="page-subtitle">KPIs por cliente, base, UF e vacina · exportação XLSX com 5 abas</div>
+        </div>
+        {dados && (
+          <button className="btn btn-primary" onClick={exportarXLSX} disabled={gerando}>
+            {gerando ? 'Gerando...' : '⬇️ Exportar XLSX'}
+          </button>
+        )}
+      </div>
+
+      {/* Filtros */}
+      <div className="card" style={{marginBottom:16,padding:14}}>
+        <div style={{display:'flex',gap:12,flexWrap:'wrap',alignItems:'flex-end'}}>
+          <div className="form-group">
+            <label className="form-label">Data inicial</label>
+            <input className="form-input sm" type="date" onClick={openDatePicker} onFocus={openDatePicker} value={filtros.dataInicio} onChange={e=>setFiltros(f=>({...f,dataInicio:e.target.value}))} />
+          </div>
+          <div className="form-group">
+            <label className="form-label">Data final</label>
+            <input className="form-input sm" type="date" onClick={openDatePicker} onFocus={openDatePicker} value={filtros.dataFim} onChange={e=>setFiltros(f=>({...f,dataFim:e.target.value}))} />
+          </div>
+          <div className="form-group" style={{minWidth:180}}>
+            <label className="form-label">Vacina</label>
+            <select className="form-select" value={filtros.vacina} onChange={e=>setFiltros(f=>({...f,vacina:e.target.value}))}>
+              <option value="">Todas</option>
+              {vacinas.map(v=><option key={v.id} value={v.id}>{v.nome}</option>)}
+            </select>
+          </div>
+          <div className="form-group" style={{minWidth:160}}>
+            <label className="form-label">Base</label>
+            <select className="form-select" value={filtros.base} onChange={e=>setFiltros(f=>({...f,base:e.target.value}))}>
+              <option value="">Todas</option>
+              {bases.map(b=><option key={b.id} value={b.nome}>{b.nome}</option>)}
+            </select>
+          </div>
+          <div className="form-group">
+            <label className="form-label">UF</label>
+            <select className="form-select" style={{width:90}} value={filtros.uf} onChange={e=>setFiltros(f=>({...f,uf:e.target.value}))}>
+              <option value="">Todas</option>
+              {ufs.map(u=><option key={u} value={u}>{u}</option>)}
+            </select>
+          </div>
+          <button className="btn btn-primary" onClick={gerarRelatorio} disabled={loading} style={{alignSelf:'flex-end',marginBottom:1}}>
+            {loading ? '⏳ Gerando...' : '▶ Gerar Relatório'}
+          </button>
+          <button className="btn btn-secondary btn-sm" style={{alignSelf:'flex-end',marginBottom:1}} onClick={()=>setFiltros({dataInicio:'',dataFim:'',vacina:'',base:'',uf:''})}>Limpar</button>
+        </div>
+      </div>
+
+      {loading && (
+        <div className="card" style={{padding:40,textAlign:'center',color:'var(--text-muted)'}}>
+          <div style={{fontSize:24,marginBottom:8}}>⏳</div>
+          <div>Consultando dados... Isso pode levar alguns segundos.</div>
+        </div>
+      )}
+
+      {dados && !loading && (
+        <>
+          {/* Cabeçalho do relatório */}
+          <div style={{marginBottom:16,padding:'10px 14px',background:'var(--bg-input)',borderRadius:'var(--radius-sm)',border:'1px solid var(--border)',display:'flex',justifyContent:'space-between',alignItems:'center',flexWrap:'wrap',gap:8}}>
+            <div>
+              <div style={{fontSize:12,fontWeight:700,color:'var(--text-primary)'}}>S&A Imunizações — Relatório Executivo</div>
+              <div style={{fontSize:11,color:'var(--text-muted)'}}>
+                Período: {dados.periodo.inicio} a {dados.periodo.fim}
+                {dados.filtros.vacinaNome && <span> · Vacina: {dados.filtros.vacinaNome}</span>}
+                {dados.filtros.base && <span> · Base: {dados.filtros.base}</span>}
+                {dados.filtros.uf && <span> · UF: {dados.filtros.uf}</span>}
+              </div>
+            </div>
+            <div style={{fontSize:11,color:'var(--text-muted)'}}>Gerado em {dados.geradoEm}</div>
+          </div>
+
+          {/* KPIs */}
+          <div className="kpi-grid-compact" style={{marginBottom:16}}>
+            {[
+              { icon:'📋', val: fmt(dados.kpis.totalPrevistas), label:'Doses Previstas', color:'var(--accent)' },
+              { icon:'✅', val: fmt(dados.kpis.totalAplicadas), label:'Doses Aplicadas', color:'var(--success)' },
+              { icon:'📈', val: dados.kpis.adesao.toFixed(1).replace('.',',')+'%', label:'% Adesão', color: cor(dados.kpis.adesao) },
+              { icon:'⚠️', val: fmt(dados.kpis.totalPerdidas), label:'Doses Perdidas', color:'var(--warning)' },
+              { icon:'🚫', val: fmt(dados.kpis.totalDanificadas), label:'Doses Danificadas', color:'var(--danger)' },
+              { icon:'📅', val: fmt(dados.kpis.totalTarefas), label:'Tarefas', color:'var(--text-primary)' },
+              { icon:'🏁', val: fmt(dados.kpis.concluidas), label:'Tarefas Concluídas', color:'var(--success)' },
+              { icon:'🚚', val: `${fmt(dados.kpis.rotasConcluidas)}/${fmt(dados.kpis.rotasTotal)}`, label:'Rotas Concluídas', color:'var(--accent)' },
+            ].map(k => (
+              <div key={k.label} className="kpi-card-compact">
+                <div className="kpi-icon">{k.icon}</div>
+                <div className="kpi-value" style={{color:k.color,fontSize:20}}>{k.val}</div>
+                <div className="kpi-label">{k.label}</div>
+              </div>
+            ))}
+          </div>
+
+          {/* Por Vacina */}
+          <div className="card" style={{marginBottom:16}}>
+            <div className="card-header"><div className="card-title">💉 Por Vacina</div></div>
+            <div className="table-wrap">
+              <table>
+                <thead><tr><th>Vacina</th><th style={{textAlign:'right'}}>Tarefas</th><th style={{textAlign:'right'}}>Previstas</th><th style={{textAlign:'right'}}>Aplicadas</th><th style={{textAlign:'right'}}>% Adesão</th><th style={{textAlign:'right'}}>Perdidas</th><th style={{textAlign:'right'}}>Danificadas</th></tr></thead>
+                <tbody>
+                  {dados.vacinaRows.map(r => (
+                    <tr key={r.vacina}>
+                      <td style={{fontWeight:600}}>{r.vacina}</td>
+                      <td className="mono" style={{textAlign:'right'}}>{fmt(r.tarefas)}</td>
+                      <td className="mono" style={{textAlign:'right'}}>{fmt(r.previstas)}</td>
+                      <td className="mono" style={{textAlign:'right',color:'var(--success)'}}>{fmt(r.aplicadas)}</td>
+                      <td className="mono" style={{textAlign:'right',color:cor(r.previstas>0?r.aplicadas/r.previstas*100:0),fontWeight:700}}>{pctFmt(r.aplicadas,r.previstas)}</td>
+                      <td className="mono" style={{textAlign:'right',color:r.perdidas>0?'var(--warning)':'inherit'}}>{fmt(r.perdidas)}</td>
+                      <td className="mono" style={{textAlign:'right',color:r.danificadas>0?'var(--danger)':'inherit'}}>{fmt(r.danificadas)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* Grid: Por Base + Por UF */}
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16,marginBottom:16}}>
+            <div className="card">
+              <div className="card-header"><div className="card-title">🏢 Por Base</div></div>
+              <div className="table-wrap">
+                <table>
+                  <thead><tr><th>Base</th><th style={{textAlign:'right'}}>Prev.</th><th style={{textAlign:'right'}}>Aplic.</th><th style={{textAlign:'right'}}>Adesão</th></tr></thead>
+                  <tbody>
+                    {dados.baseRows.map(r => (
+                      <tr key={r.base}>
+                        <td style={{fontWeight:600,fontSize:12}}>{r.base}</td>
+                        <td className="mono" style={{textAlign:'right',fontSize:12}}>{fmt(r.previstas)}</td>
+                        <td className="mono" style={{textAlign:'right',fontSize:12,color:'var(--success)'}}>{fmt(r.aplicadas)}</td>
+                        <td className="mono" style={{textAlign:'right',fontSize:12,color:cor(r.previstas>0?r.aplicadas/r.previstas*100:0),fontWeight:700}}>{pctFmt(r.aplicadas,r.previstas)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            <div className="card">
+              <div className="card-header"><div className="card-title">🗺️ Por UF</div></div>
+              <div className="table-wrap">
+                <table>
+                  <thead><tr><th>UF</th><th style={{textAlign:'right'}}>Tarefas</th><th style={{textAlign:'right'}}>Prev.</th><th style={{textAlign:'right'}}>Aplic.</th><th style={{textAlign:'right'}}>Adesão</th></tr></thead>
+                  <tbody>
+                    {dados.ufRows.map(r => (
+                      <tr key={r.uf}>
+                        <td className="mono" style={{fontWeight:700}}>{r.uf}</td>
+                        <td className="mono" style={{textAlign:'right',fontSize:12}}>{fmt(r.tarefas)}</td>
+                        <td className="mono" style={{textAlign:'right',fontSize:12}}>{fmt(r.previstas)}</td>
+                        <td className="mono" style={{textAlign:'right',fontSize:12,color:'var(--success)'}}>{fmt(r.aplicadas)}</td>
+                        <td className="mono" style={{textAlign:'right',fontSize:12,color:cor(r.previstas>0?r.aplicadas/r.previstas*100:0),fontWeight:700}}>{pctFmt(r.aplicadas,r.previstas)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          {/* Por Cliente */}
+          <div className="card">
+            <div className="card-header">
+              <div className="card-title">🏭 Por Cliente ({dados.clienteRows.length})</div>
+              <div style={{fontSize:11,color:'var(--text-muted)'}}>ordenado por doses previstas</div>
+            </div>
+            <div className="table-wrap">
+              <table>
+                <thead><tr><th>Cliente</th><th>Cidade</th><th>UF</th><th>Base</th><th style={{textAlign:'right'}}>Tarefas</th><th style={{textAlign:'right'}}>Previstas</th><th style={{textAlign:'right'}}>Aplicadas</th><th style={{textAlign:'right'}}>% Adesão</th><th style={{textAlign:'right'}}>Concluídas</th></tr></thead>
+                <tbody>
+                  {dados.clienteRows.map(r => (
+                    <tr key={r.cliente}>
+                      <td style={{fontWeight:600,maxWidth:200,overflow:'hidden',textOverflow:'ellipsis'}}>{r.cliente}</td>
+                      <td style={{fontSize:11}}>{r.cidade}</td>
+                      <td className="mono" style={{fontSize:11}}>{r.uf}</td>
+                      <td style={{fontSize:11}}>{r.base}</td>
+                      <td className="mono" style={{textAlign:'right'}}>{fmt(r.tarefas)}</td>
+                      <td className="mono" style={{textAlign:'right'}}>{fmt(r.previstas)}</td>
+                      <td className="mono" style={{textAlign:'right',color:'var(--success)'}}>{fmt(r.aplicadas)}</td>
+                      <td className="mono" style={{textAlign:'right',color:cor(r.previstas>0?r.aplicadas/r.previstas*100:0),fontWeight:700}}>{pctFmt(r.aplicadas,r.previstas)}</td>
+                      <td className="mono" style={{textAlign:'right'}}>{fmt(r.concluidas)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+
 function PrevisaoDemandaPage() {
   const [loading, setLoading] = useState(true);
   const [semanas, setSemanas] = useState([]);
@@ -12468,6 +12963,7 @@ function App() {
       case 'escalas': return <EscalasPage />;
       case 'tarefas-escalas': return <TarefasEscalasPage profile={profile} />;
       case 'previsao': return <PrevisaoDemandaPage />;
+      case 'relatorio': return <RelatorioExecutivoPage />;
       case 'estoque': return <EstoquePage />;
       case 'demanda': return <DemandaOfertaPage profile={profile} />;
       case 'movimentacoes': return <MovimentacoesPage />;
