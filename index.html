@@ -5175,6 +5175,7 @@ function MonitoramentoAoVivo({ onClose }) {
   useEffect(() => {
     const iniciar = async () => {
       setLoading(true);
+
       try {
         if (!window.L) {
           toast('Mapa não carregou. Verifique a internet.', 'error');
@@ -5185,10 +5186,12 @@ function MonitoramentoAoVivo({ onClose }) {
         if (!mapInstanceRef.current && mapRef.current) {
           const map = L.map(mapRef.current).setView([-23.5505, -46.6333], 6);
           mapInstanceRef.current = map;
+
           L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
             maxZoom: 19,
-            attribution: '&copy; OpenStreetMap'
+            attribution: 'OpenStreetMap'
           }).addTo(map);
+
           setTimeout(() => map.invalidateSize(), 250);
         }
 
@@ -5197,6 +5200,7 @@ function MonitoramentoAoVivo({ onClose }) {
       } catch (err) {
         toast('Erro no mapa: ' + (err.message || err), 'error');
       }
+
       setLoading(false);
     };
 
@@ -5484,6 +5488,96 @@ function RotasListPage({ onOpenRoteirizacao }) {
   };
   useEffect(() => { load(); }, [statusFilter]);
 
+
+  const abrirDetalheSeguro = async (rota) => {
+    try {
+      if (!rota || !rota.id) {
+        toast('Rota inválida.', 'error');
+        return;
+      }
+
+      const { data, error } = await sb.from('rotas')
+        .select('id,codigo,data_prevista,status,veiculo,bases!rotas_base_origem_id_fkey(nome,cidade,uf),profiles!rotas_motorista_id_fkey(nome),remessas(id,status,ordem_entrega,destino_tipo,observacao,bases(nome,cidade,uf),aplicadores(nome,cpf,cidade,uf),remessa_itens(quantidade,vacinas(nome,lote)))')
+        .eq('id', rota.id)
+        .single();
+
+      if (error) {
+        toast('Erro ao carregar rota: ' + error.message, 'error');
+        return;
+      }
+
+      const r = data || rota;
+      const remessas = (r.remessas || []).slice().sort(function(a,b){
+        return Number(a.ordem_entrega || 0) - Number(b.ordem_entrega || 0);
+      });
+
+      const esc = function(v) {
+        return String(v == null ? '' : v).replace(/[&<>"']/g, function(ch) {
+          return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[ch];
+        });
+      };
+
+      const dataRota = r.data_prevista ? new Date(r.data_prevista + 'T12:00:00').toLocaleDateString('pt-BR') : '—';
+      const motorista = (r.profiles && r.profiles.nome) ? r.profiles.nome : '—';
+      const base = (r.bases && r.bases.nome) ? r.bases.nome : '—';
+
+      let linhas = '';
+      remessas.forEach(function(rem) {
+        const dest = rem.destino_tipo === 'base' ? rem.bases : rem.aplicadores;
+        const itens = rem.remessa_itens || [];
+        let doses = 0;
+        const vacinas = [];
+        itens.forEach(function(it) {
+          doses += Number(it.quantidade || 0);
+          vacinas.push(esc((it.vacinas && it.vacinas.nome) ? it.vacinas.nome : 'Vacina') + ' (' + esc(it.quantidade || 0) + ')');
+        });
+
+        linhas += '<tr>'
+          + '<td>' + esc(rem.ordem_entrega || '—') + '</td>'
+          + '<td><b>' + esc(dest && dest.nome ? dest.nome : '—') + '</b>' + (dest && dest.cpf ? '<br><small>CPF: ' + esc(dest.cpf) + '</small>' : '') + '</td>'
+          + '<td>' + esc([dest && dest.cidade ? dest.cidade : '', dest && dest.uf ? dest.uf : ''].filter(Boolean).join('/')) + '</td>'
+          + '<td>' + esc(rem.status || '—') + '</td>'
+          + '<td style="text-align:right"><b>' + esc(doses) + '</b></td>'
+          + '<td>' + (vacinas.join(', ') || '—') + '</td>'
+          + '<td>' + esc(rem.observacao || '—') + '</td>'
+          + '</tr>';
+      });
+
+      if (!linhas) {
+        linhas = '<tr><td colspan="7" style="text-align:center;padding:20px">Nenhuma remessa encontrada.</td></tr>';
+      }
+
+      const html =
+        '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Detalhe da Rota</title>'
+        + '<style>body{font-family:Arial,sans-serif;padding:20px;color:#111;background:#fff}h1{margin:0 0 8px;color:#1e3a5f}.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:16px 0}.card{border:1px solid #ddd;border-radius:8px;padding:10px;background:#f8fafc}.lb{font-size:10px;color:#666;text-transform:uppercase}.vl{font-size:14px;font-weight:700;margin-top:4px}table{width:100%;border-collapse:collapse;margin-top:14px}th{background:#1e3a5f;color:white;text-align:left;padding:8px;font-size:11px}td{border-bottom:1px solid #eee;padding:8px;font-size:12px;vertical-align:top}</style>'
+        + '</head><body>'
+        + '<h1>Detalhes da Rota ' + esc(r.codigo || '') + '</h1>'
+        + '<div style="color:#666">Visualização segura da rota</div>'
+        + '<div class="grid">'
+        + '<div class="card"><div class="lb">Data</div><div class="vl">' + esc(dataRota) + '</div></div>'
+        + '<div class="card"><div class="lb">Status</div><div class="vl">' + esc(r.status || '—') + '</div></div>'
+        + '<div class="card"><div class="lb">Base Origem</div><div class="vl">' + esc(base) + '</div></div>'
+        + '<div class="card"><div class="lb">Motorista</div><div class="vl">' + esc(motorista) + '</div></div>'
+        + '<div class="card"><div class="lb">Veículo</div><div class="vl">' + esc(r.veiculo || '—') + '</div></div>'
+        + '<div class="card"><div class="lb">Paradas</div><div class="vl">' + esc(remessas.length) + '</div></div>'
+        + '</div>'
+        + '<table><thead><tr><th>Ordem</th><th>Destino</th><th>Cidade/UF</th><th>Status</th><th>Doses</th><th>Vacinas</th><th>Obs</th></tr></thead><tbody>'
+        + linhas
+        + '</tbody></table>'
+        + '</body></html>';
+
+      const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      window.open(url, '_blank');
+      setTimeout(function(){ URL.revokeObjectURL(url); }, 60000);
+
+    } catch (err) {
+      toast('Erro ao abrir rota: ' + (err.message || err), 'error');
+      alert('Erro ao abrir rota: ' + (err.message || err));
+    }
+  };
+
+
   const enviarMontagem = async (id) => {
     const { error } = await sb.from('rotas').update({ status: 'montagem' }).eq('id', id);
     if (error) toast(error.message, 'error'); else { toast('Rota enviada para montagem!', 'success'); load(); }
@@ -5613,7 +5707,6 @@ function RotasListPage({ onOpenRoteirizacao }) {
 
   return (
     <div>
-      {rotaDetalhe && <ModalDetalheRota rota={rotaDetalhe} onClose={() => setRotaDetalhe(null)} ROTA_ST={ROTA_ST} ROTA_BADGE={ROTA_BADGE} />}
       {chatRota && <ChatRotaModal rota={chatRota} onClose={() => { setChatRota(null); load(); }} />}
       <div className="page-header">
         <div><div className="page-title">Rotas</div><div className="page-subtitle">Gerencie rotas de entrega e coleta</div></div>
@@ -5705,7 +5798,7 @@ function RotasListPage({ onOpenRoteirizacao }) {
             </td>
             <td style={{fontSize:11,fontFamily:'JetBrains Mono',color:'var(--text-muted)'}}>{duracao()}</td>
             <td><div style={{display:'flex',gap:4,flexWrap:'wrap'}}>
-              <button className="btn btn-secondary btn-sm" onClick={() => setRotaDetalhe(r)}>👁 Ver</button>
+              <button className="btn btn-secondary btn-sm" onClick={() => abrirDetalheSeguro(r)}>👁 Ver</button>
               <button className="btn btn-secondary btn-sm" onClick={() => imprimirRomaneio(r)}>📄 Romaneio</button>
               <button className="btn btn-secondary btn-sm" onClick={() => setChatRota(r)}>
                 💬 Chat {naoLidas[r.id] ? <span className="badge badge-red" style={{marginLeft:4}}>{naoLidas[r.id]}</span> : null}
