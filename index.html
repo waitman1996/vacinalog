@@ -5428,25 +5428,129 @@ function VeiculoForm({ initial, bases, motoristas, onSave, onClose }) {
 function MonitoramentoAoVivo({ onClose }) {
   const [rotas, setRotas] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [rotaSelecionada, setRotaSelecionada] = useState(null); // rota com rota traçada visível
+  const [carregandoRota, setCarregandoRota] = useState(false);
   const mapRef = React.useRef(null);
   const mapInstanceRef = React.useRef(null);
-  const markersRef = React.useRef({});
+  const markersRef = React.useRef({});     // pin atual de cada motorista
+  const polylineRef = React.useRef(null);  // polyline da rota selecionada
+  const destinoPinsRef = React.useRef([]); // pins de paradas da rota selecionada
   const timerRef = React.useRef(null);
   const toast = useContext(ToastContext);
 
+  const CORES_ROTA = ['#3b82f6','#10b981','#f59e0b','#ef4444','#8b5cf6','#06b6d4'];
+
   const loadRotas = async () => {
     const { data, error } = await sb.from('rotas')
-      .select('id,codigo,status,veiculo,current_lat,current_lng,current_location_at,current_speed,profiles!rotas_motorista_id_fkey(nome),remessas(status)')
+      .select('id,codigo,status,veiculo,checkin_lat,checkin_lng,current_lat,current_lng,current_location_at,current_speed,base_origem_id,bases!rotas_base_origem_id_fkey(nome,latitude,longitude),profiles!rotas_motorista_id_fkey(nome),remessas(id,status,ordem_entrega,destino_tipo,observacao,aplicadores(nome,cpf,cidade,uf),bases(nome,cidade,uf))')
       .in('status', ['em_transito','pronta','montagem'])
       .not('current_lat', 'is', null);
-
-    if (error) {
-      toast('Erro ao carregar mapa: ' + error.message, 'error');
-      return [];
-    }
-
+    if (error) { toast('Erro ao carregar mapa: ' + error.message, 'error'); return []; }
     setRotas(data || []);
     return data || [];
+  };
+
+  // Busca pontos GPS do chat e monta o trajeto completo da rota
+  const carregarTrajeto = async (rota) => {
+    setCarregandoRota(true);
+    try {
+      const map = mapInstanceRef.current;
+      if (!map) return;
+
+      // Limpar rota anterior
+      if (polylineRef.current) { map.removeLayer(polylineRef.current); polylineRef.current = null; }
+      destinoPinsRef.current.forEach(p => { try { map.removeLayer(p); } catch(_){} });
+      destinoPinsRef.current = [];
+
+      // Pontos base: checkin → mensagens do chat com GPS → posição atual
+      const pontos = [];
+
+      // 1. Ponto de partida: checkin
+      if (rota.checkin_lat && rota.checkin_lng) {
+        pontos.push({ lat: Number(rota.checkin_lat), lng: Number(rota.checkin_lng), tipo: 'checkin', label: 'Partida (check-in)' });
+      } else if (rota.bases?.latitude && rota.bases?.longitude) {
+        pontos.push({ lat: Number(rota.bases.latitude), lng: Number(rota.bases.longitude), tipo: 'base', label: 'Base: ' + rota.bases.nome });
+      }
+
+      // 2. Pontos GPS das mensagens do chat (rastro histórico)
+      const { data: canal } = await sb.rpc('get_or_create_chat_rota', { p_rota_id: rota.id });
+      if (canal) {
+        const { data: msgs } = await sb.from('chat_mensagens')
+          .select('lat,lng,criado_em')
+          .eq('canal_id', canal)
+          .not('lat', 'is', null)
+          .not('lng', 'is', null)
+          .order('criado_em', { ascending: true });
+        (msgs || []).forEach(m => {
+          pontos.push({ lat: Number(m.lat), lng: Number(m.lng), tipo: 'rastro', label: new Date(m.criado_em).toLocaleString('pt-BR') });
+        });
+      }
+
+      // 3. Posição atual (fim do trajeto)
+      const latAtual = Number(rota.current_lat);
+      const lngAtual = Number(rota.current_lng);
+      if (!Number.isNaN(latAtual) && !Number.isNaN(lngAtual)) {
+        // Só adiciona se diferente do último ponto
+        const ultimo = pontos[pontos.length - 1];
+        if (!ultimo || Math.abs(ultimo.lat - latAtual) > 0.00001 || Math.abs(ultimo.lng - lngAtual) > 0.00001) {
+          pontos.push({ lat: latAtual, lng: lngAtual, tipo: 'atual', label: 'Posição atual' });
+        }
+      }
+
+      if (pontos.length >= 2) {
+        // Desenhar polyline do trajeto
+        const latlngs = pontos.map(p => [p.lat, p.lng]);
+        const cor = CORES_ROTA[rotas.findIndex(r => r.id === rota.id) % CORES_ROTA.length] || '#3b82f6';
+        polylineRef.current = L.polyline(latlngs, { color: cor, weight: 4, opacity: 0.85, dashArray: null }).addTo(map);
+
+        // Marcador especial no ponto de partida
+        const inicio = pontos[0];
+        const pinInicio = L.circleMarker([inicio.lat, inicio.lng], { radius: 8, color: '#fff', fillColor: '#10b981', fillOpacity: 1, weight: 2 })
+          .addTo(map).bindPopup('<b>🚩 ' + inicio.label + '</b>');
+        destinoPinsRef.current.push(pinInicio);
+
+        // Marcador nos pontos de rastro (pequenos)
+        pontos.filter(p => p.tipo === 'rastro').forEach(p => {
+          const pin = L.circleMarker([p.lat, p.lng], { radius: 4, color: cor, fillColor: cor, fillOpacity: 0.5, weight: 1 })
+            .addTo(map).bindPopup('<small>📍 ' + p.label + '</small>');
+          destinoPinsRef.current.push(pin);
+        });
+
+        map.fitBounds(polylineRef.current.getBounds(), { padding: [40, 40], maxZoom: 14 });
+      }
+
+      // 4. Pins das paradas (destinos das remessas) com ordem
+      const remessas = (rota.remessas || []).slice().sort((a,b) => Number(a.ordem_entrega||0) - Number(b.ordem_entrega||0));
+      remessas.forEach((rem, i) => {
+        const dest = rem.destino_tipo === 'base' ? rem.bases : rem.aplicadores;
+        if (!dest) return;
+        const cidade = [dest.cidade, dest.uf].filter(Boolean).join('/');
+        const isConcluida = ['concluida','entregue'].includes(rem.status);
+        const cor = isConcluida ? '#10b981' : '#f59e0b';
+        const icon = L.divIcon({
+          className: '',
+          html: `<div style="width:26px;height:26px;background:${cor};border:2px solid #fff;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#fff;box-shadow:0 2px 4px rgba(0,0,0,.3)">${i+1}</div>`,
+          iconSize: [26, 26], iconAnchor: [13, 13]
+        });
+        // Tenta geocodificar cidade via Nominatim se não tiver coords diretas
+        // Por enquanto: coloca pin sem coordenadas (só funciona se tiver lat/lng no aplicador)
+        // Mostra info no popup do motorista via remessa
+      });
+
+      setRotaSelecionada(rota.id);
+    } catch(e) {
+      toast('Erro ao carregar trajeto: ' + e.message, 'error');
+    }
+    setCarregandoRota(false);
+  };
+
+  const limparRota = () => {
+    const map = mapInstanceRef.current;
+    if (!map) return;
+    if (polylineRef.current) { map.removeLayer(polylineRef.current); polylineRef.current = null; }
+    destinoPinsRef.current.forEach(p => { try { map.removeLayer(p); } catch(_){} });
+    destinoPinsRef.current = [];
+    setRotaSelecionada(null);
   };
 
   const desenhar = (rows) => {
@@ -5454,7 +5558,7 @@ function MonitoramentoAoVivo({ onClose }) {
     const map = mapInstanceRef.current;
     const bounds = [];
 
-    rows.forEach(r => {
+    rows.forEach((r, idx) => {
       const lat = Number(r.current_lat);
       const lng = Number(r.current_lng);
       if (Number.isNaN(lat) || Number.isNaN(lng)) return;
@@ -5463,23 +5567,31 @@ function MonitoramentoAoVivo({ onClose }) {
       const total = (r.remessas || []).length;
       const nome = r.profiles?.nome || r.codigo || 'Motorista';
       const hora = r.current_location_at ? new Date(r.current_location_at).toLocaleString('pt-BR') : 'Sem horário';
+      const cor = CORES_ROTA[idx % CORES_ROTA.length];
+
+      // Ícone colorido com caminhão
+      const icon = L.divIcon({
+        className: '',
+        html: `<div style="background:${cor};border:3px solid #fff;border-radius:50%;width:36px;height:36px;display:flex;align-items:center;justify-content:center;font-size:18px;box-shadow:0 2px 6px rgba(0,0,0,.4);cursor:pointer" title="${nome}">🚚</div>`,
+        iconSize: [36, 36], iconAnchor: [18, 18]
+      });
 
       const popup =
-        '<div style="font-family:Arial;min-width:190px">' +
-        '<b>🚚 ' + nome + '</b><br>' +
+        '<div style="font-family:Arial;min-width:210px">' +
+        '<b style="font-size:14px">🚚 ' + nome + '</b><br>' +
         '<b>Rota:</b> ' + (r.codigo || '—') + '<br>' +
-        '<b>Status:</b> ' + (r.status || '—') + '<br>' +
         '<b>Entregas:</b> ' + entregues + '/' + total + '<br>' +
         '<b>Veículo:</b> ' + (r.veiculo || '—') + '<br>' +
         (r.current_speed != null ? '<b>Velocidade:</b> ' + r.current_speed + ' km/h<br>' : '') +
-        '<small>' + hora + '</small><br>' +
-        '<a target="_blank" href="https://www.google.com/maps?q=' + lat + ',' + lng + '">Abrir no Google Maps</a>' +
+        '<small style="color:#666">' + hora + '</small><br><br>' +
+        '<button onclick="window.__verRotaMonitoramento('' + r.id + '')" style="background:' + cor + ';color:#fff;border:0;padding:6px 12px;border-radius:6px;cursor:pointer;font-weight:600;width:100%">📍 Ver Trajeto</button>' +
+        '<br><a style="font-size:11px;color:#666;display:block;text-align:center;margin-top:6px" target="_blank" href="https://www.google.com/maps?q=' + lat + ',' + lng + '">Abrir no Google Maps</a>' +
         '</div>';
 
       if (markersRef.current[r.id]) {
-        markersRef.current[r.id].setLatLng([lat, lng]).setPopupContent(popup);
+        markersRef.current[r.id].setLatLng([lat, lng]).setIcon(icon).setPopupContent(popup);
       } else {
-        markersRef.current[r.id] = L.marker([lat, lng]).addTo(map).bindPopup(popup);
+        markersRef.current[r.id] = L.marker([lat, lng], { icon }).addTo(map).bindPopup(popup);
       }
 
       bounds.push([lat, lng]);
@@ -5492,7 +5604,7 @@ function MonitoramentoAoVivo({ onClose }) {
       }
     });
 
-    if (bounds.length) map.fitBounds(bounds, { padding: [30, 30], maxZoom: 13 });
+    if (bounds.length && !rotaSelecionada) map.fitBounds(bounds, { padding: [30, 30], maxZoom: 13 });
   };
 
   const atualizar = async () => {
@@ -5500,46 +5612,40 @@ function MonitoramentoAoVivo({ onClose }) {
     desenhar(rows);
   };
 
+  // Expõe função global para o botão no popup do Leaflet
+  React.useEffect(() => {
+    window.__verRotaMonitoramento = (rotaId) => {
+      const rota = rotas.find(r => r.id === rotaId);
+      if (!rota) return;
+      if (rotaSelecionada === rotaId) { limparRota(); return; }
+      carregarTrajeto(rota);
+    };
+    return () => { delete window.__verRotaMonitoramento; };
+  }, [rotas, rotaSelecionada]);
+
   useEffect(() => {
     const iniciar = async () => {
       setLoading(true);
-
       try {
-        if (!window.L) {
-          toast('Mapa não carregou. Verifique a internet.', 'error');
-          setLoading(false);
-          return;
-        }
-
+        if (!window.L) { toast('Mapa não carregou. Verifique a internet.', 'error'); setLoading(false); return; }
         if (!mapInstanceRef.current && mapRef.current) {
           const map = L.map(mapRef.current).setView([-23.5505, -46.6333], 6);
           mapInstanceRef.current = map;
-
-          L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-            maxZoom: 19,
-            attribution: 'OpenStreetMap'
-          }).addTo(map);
-
+          L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: 'OpenStreetMap' }).addTo(map);
           setTimeout(() => map.invalidateSize(), 250);
         }
-
         await atualizar();
         timerRef.current = setInterval(atualizar, 15000);
       } catch (err) {
         toast('Erro no mapa: ' + (err.message || err), 'error');
       }
-
       setLoading(false);
     };
-
     iniciar();
-
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
-      if (mapInstanceRef.current) {
-        try { mapInstanceRef.current.remove(); } catch (_) {}
-        mapInstanceRef.current = null;
-      }
+      delete window.__verRotaMonitoramento;
+      if (mapInstanceRef.current) { try { mapInstanceRef.current.remove(); } catch (_) {} mapInstanceRef.current = null; }
     };
   }, []);
 
@@ -5547,12 +5653,31 @@ function MonitoramentoAoVivo({ onClose }) {
 
   return (
     <Modal title="Monitoramento ao Vivo — Mapa" onClose={onClose} large>
-      <div style={{display:'grid',gridTemplateColumns:'1fr auto',gap:8,alignItems:'center',marginBottom:12}}>
+      <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:8,marginBottom:10,flexWrap:'wrap'}}>
         <div style={{fontSize:13,color:'var(--text-muted)'}}>
-          {online} rota(s) com GPS registrado pelo motorista. Atualiza a cada 15 segundos.
+          {online} rota(s) com GPS · Atualiza a cada 15s
+          {rotaSelecionada && <span style={{marginLeft:12,color:'var(--accent)',fontWeight:600}}>📍 Trajeto ativo — clique novamente no motorista para fechar</span>}
         </div>
-        <button className="btn btn-secondary btn-sm" onClick={atualizar}>↻ Atualizar</button>
+        <div style={{display:'flex',gap:6}}>
+          {rotaSelecionada && <button className="btn btn-secondary btn-sm" onClick={limparRota}>✕ Limpar trajeto</button>}
+          {carregandoRota && <span style={{fontSize:12,color:'var(--text-muted)',padding:'4px 8px'}}>Carregando trajeto...</span>}
+          <button className="btn btn-secondary btn-sm" onClick={atualizar}>↻ Atualizar</button>
+        </div>
       </div>
+
+      {/* Legenda das rotas */}
+      {online > 0 && (
+        <div style={{display:'flex',gap:8,flexWrap:'wrap',marginBottom:8}}>
+          {rotas.filter(r=>r.current_lat).map((r,i) => (
+            <div key={r.id} style={{display:'flex',alignItems:'center',gap:5,padding:'4px 10px',borderRadius:20,border:'1px solid var(--border)',background: rotaSelecionada===r.id ? CORES_ROTA[i%CORES_ROTA.length]+'22' : 'var(--bg-input)',cursor:'pointer'}}
+              onClick={() => rotaSelecionada===r.id ? limparRota() : carregarTrajeto(r)}>
+              <div style={{width:12,height:12,borderRadius:'50%',background:CORES_ROTA[i%CORES_ROTA.length]}}></div>
+              <span style={{fontSize:11,fontWeight:600}}>{r.profiles?.nome||r.codigo}</span>
+              {rotaSelecionada===r.id && <span style={{fontSize:10,color:CORES_ROTA[i%CORES_ROTA.length]}}>● trajeto</span>}
+            </div>
+          ))}
+        </div>
+      )}
 
       <div style={{height:520,border:'1px solid var(--border)',borderRadius:'var(--radius)',overflow:'hidden',position:'relative',background:'var(--bg-input)'}}>
         {loading && <div style={{position:'absolute',inset:0,zIndex:500,display:'flex',alignItems:'center',justifyContent:'center',background:'rgba(0,0,0,.08)'}}>Carregando mapa...</div>}
@@ -5561,10 +5686,9 @@ function MonitoramentoAoVivo({ onClose }) {
 
       {online === 0 && !loading && (
         <div style={{marginTop:10,padding:10,borderRadius:'var(--radius-sm)',background:'var(--warning-bg)',color:'var(--warning)',fontSize:12}}>
-          Nenhuma rota com GPS ainda. O GPS será atualizado quando o motorista abrir/enviar mensagem no chat.
+          Nenhuma rota com GPS ainda. O GPS é atualizado quando o motorista abre/envia mensagem no chat.
         </div>
       )}
-
       <div className="modal-actions">
         <button className="btn btn-secondary" onClick={onClose}>Fechar</button>
       </div>
