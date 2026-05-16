@@ -2353,9 +2353,11 @@ function ImportConsulta() {
   const [importing, setImporting] = useState(false);
   const [progress, setProgress] = useState(0);
   const [result, setResult] = useState(null);
-  // Data de corte: só debita estoque para tarefas com data_inicio >= dataCorte
+  // Data de corte usada somente pelo botão de reprocessamento de abatimentos
   const hoje = new Date().toISOString().slice(0, 10);
   const [dataCorte, setDataCorte] = useState(hoje);
+  const [reprocessando, setReprocessando] = useState(false);
+  const [reprocessResult, setReprocessResult] = useState(null);
   const toast = useContext(ToastContext);
   const fileRef = useRef();
 
@@ -2402,6 +2404,32 @@ function ImportConsulta() {
     reader.readAsArrayBuffer(f);
   };
 
+  const reprocessarAbatimentosPendentes = async () => {
+    if (!dataCorte) {
+      toast('Informe uma data de corte para reprocessar abatimentos.', 'error');
+      return;
+    }
+    const ok = window.confirm(
+      'Reprocessar abatimentos pendentes a partir de ' + new Date(dataCorte + 'T12:00:00').toLocaleDateString('pt-BR') + '?\n\n' +
+      'Esta rotina NÃO reimporta a planilha e NÃO debita tarefas que já têm movimentação de aplicação.'
+    );
+    if (!ok) return;
+
+    setReprocessando(true);
+    setReprocessResult(null);
+    try {
+      const { data, error } = await sb.rpc('reprocessar_abatimentos_pendentes', { p_data_corte: dataCorte });
+      if (error) throw error;
+      setReprocessResult(data || {});
+      toast(`Reprocessamento concluído: ${data?.abatimentos_gerados || 0} abatimentos gerados.`, 'success');
+    } catch (err) {
+      console.error('[VacinaLog] Erro ao reprocessar abatimentos:', err);
+      toast('Erro ao reprocessar abatimentos: ' + (err.message || err.details || 'verifique se a função SQL foi criada'), 'error');
+    } finally {
+      setReprocessando(false);
+    }
+  };
+
   const doImport = async () => {
     if (!preview) return;
 
@@ -2418,18 +2446,13 @@ function ImportConsulta() {
       const baseMap = {};
       (bases || []).forEach(b => { baseMap[b.nome.toLowerCase()] = b.id; });
 
-      const { data: vacinas, error: vErr } = await sb.from('vacinas').select('id, nome, produto_nome');
+      const { data: vacinas, error: vErr } = await sb.from('vacinas').select('id, nome');
       if (vErr) throw new Error('Erro ao carregar vacinas: ' + vErr.message);
       const vacinaMap = {};
-      (vacinas || []).forEach(v => {
-        vacinaMap[v.nome.toLowerCase()] = v.id;
-        if (v.produto_nome) vacinaMap[String(v.produto_nome).toLowerCase()] = v.id;
-      });
-      const vacinaInfoMap = {};
-      (vacinas || []).forEach(v => { vacinaInfoMap[v.id] = v; });
+      (vacinas || []).forEach(v => { vacinaMap[v.nome.toLowerCase()] = v.id; });
 
       // Buscar tarefas já existentes para detectar novas doses aplicadas
-      // Paginar em lotes de 200 (limite seguro do .in() do Supabase)
+      // Paginar em lotes maiores para reduzir chamadas ao Supabase
       toast('Verificando tarefas existentes...', 'info');
       const codigos = preview.data.map(r => r['Código']).filter(Boolean);
       const existingMap = {};
@@ -2443,58 +2466,8 @@ function ImportConsulta() {
         setProgress(Math.round((i / codigos.length) * 10)); // 0-10% para lookup
       }
 
-      // Buscar escalas para vincular abatimentos — também paginar
-      toast('Carregando escalas vinculadas...', 'info');
-      const escalaMap = {};
-      for (let i = 0; i < codigos.length; i += LOOKUP_BATCH) {
-        const { data: escalasData } = await sb.from('escalas')
-          .select('id, codigo_tarefa, aplicador_id, vacina_id, status, vacinas(nome, produto_nome)')
-          .in('codigo_tarefa', codigos.slice(i, i + LOOKUP_BATCH))
-          .neq('status', 'cancelada');
-        (escalasData || []).forEach(e => {
-          if (!escalaMap[e.codigo_tarefa]) escalaMap[e.codigo_tarefa] = e;
-        });
-      }
-
-      // Pré-carregar movimentações de aplicação uma única vez.
-      // Antes, o sistema fazia 1 consulta por tarefa quando as doses já estavam iguais;
-      // em arquivos grandes isso deixava a importação muito lenta.
-      toast('Verificando abatimentos já existentes...', 'info');
-      const tarefasComMovimentacao = new Set();
-      for (let from = 0; ; from += 1000) {
-        const { data: movs, error: movsErr } = await sb.from('movimentacoes')
-          .select('observacao')
-          .eq('tipo', 'aplicacao')
-          .range(from, from + 999);
-        if (movsErr) {
-          console.warn('Erro ao pré-carregar movimentações:', movsErr.message);
-          break;
-        }
-        (movs || []).forEach(m => {
-          const obs = String(m.observacao || '');
-          const match = obs.match(/Tarefa\s+([A-Z0-9.&_-]+(?:\.[A-Z0-9&_-]+)*)/i);
-          if (match && match[1]) tarefasComMovimentacao.add(match[1].trim());
-        });
-        if (!movs || movs.length < 1000) break;
-      }
-
-      // Pré-carregar estoque dos aplicadores envolvidos nas escalas do arquivo.
-      // Isso elimina a consulta de estoque dentro de cada abatimento.
-      toast('Carregando estoque dos aplicadores...', 'info');
-      const aplicadorIds = [...new Set(Object.values(escalaMap).map(e => e.aplicador_id).filter(Boolean))];
-      const estoquePorAplicador = {};
-      for (let i = 0; i < aplicadorIds.length; i += LOOKUP_BATCH) {
-        const { data: estRows, error: estErr } = await sb.from('estoque')
-          .select('id, quantidade, vacina_id, aplicador_id, vacinas(nome, produto_nome)')
-          .in('aplicador_id', aplicadorIds.slice(i, i + LOOKUP_BATCH))
-          .eq('localizacao_tipo', 'aplicador')
-          .gt('quantidade', 0);
-        if (estErr) console.warn('Erro ao pré-carregar estoque:', estErr.message);
-        (estRows || []).forEach(e => {
-          if (!estoquePorAplicador[e.aplicador_id]) estoquePorAplicador[e.aplicador_id] = [];
-          estoquePorAplicador[e.aplicador_id].push({ ...e, quantidade: Number(e.quantidade || 0) });
-        });
-      }
+      // Importação rápida: não busca escalas e não debita estoque.
+      // O abatimento fica exclusivamente no botão "Reprocessar abatimentos pendentes".
 
       const userId = (await sb.auth.getUser()).data.user.id;
 
@@ -2505,69 +2478,8 @@ function ImportConsulta() {
       }).select().single();
       if (impErr) throw new Error('Erro ao registrar importação: ' + impErr.message);
 
-      // Debita estoque do aplicador por PRODUTO, não por lote/vacina_id específico.
-      // Isso resolve casos em que o aplicador tem saldo em outro lote do mesmo produto.
-      const debitarAplicadorPorProduto = async ({ escala, quantidade, codigo, totalAplicadas, vacinaFallbackId, vacinaFallbackNome }) => {
-        const vacinaRefId = escala?.vacina_id || vacinaFallbackId;
-        if (!escala?.aplicador_id || !vacinaRefId || !quantidade || quantidade <= 0) {
-          console.warn(`Abatimento ignorado para ${codigo}: escala sem aplicador_id ou sem vacina_id/fallback.`);
-          return false;
-        }
-
-        const vacinaRef = vacinaInfoMap[vacinaRefId] || {};
-        const produtoEscala = String(
-          escala.vacinas?.produto_nome || escala.vacinas?.nome ||
-          vacinaRef.produto_nome || vacinaRef.nome || vacinaFallbackNome || ''
-        ).trim().toLowerCase();
-
-        const estoqueRows = estoquePorAplicador[escala.aplicador_id] || [];
-        let candidatos = estoqueRows.filter(e => {
-          const produtoEstoque = String(e.vacinas?.produto_nome || e.vacinas?.nome || '').trim().toLowerCase();
-          return produtoEscala && produtoEstoque === produtoEscala && Number(e.quantidade || 0) > 0;
-        });
-
-        // Fallback: se o produto_nome não bater, tenta pelo vacina_id da tarefa/escala.
-        if (candidatos.length === 0) {
-          candidatos = estoqueRows.filter(e => String(e.vacina_id) === String(vacinaRefId) && Number(e.quantidade || 0) > 0);
-        }
-
-        const disponivel = candidatos.reduce((s, e) => s + Number(e.quantidade || 0), 0);
-        if (disponivel < quantidade) {
-          console.warn(`Saldo insuficiente para ${codigo}: disponível ${disponivel}, necessário ${quantidade}`);
-          return false;
-        }
-
-        let restante = quantidade;
-        const ordenados = [...candidatos].sort((a,b) => Number(b.quantidade||0) - Number(a.quantidade||0));
-        const vacinaMovId = ordenados[0]?.vacina_id || vacinaRefId;
-
-        for (const item of ordenados) {
-          if (restante <= 0) break;
-          const saldo = Number(item.quantidade || 0);
-          const debito = Math.min(saldo, restante);
-          const novoSaldo = saldo - debito;
-          const { error: debErr } = await sb.from('estoque')
-            .update({ quantidade: novoSaldo })
-            .eq('id', item.id);
-          if (debErr) throw debErr;
-          item.quantidade = novoSaldo; // atualiza o cache local para próximos abatimentos no mesmo arquivo
-          restante -= debito;
-        }
-
-        const { error: movErr } = await sb.from('movimentacoes').insert({
-          tipo: 'aplicacao',
-          vacina_id: vacinaMovId,
-          quantidade,
-          origem_tipo: 'aplicador',
-          origem_aplicador_id: escala.aplicador_id,
-          observacao: `Importação Consulta: +${quantidade} doses aplicadas (total: ${totalAplicadas}) | Tarefa ${codigo} | Data corte: ${dataCorte || 'sem corte'} | Débito por produto`,
-          criado_por: userId,
-        });
-
-        if (movErr) throw movErr;
-        tarefasComMovimentacao.add(String(codigo).trim());
-        return true;
-      };
+      // Nesta versão, a importação NÃO gera abatimento, NÃO altera estoque e NÃO cria movimentações.
+      // Isso reduz risco de duplicidade e melhora a performance.
 
       // Deduplicar linhas do arquivo pelo código — quando o mesmo código aparece mais de uma vez
       // (ex: planilha com status antigo e novo), manter apenas a última ocorrência (status mais recente)
@@ -2582,7 +2494,7 @@ function ImportConsulta() {
       }
 
       const rows = rowsDeduped;
-      const batchSize = 50;
+      const batchSize = 100;
       let imported = 0, ignored = 0, atualizados = 0, abatimentos = 0;
 
       for (let i = 0; i < rows.length; i += batchSize) {
@@ -2656,7 +2568,6 @@ function ImportConsulta() {
               id: existingMap[codigo].id,
               dosesAntigas: existingMap[codigo].doses_aplicadas || 0,
               dosesNovas: dosesAplicadas,
-              escala: escalaMap[codigo] || null,
             });
           } else {
             novos.push(payload);
@@ -2671,32 +2582,13 @@ function ImportConsulta() {
           } else {
             imported += (insertedData?.length || novos.length);
 
-            // Para tarefas novas já com Doses Aplicadas, também debitar se estiverem dentro da data de corte.
-            // Antes, o sistema só debitava tarefas já existentes; por isso algumas importações não geravam abatimento.
-            for (const novo of novos) {
-              const escala = escalaMap[novo.codigo] || null;
-              const dentroDoCorte = dataCorte ? (novo.data_inicio || '') >= dataCorte : false;
-              if (novo.doses_aplicadas > 0 && dentroDoCorte && escala?.id) {
-                await sb.from('escalas')
-                  .update({ doses_aplicadas: novo.doses_aplicadas, vacina_id: escala.vacina_id || novo.vacina_id || null })
-                  .eq('id', escala.id);
-                const ok = await debitarAplicadorPorProduto({
-                  escala,
-                  quantidade: novo.doses_aplicadas,
-                  codigo: novo.codigo,
-                  totalAplicadas: novo.doses_aplicadas,
-                  vacinaFallbackId: novo.vacina_id,
-                  vacinaFallbackNome: novo.vacina,
-                });
-                if (ok) abatimentos++;
-              }
-            }
+            // Importação separada do abatimento: tarefas novas não debitam estoque aqui.
           }
         }
 
         // UPDATE para tarefas existentes + abatimento se houver novas doses
         for (const t of paraAtualizar) {
-          const { id, dosesAntigas, dosesNovas, escala, ...fields } = t;
+          const { id, dosesAntigas, dosesNovas, ...fields } = t;
           delete fields.importacao_id;
 
           // REGRA: não pode diminuir doses aplicadas
@@ -2706,19 +2598,8 @@ function ImportConsulta() {
             continue;
           }
 
-          // REGRA: sem alteração nas doses — normalmente não debita.
-          // Exceção: se já foi importado antes, atualizou doses_aplicadas, mas NÃO existe movimentação,
-          // permite reprocessar o arquivo e gerar o débito pendente.
-          const incremento = dosesNovas - dosesAntigas;
-          let qtdParaDebitar = incremento;
-
-          if (incremento === 0 && dosesNovas > 0) {
-            // Reprocessamento: se a tarefa já tem doses aplicadas, mas não existe movimentação,
-            // gera o abatimento pendente sem fazer consulta individual no Supabase.
-            if (!tarefasComMovimentacao.has(String(fields.codigo || id).trim())) {
-              qtdParaDebitar = dosesNovas;
-            }
-          }
+          // O abatimento não é mais executado durante a importação.
+          // O botão de reprocessamento no banco trata pendências sem duplicar.
 
           const { error: updErr } = await sb.from('tarefas')
             .update({
@@ -2735,29 +2616,7 @@ function ImportConsulta() {
           } else {
             atualizados++;
 
-            // Atualizar doses_aplicadas na escala vinculada
-            if (escala?.id && dosesNovas >= 0) {
-              await sb.from('escalas')
-                .update({ doses_aplicadas: dosesNovas, vacina_id: escala.vacina_id || fields.vacina_id || null })
-                .eq('id', escala.id);
-            }
-
-            // Debitar SOMENTE o incremento (novas doses além do que já foi debitado antes)
-            // e SOMENTE se data_inicio >= dataCorte
-            const dataInicio = fields.data_inicio || '';
-            const dentroDoCorte = dataCorte ? dataInicio >= dataCorte : false;
-
-            if (qtdParaDebitar > 0 && dentroDoCorte && escala?.aplicador_id && (escala?.vacina_id || fields.vacina_id)) {
-              const ok = await debitarAplicadorPorProduto({
-                escala,
-                quantidade: qtdParaDebitar,
-                codigo: fields.codigo || id,
-                totalAplicadas: dosesNovas,
-                vacinaFallbackId: fields.vacina_id,
-                vacinaFallbackNome: fields.vacina,
-              });
-              if (ok) abatimentos++;
-            }
+            // Sem abatimento aqui. Use o botão "Reprocessar abatimentos pendentes" após a importação.
           }
         }
 
@@ -2767,12 +2626,12 @@ function ImportConsulta() {
       await sb.from('importacoes').update({
         registros_importados: imported + atualizados,
         registros_ignorados: ignored,
-        detalhes: { novos: imported, atualizados, abatimentos_gerados: abatimentos }
+        detalhes: { novos: imported, atualizados, abatimentos_gerados: 0, modo: 'importacao_sem_abatimento' }
       }).eq('id', imp.id);
 
-      setResult({ imported, atualizados, abatimentos, ignored, total: rows.length });
+      setResult({ imported, atualizados, abatimentos: 0, ignored, total: rows.length });
       toast(
-        `Importação concluída! ${imported} novas · ${atualizados} atualizadas · ${abatimentos} abatimentos gerados.`,
+        `Importação concluída! ${imported} novas · ${atualizados} atualizadas · nenhum abatimento gerado nesta etapa.`,
         'success'
       );
     } catch (err) {
@@ -2786,7 +2645,7 @@ function ImportConsulta() {
     <div className="card">
       <div className="card-title" style={{marginBottom:16}}>Importar Consulta (Tarefas)</div>
       <p style={{fontSize:13,color:'var(--text-secondary)',marginBottom:16}}>
-        Importe a planilha de Consulta. Somente tarefas com status <strong>Aprovada</strong>, <strong>Em validação</strong>, <strong>Em execução</strong> e <strong>Pronta p/ Faturamento</strong> serão importadas.
+        Importe a planilha de Consulta. Somente tarefas com status <strong>Aprovada</strong>, <strong>Em validação</strong>, <strong>Em execução</strong> e <strong>Pronta p/ Faturamento</strong> serão importadas. Esta etapa <strong>não debita estoque</strong>.
       </p>
 
       <div className="upload-area" onClick={() => fileRef.current?.click()}
@@ -2848,39 +2707,61 @@ function ImportConsulta() {
               <div style={{fontSize:13,color:'var(--text-secondary)',marginTop:4,display:'flex',gap:16,flexWrap:'wrap'}}>
                 <span>📥 {result.imported} novas</span>
                 <span>🔄 {result.atualizados} atualizadas</span>
-                <span style={{color:'var(--accent)'}}>💉 {result.abatimentos} abatimentos gerados</span>
+                <span style={{color:'var(--accent)'}}>💉 Abatimento separado no botão abaixo</span>
                 {result.ignored > 0 && <span style={{color:'var(--warning)'}}>⚠ {result.ignored} com erro</span>}
               </div>
             </div>
           )}
 
-          {/* Data de corte para débito de estoque */}
+          {/* Reprocessamento separado de abatimentos */}
           <div style={{padding:14,background:'var(--bg-input)',borderRadius:'var(--radius-sm)',border:'1px solid var(--border)',marginBottom:12}}>
-            <div style={{fontSize:13,fontWeight:600,marginBottom:6}}>💉 Débito de Estoque do Aplicador</div>
+            <div style={{fontSize:13,fontWeight:600,marginBottom:6}}>💉 Reprocessamento de Abatimentos</div>
             <div style={{fontSize:12,color:'var(--text-muted)',marginBottom:10}}>
-              Somente tarefas com <strong>data de início a partir de</strong> esta data terão as doses aplicadas debitadas do estoque do aplicador. Tarefas anteriores serão atualizadas normalmente, mas <strong>sem debitar o estoque</strong>.
+              A importação acima apenas cria/atualiza tarefas. O estoque do aplicador só será debitado ao clicar em <strong>Reprocessar abatimentos pendentes</strong>, usando esta data de corte e ignorando tarefas que já possuem movimentação de aplicação.
             </div>
             <div style={{display:'flex',alignItems:'center',gap:10,flexWrap:'wrap'}}>
               <label style={{fontSize:12,fontWeight:600}}>Data de corte:</label>
               <input type="date" className="form-input" style={{width:160,padding:'5px 8px',fontSize:13}}
                 value={dataCorte} onChange={e => setDataCorte(e.target.value)} />
               <button className="btn btn-secondary btn-sm" onClick={() => setDataCorte(hoje)}>Hoje</button>
-              <button className="btn btn-secondary btn-sm" onClick={() => setDataCorte('')}>Sem corte (não debitar)</button>
+              <button className="btn btn-secondary btn-sm" onClick={() => setDataCorte('')}>Limpar data</button>
             </div>
             {dataCorte ? (
               <div style={{marginTop:8,fontSize:11,color:'var(--success)'}}>
-                ✓ Vai debitar estoque apenas das tarefas com data ≥ {new Date(dataCorte+'T12:00:00').toLocaleDateString('pt-BR')}
+                ✓ O botão de reprocessamento vai considerar tarefas com data ≥ {new Date(dataCorte+'T12:00:00').toLocaleDateString('pt-BR')}
               </div>
             ) : (
               <div style={{marginTop:8,fontSize:11,color:'var(--warning)'}}>
-                ⚠ Nenhuma data de corte definida — não vai debitar nenhum estoque nesta importação
+                ⚠ Informe uma data de corte para liberar o reprocessamento de abatimentos
               </div>
             )}
           </div>
 
-          <button className="btn btn-primary" onClick={doImport} disabled={importing || preview.filtered === 0}>
-            {importing ? 'Importando...' : `Importar ${preview.filtered} tarefas`}
-          </button>
+          <div style={{display:'flex',gap:10,alignItems:'center',flexWrap:'wrap'}}>
+            <button className="btn btn-primary" onClick={doImport} disabled={importing || reprocessando || preview.filtered === 0}>
+              {importing ? 'Importando...' : `Importar ${preview.filtered} tarefas`}
+            </button>
+            <button className="btn btn-success" onClick={reprocessarAbatimentosPendentes} disabled={importing || reprocessando || !dataCorte}>
+              {reprocessando ? 'Reprocessando no banco...' : '💉 Reprocessar abatimentos pendentes'}
+            </button>
+          </div>
+
+          <div style={{marginTop:8,fontSize:11,color:'var(--text-muted)'}}>
+            Fluxo seguro: primeiro importe/atualize as tarefas; depois clique no botão de reprocessamento para debitar somente pendências sem movimentação anterior.
+          </div>
+
+          {reprocessResult && (
+            <div style={{padding:12,background:'var(--info-bg)',border:'1px solid rgba(6,182,212,0.25)',borderRadius:'var(--radius-sm)',marginTop:12,fontSize:12,color:'var(--text-secondary)'}}>
+              <div style={{fontWeight:700,color:'var(--info)',marginBottom:4}}>Resultado do reprocessamento</div>
+              <div style={{display:'flex',gap:14,flexWrap:'wrap'}}>
+                <span>🔎 {reprocessResult.tarefas_analisadas || 0} analisadas</span>
+                <span>💉 {reprocessResult.abatimentos_gerados || 0} abatimentos</span>
+                <span>📦 {reprocessResult.sem_saldo || 0} sem saldo</span>
+                <span>💉 {reprocessResult.sem_vacina || 0} sem vacina</span>
+                <span>⚠ {reprocessResult.erros || 0} erros</span>
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -2925,12 +2806,7 @@ function ImportTutores() {
 
       const { data: vacinas } = await sb.from('vacinas').select('id, nome');
       const vacinaMap = {};
-      (vacinas || []).forEach(v => {
-        vacinaMap[v.nome.toLowerCase()] = v.id;
-        if (v.produto_nome) vacinaMap[String(v.produto_nome).toLowerCase()] = v.id;
-      });
-      const vacinaInfoMap = {};
-      (vacinas || []).forEach(v => { vacinaInfoMap[v.id] = v; });
+      (vacinas || []).forEach(v => { vacinaMap[v.nome.toLowerCase()] = v.id; });
 
       // Buscar tarefas para resolver tarefa_id via código
       const { data: tarefas } = await sb.from('tarefas').select('id, codigo');
@@ -2949,7 +2825,7 @@ function ImportTutores() {
       }).select().single();
 
       const rows = preview.data;
-      const batchSize = 50;
+      const batchSize = 100;
       let imported = 0, ignored = 0, aplicadoresCriados = 0;
 
       // Primeiro pass: criar aplicadores que não existem
