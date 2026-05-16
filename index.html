@@ -676,6 +676,7 @@ function Sidebar({ profile, currentPage, onNavigate, open, onClose, collapsed, o
       { id: 'escalas', icon: '👩‍⚕️', label: 'Escalas' },
       { id: 'tarefas-escalas', icon: '🔗', label: 'Tarefas × Escalas' },
       { id: 'demanda', icon: '⚖️', label: 'Demanda vs Oferta' },
+      { id: 'previsao', icon: '🔮', label: 'Previsão de Demanda' },
       { section: 'Logística' },
       { id: 'rotas', icon: '🚚', label: 'Rotas' },
       { id: 'veiculos', icon: '🚗', label: 'Veículos' },
@@ -694,6 +695,8 @@ function Sidebar({ profile, currentPage, onNavigate, open, onClose, collapsed, o
       { id: 'tarefas', icon: '📋', label: 'Tarefas' },
       { id: 'escalas', icon: '👩‍⚕️', label: 'Escalas' },
       { id: 'tarefas-escalas', icon: '🔗', label: 'Tarefas × Escalas' },
+      { id: 'demanda', icon: '⚖️', label: 'Demanda vs Oferta' },
+      { id: 'previsao', icon: '🔮', label: 'Previsão de Demanda' },
       { id: 'rotas', icon: '🚚', label: 'Rotas' },
       { id: 'transferencia', icon: '↔️', label: 'Transferência' },
       { id: 'aumentos-doses', icon: '➕', label: 'Aumento de Doses' },
@@ -812,6 +815,217 @@ function Modal({ title, onClose, children, large }) {
 // ═══════════════════════════════════════════════
 // DASHBOARD
 // ═══════════════════════════════════════════════
+// ═══════════════════════════════════════════════
+// SISTEMA DE ALERTAS
+// ═══════════════════════════════════════════════
+
+async function calcularAlertas(profile) {
+  const alertas = [];
+  const hoje = new Date();
+  const DATA_INICIO = '2026-03-08';
+
+  try {
+    // ── 1. Estoque zerado ou negativo ──────────────────────────────────
+    const { data: estoqueRows } = await sb.from('estoque')
+      .select('quantidade,vacina_id,localizacao_tipo,vacinas(nome),bases(nome),aplicadores(nome)')
+      .neq('localizacao_tipo', 'clinica');
+    (estoqueRows || []).forEach(e => {
+      const qtd = Number(e.quantidade || 0);
+      if (qtd <= 0) {
+        const local = e.localizacao_tipo === 'base' ? (e.bases?.nome || 'Base') : (e.aplicadores?.nome || 'Aplicador');
+        alertas.push({
+          id: 'estoque-zero-' + (e.vacinas?.nome || '') + '-' + local,
+          tipo: 'danger',
+          icone: '🚨',
+          titulo: 'Estoque zerado',
+          mensagem: `${e.vacinas?.nome || 'Vacina'} em ${local}: ${qtd} doses`,
+          pagina: 'estoque',
+          ts: Date.now(),
+        });
+      }
+    });
+
+    // ── 2. Lote vencendo nos próximos 30 dias ──────────────────────────
+    const em30dias = new Date(hoje); em30dias.setDate(em30dias.getDate() + 30);
+    const em30Str = em30dias.toISOString().slice(0, 10);
+    const hojeStr = hoje.toISOString().slice(0, 10);
+    const { data: vacinasVenc } = await sb.from('vacinas')
+      .select('id,nome,lote,validade')
+      .not('validade', 'is', null)
+      .lte('validade', em30Str)
+      .gte('validade', hojeStr);
+    (vacinasVenc || []).forEach(v => {
+      const diasRestantes = Math.round((new Date(v.validade) - hoje) / 86400000);
+      alertas.push({
+        id: 'vencimento-' + v.id,
+        tipo: diasRestantes <= 7 ? 'danger' : 'warning',
+        icone: '📦',
+        titulo: 'Lote próximo do vencimento',
+        mensagem: `${v.nome} (Lote ${v.lote || '—'}): vence em ${diasRestantes} dia${diasRestantes !== 1 ? 's' : ''} (${new Date(v.validade + 'T12:00:00').toLocaleDateString('pt-BR')})`,
+        pagina: 'vacinas',
+        ts: Date.now(),
+      });
+    });
+
+    // ── 3. Lotes já vencidos ───────────────────────────────────────────
+    const { data: vacinasExp } = await sb.from('vacinas')
+      .select('id,nome,lote,validade')
+      .not('validade', 'is', null)
+      .lt('validade', hojeStr);
+    (vacinasExp || []).forEach(v => {
+      alertas.push({
+        id: 'vencido-' + v.id,
+        tipo: 'danger',
+        icone: '🚫',
+        titulo: 'Lote vencido',
+        mensagem: `${v.nome} (Lote ${v.lote || '—'}) venceu em ${new Date(v.validade + 'T12:00:00').toLocaleDateString('pt-BR')}`,
+        pagina: 'vacinas',
+        ts: Date.now(),
+      });
+    });
+
+    // ── 4. Rotas em trânsito sem atualização de GPS há mais de 3h ─────
+    const limite3h = new Date(hoje); limite3h.setHours(limite3h.getHours() - 3);
+    const { data: rotasAtrasadas } = await sb.from('rotas')
+      .select('id,codigo,current_location_at,checkin_at,profiles!rotas_motorista_id_fkey(nome)')
+      .eq('status', 'em_transito')
+      .not('checkin_at', 'is', null);
+    (rotasAtrasadas || []).forEach(r => {
+      const ultimaPos = r.current_location_at || r.checkin_at;
+      if (ultimaPos && new Date(ultimaPos) < limite3h) {
+        const horas = Math.round((hoje - new Date(ultimaPos)) / 3600000);
+        alertas.push({
+          id: 'rota-sem-gps-' + r.id,
+          tipo: 'warning',
+          icone: '🚚',
+          titulo: 'Rota sem atualização de GPS',
+          mensagem: `Rota ${r.codigo} (${r.profiles?.nome || 'Motorista'}): sem posição há ${horas}h`,
+          pagina: 'rotas',
+          ts: Date.now(),
+        });
+      }
+    });
+
+    // ── 5. Tarefas da semana atual sem rota ───────────────────────────
+    const inicioSemana = new Date(DATA_INICIO + 'T00:00:00');
+    const diffDias = Math.floor((hoje - inicioSemana) / 86400000);
+    const semAtual = Math.max(1, Math.floor(diffDias / 7) + 1);
+    const semIni = new Date(DATA_INICIO + 'T00:00:00');
+    semIni.setDate(semIni.getDate() + (semAtual - 1) * 7);
+    const semFim = new Date(semIni); semFim.setDate(semFim.getDate() + 6);
+    const { data: tarefasSemana, count: totalSemana } = await sb.from('tarefas')
+      .select('id', { count: 'exact' })
+      .gte('data_inicio', semIni.toISOString().slice(0, 10))
+      .lte('data_inicio', semFim.toISOString().slice(0, 10))
+      .eq('status_logistica', 'nao_roteirizado');
+    if ((count => count > 0)(totalSemana)) {
+      alertas.push({
+        id: 'tarefas-sem-rota-s' + semAtual,
+        tipo: 'info',
+        icone: '📋',
+        titulo: 'Tarefas sem rota esta semana',
+        mensagem: `${totalSemana} tarefa${totalSemana !== 1 ? 's' : ''} da semana ${semAtual} ainda não roteirizadas`,
+        pagina: 'tarefas',
+        ts: Date.now(),
+      });
+    }
+
+    // ── 6. Mensagens não lidas no chat de rotas ────────────────────────
+    const { data: chatsNaoLidos } = await sb.from('vw_chat_rota_nao_lidas').select('rota_id,nao_lidas');
+    const totalNaoLidas = (chatsNaoLidos || []).reduce((s, c) => s + Number(c.nao_lidas || 0), 0);
+    if (totalNaoLidas > 0) {
+      alertas.push({
+        id: 'chat-nao-lido',
+        tipo: 'info',
+        icone: '💬',
+        titulo: 'Mensagens não lidas',
+        mensagem: `${totalNaoLidas} mensagem${totalNaoLidas !== 1 ? 's' : ''} não lida${totalNaoLidas !== 1 ? 's' : ''} em rotas ativas`,
+        pagina: 'rotas',
+        ts: Date.now(),
+      });
+    }
+
+  } catch(e) {
+    console.warn('calcularAlertas error:', e.message);
+  }
+
+  // Ordenar: danger primeiro, depois warning, depois info
+  const ordem = { danger: 0, warning: 1, info: 2 };
+  return alertas.sort((a, b) => ordem[a.tipo] - ordem[b.tipo]);
+}
+
+function PainelAlertas({ alertas, onClose, onNavigate, onAtualizar, loading }) {
+  const por_tipo = { danger: alertas.filter(a => a.tipo === 'danger'), warning: alertas.filter(a => a.tipo === 'warning'), info: alertas.filter(a => a.tipo === 'info') };
+  const COR = { danger: 'var(--danger)', warning: 'var(--warning)', info: 'var(--accent)' };
+  const BG = { danger: 'rgba(239,68,68,0.08)', warning: 'rgba(245,158,11,0.08)', info: 'rgba(59,130,246,0.08)' };
+  const BORDER = { danger: 'rgba(239,68,68,0.25)', warning: 'rgba(245,158,11,0.25)', info: 'rgba(59,130,246,0.25)' };
+
+  return (
+    <div style={{position:'fixed',top:0,right:0,width:380,height:'100vh',background:'var(--bg-card)',borderLeft:'1px solid var(--border)',zIndex:500,display:'flex',flexDirection:'column',boxShadow:'-4px 0 24px rgba(0,0,0,0.25)'}}>
+      {/* Header */}
+      <div style={{padding:'14px 16px',borderBottom:'1px solid var(--border)',display:'flex',alignItems:'center',justifyContent:'space-between',flexShrink:0}}>
+        <div>
+          <div style={{fontSize:16,fontWeight:700}}>🔔 Alertas</div>
+          <div style={{fontSize:11,color:'var(--text-muted)',marginTop:2}}>{alertas.length} alerta{alertas.length !== 1 ? 's' : ''} ativos</div>
+        </div>
+        <div style={{display:'flex',gap:6}}>
+          <button className="btn btn-secondary btn-sm" onClick={onAtualizar} disabled={loading} style={{fontSize:11}}>
+            {loading ? '...' : '↻ Atualizar'}
+          </button>
+          <button className="btn btn-secondary btn-sm" onClick={onClose} style={{fontSize:11}}>✕</button>
+        </div>
+      </div>
+
+      {/* Lista */}
+      <div style={{flex:1,overflowY:'auto',padding:12}}>
+        {alertas.length === 0 ? (
+          <div style={{padding:32,textAlign:'center',color:'var(--text-muted)'}}>
+            <div style={{fontSize:32,marginBottom:8}}>✅</div>
+            <div style={{fontSize:14,fontWeight:600}}>Tudo certo</div>
+            <div style={{fontSize:12,marginTop:4}}>Nenhum alerta ativo no momento</div>
+          </div>
+        ) : (
+          <div style={{display:'flex',flexDirection:'column',gap:8}}>
+            {['danger','warning','info'].map(tipo => {
+              const grupo = por_tipo[tipo];
+              if (grupo.length === 0) return null;
+              const label = tipo === 'danger' ? '🚨 Crítico' : tipo === 'warning' ? '⚠️ Atenção' : 'ℹ️ Informativo';
+              return (
+                <div key={tipo}>
+                  <div style={{fontSize:10,fontWeight:700,color:COR[tipo],textTransform:'uppercase',letterSpacing:.5,marginBottom:6,marginTop:4}}>{label} ({grupo.length})</div>
+                  {grupo.map(a => (
+                    <div key={a.id} style={{
+                      padding:'10px 12px',marginBottom:6,borderRadius:'var(--radius-sm)',
+                      background:BG[tipo], border:'1px solid ' + BORDER[tipo],
+                      cursor: a.pagina ? 'pointer' : 'default',
+                    }}
+                    onClick={() => { if (a.pagina) { onNavigate(a.pagina); onClose(); } }}>
+                      <div style={{display:'flex',gap:8,alignItems:'flex-start'}}>
+                        <span style={{fontSize:16,flexShrink:0}}>{a.icone}</span>
+                        <div style={{flex:1,minWidth:0}}>
+                          <div style={{fontSize:12,fontWeight:700,color:COR[tipo],marginBottom:2}}>{a.titulo}</div>
+                          <div style={{fontSize:11,color:'var(--text-secondary)',lineHeight:1.4}}>{a.mensagem}</div>
+                          {a.pagina && <div style={{fontSize:10,color:'var(--text-muted)',marginTop:4}}>Clique para ver →</div>}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* Footer */}
+      <div style={{padding:'10px 16px',borderTop:'1px solid var(--border)',fontSize:11,color:'var(--text-muted)',flexShrink:0}}>
+        Atualizado em {new Date().toLocaleTimeString('pt-BR', {hour:'2-digit',minute:'2-digit'})} · Atualiza a cada 5 min
+      </div>
+    </div>
+  );
+}
+
+
 function DashboardPage({ onNavigate }) {
   const [stats, setStats] = useState({ bases: 0, vacinas: 0, aplicadores: 0, tarefas: 0, escalas: 0, doses: 0, dosesBase: 0, dosesClinica: 0, dosesAplicador: 0, dosesTransito: 0, dosesPrevistas: 0, dosesAplicadas: 0, adesao: 0, dosesPerdidas: 0, dosesDanificadas: 0 });
   const [vacinaDashFilter, setVacinaDashFilter] = useState('');
@@ -823,6 +1037,10 @@ function DashboardPage({ onNavigate }) {
   const [weekData, setWeekData] = useState([]);
   const [weekModal, setWeekModal] = useState(null);
   const [apFilters, setApFilters] = useState({ ponto: '', uf: '', cidade: '', nome: '' });
+  const [periodoDataInicio, setPeriodoDataInicio] = useState('');
+  const [periodoDataFim, setPeriodoDataFim] = useState('');
+  const [periodoSemanaInicio, setPeriodoSemanaInicio] = useState('');
+  const [periodoSemanaFim, setPeriodoSemanaFim] = useState('');
   const toast = useContext(ToastContext);
 
   const DATA_INICIO_SEMANA_1 = '2026-03-08';
@@ -1150,7 +1368,49 @@ function DashboardPage({ onNavigate }) {
       (!f.ponto || (a.ponto || '').toLowerCase().includes(f.ponto.toLowerCase()));
   }) : [];
 
-  const maxTarefas = Math.max(...weekData.map(w => w.total), 1);
+  // Filtro do gráfico por data ou semana
+  const weekDataPeriodo = weekData.filter(w => {
+    if (periodoSemanaInicio && w.semana < Number(periodoSemanaInicio)) return false;
+    if (periodoSemanaFim && w.semana > Number(periodoSemanaFim)) return false;
+    if (periodoDataInicio || periodoDataFim) {
+      const inicio = new Date(DATA_INICIO_SEMANA_1 + 'T00:00:00');
+      inicio.setDate(inicio.getDate() + (w.semana - 1) * 7);
+      const fim = new Date(inicio); fim.setDate(fim.getDate() + 6);
+      if (periodoDataInicio && fim < new Date(periodoDataInicio + 'T00:00:00')) return false;
+      if (periodoDataFim && inicio > new Date(periodoDataFim + 'T23:59:59')) return false;
+    }
+    return true;
+  });
+  const maxTarefas = Math.max(...weekDataPeriodo.map(w => w.total), 1);
+
+  // KPIs derivados do período filtrado (semanas selecionadas)
+  const filtroPeriodoAtivo = periodoDataInicio || periodoDataFim || periodoSemanaInicio || periodoSemanaFim;
+  const kpisPeriodo = React.useMemo(() => {
+    if (!filtroPeriodoAtivo) return null; // sem filtro = usa stats globais
+    const previstas = weekDataPeriodo.reduce((s, w) => s + w.doses, 0);
+    const aplicadas = weekDataPeriodo.reduce((s, w) => {
+      // doses aplicadas = tarefas entregues * doses_previstas médias (aproximação)
+      // Para ser exato: varrer as tarefas das semanas filtradas
+      // Usamos weekData.dias.tarefas que foi armazenado no load()
+      const tarefasDaSemana = Object.values(w.dias || {}).flatMap(d => d.tarefas || []);
+      return s + tarefasDaSemana.reduce((ss, t) => ss + Number(t.doses_aplicadas || 0), 0);
+    }, 0);
+    const perdidas = weekDataPeriodo.reduce((s, w) => {
+      const ts = Object.values(w.dias || {}).flatMap(d => d.tarefas || []);
+      return s + ts.reduce((ss, t) => ss + Number(t.doses_perdidas || 0), 0);
+    }, 0);
+    const danificadas = weekDataPeriodo.reduce((s, w) => {
+      const ts = Object.values(w.dias || {}).flatMap(d => d.tarefas || []);
+      return s + ts.reduce((ss, t) => ss + Number(t.doses_danificadas || 0), 0);
+    }, 0);
+    const adesao = previstas > 0 ? (aplicadas / previstas) * 100 : 0;
+    const tarefas = weekDataPeriodo.reduce((s, w) => s + w.total, 0);
+    const entregues = weekDataPeriodo.reduce((s, w) => s + w.entregues, 0);
+    return { dosesPrevistas: previstas, dosesAplicadas: aplicadas, adesao, dosesPerdidas: perdidas, dosesDanificadas: danificadas, tarefas, entregues };
+  }, [weekDataPeriodo, filtroPeriodoAtivo]);
+
+  // Qual valor exibir: filtrado pelo período ou global
+  const kpi = (key) => filtroPeriodoAtivo && kpisPeriodo ? kpisPeriodo[key] : stats[key];
   const semanaSelecionadaDias = weekModal ? Object.values(weekModal.dias || {}).sort((a,b) => {
     const ordem = ['Domingo','Segunda','Terça','Quarta','Quinta','Sexta','Sábado'];
     return ordem.indexOf(a.dia) - ordem.indexOf(b.dia);
@@ -1166,26 +1426,49 @@ function DashboardPage({ onNavigate }) {
         <button className="btn btn-primary" onClick={() => onNavigate && onNavigate('arvore-distribuicao')}>🌳 Árvore de Distribuição</button>
       </div>
       <div className="card" style={{marginBottom:12,padding:12}}>
-        <div style={{display:'grid',gridTemplateColumns:'minmax(220px,360px) auto',gap:12,alignItems:'end'}}>
-          <div className="form-group">
-            <label className="form-label">Filtrar indicadores por vacina</label>
+        <div style={{display:'flex',gap:12,flexWrap:'wrap',alignItems:'flex-end'}}>
+          <div className="form-group" style={{minWidth:200,flex:1}}>
+            <label className="form-label">Vacina</label>
             <select className="form-select" value={vacinaDashFilter} onChange={e=>setVacinaDashFilter(e.target.value)}>
               <option value="">Todas as vacinas</option>
               {vacinaDashOptions.map(v => <option key={v.id} value={v.id}>{v.nome}</option>)}
             </select>
           </div>
-          <div style={{fontSize:12,color:'var(--text-muted)'}}>
-            Os cards abaixo usam Consultas/Tarefas para previstas e aplicadas, e Escalas para perdas e danos.
+          <div className="form-group">
+            <label className="form-label">Semana de</label>
+            <input type="number" min="1" max="52" className="form-input sm" style={{width:70}} placeholder="S1" value={periodoSemanaInicio} onChange={e=>setPeriodoSemanaInicio(e.target.value)} />
+          </div>
+          <div className="form-group">
+            <label className="form-label">Semana até</label>
+            <input type="number" min="1" max="52" className="form-input sm" style={{width:70}} placeholder="S52" value={periodoSemanaFim} onChange={e=>setPeriodoSemanaFim(e.target.value)} />
+          </div>
+          <div className="form-group">
+            <label className="form-label">Data de</label>
+            <input type="date" className="form-input sm" onClick={openDatePicker} onFocus={openDatePicker} value={periodoDataInicio} onChange={e=>setPeriodoDataInicio(e.target.value)} />
+          </div>
+          <div className="form-group">
+            <label className="form-label">Data até</label>
+            <input type="date" className="form-input sm" onClick={openDatePicker} onFocus={openDatePicker} value={periodoDataFim} onChange={e=>setPeriodoDataFim(e.target.value)} />
+          </div>
+          <div className="form-group" style={{alignSelf:'flex-end'}}>
+            {filtroPeriodoAtivo && (
+              <button className="btn btn-secondary btn-sm" onClick={()=>{setPeriodoSemanaInicio('');setPeriodoSemanaFim('');setPeriodoDataInicio('');setPeriodoDataFim('');}}>✕ Limpar período</button>
+            )}
           </div>
         </div>
+        {filtroPeriodoAtivo && (
+          <div style={{marginTop:8,fontSize:11,color:'var(--accent)',fontWeight:600}}>
+            ⚡ Filtro de período ativo — KPIs e gráfico exibindo apenas as semanas selecionadas
+          </div>
+        )}
       </div>
 
       <div className="kpi-grid-compact">
-        <div className="kpi-card-compact"><div className="stat-icon kpi-icon" style={{background:'var(--accent-subtle)',color:'var(--accent)'}}>📋</div><div className="kpi-value">{Number(stats.dosesPrevistas || 0).toLocaleString('pt-BR')}</div><div className="kpi-label">Doses Previstas</div></div>
-        <div className="kpi-card-compact"><div className="stat-icon kpi-icon" style={{background:'var(--success-bg)',color:'var(--success)'}}>✅</div><div className="kpi-value">{Number(stats.dosesAplicadas || 0).toLocaleString('pt-BR')}</div><div className="kpi-label">Doses Aplicadas</div></div>
-        <div className="kpi-card-compact"><div className="stat-icon kpi-icon" style={{background:'var(--info-bg)',color:'var(--info)'}}>📈</div><div className="kpi-value">{Number(stats.adesao || 0).toFixed(1).replace('.', ',')}%</div><div className="kpi-label">% Adesão</div></div>
-        <div className="kpi-card-compact"><div className="stat-icon kpi-icon" style={{background:'var(--warning-bg)',color:'var(--warning)'}}>⚠️</div><div className="kpi-value">{Number(stats.dosesPerdidas || 0).toLocaleString('pt-BR')}</div><div className="kpi-label">Doses Perdidas</div></div>
-        <div className="kpi-card-compact"><div className="stat-icon kpi-icon" style={{background:'var(--danger-bg)',color:'var(--danger)'}}>🚫</div><div className="kpi-value">{Number(stats.dosesDanificadas || 0).toLocaleString('pt-BR')}</div><div className="kpi-label">Doses Danificadas</div></div>
+        <div className="kpi-card-compact" style={filtroPeriodoAtivo?{borderColor:'var(--accent)'}:{}}><div className="stat-icon kpi-icon" style={{background:'var(--accent-subtle)',color:'var(--accent)'}}>📋</div><div className="kpi-value">{Number(kpi('dosesPrevistas') || 0).toLocaleString('pt-BR')}</div><div className="kpi-label">Doses Previstas{filtroPeriodoAtivo&&<span style={{fontSize:9,color:'var(--accent)',display:'block'}}>período</span>}</div></div>
+        <div className="kpi-card-compact" style={filtroPeriodoAtivo?{borderColor:'var(--accent)'}:{}}><div className="stat-icon kpi-icon" style={{background:'var(--success-bg)',color:'var(--success)'}}>✅</div><div className="kpi-value">{Number(kpi('dosesAplicadas') || 0).toLocaleString('pt-BR')}</div><div className="kpi-label">Doses Aplicadas{filtroPeriodoAtivo&&<span style={{fontSize:9,color:'var(--accent)',display:'block'}}>período</span>}</div></div>
+        <div className="kpi-card-compact" style={filtroPeriodoAtivo?{borderColor:'var(--accent)'}:{}}><div className="stat-icon kpi-icon" style={{background:'var(--info-bg)',color:'var(--info)'}}>📈</div><div className="kpi-value">{Number(kpi('adesao') || 0).toFixed(1).replace('.', ',')}%</div><div className="kpi-label">% Adesão{filtroPeriodoAtivo&&<span style={{fontSize:9,color:'var(--accent)',display:'block'}}>período</span>}</div></div>
+        <div className="kpi-card-compact" style={filtroPeriodoAtivo?{borderColor:'var(--accent)'}:{}}><div className="stat-icon kpi-icon" style={{background:'var(--warning-bg)',color:'var(--warning)'}}>⚠️</div><div className="kpi-value">{Number(kpi('dosesPerdidas') || 0).toLocaleString('pt-BR')}</div><div className="kpi-label">Doses Perdidas{filtroPeriodoAtivo&&<span style={{fontSize:9,color:'var(--accent)',display:'block'}}>período</span>}</div></div>
+        <div className="kpi-card-compact" style={filtroPeriodoAtivo?{borderColor:'var(--accent)'}:{}}><div className="stat-icon kpi-icon" style={{background:'var(--danger-bg)',color:'var(--danger)'}}>🚫</div><div className="kpi-value">{Number(kpi('dosesDanificadas') || 0).toLocaleString('pt-BR')}</div><div className="kpi-label">Doses Danificadas{filtroPeriodoAtivo&&<span style={{fontSize:9,color:'var(--accent)',display:'block'}}>período</span>}</div></div>
         {/* Novos cards clicáveis */}
         <div className="kpi-card-compact" onClick={openEstoqueModal}
           style={{cursor:'pointer',borderColor:'var(--accent)',transition:'all 0.15s'}}
@@ -1211,15 +1494,16 @@ function DashboardPage({ onNavigate }) {
             <div className="card-title">Tarefas x Semanas</div>
             <div className="page-subtitle">Base: tabela tarefas, campo data_inicio · Semana 1: 08/03/2026 a 14/03/2026 · empilhado por logística</div>
           </div>
-          <div style={{display:'flex',gap:10,fontSize:12,color:'var(--text-muted)'}}>
+          <div style={{display:'flex',gap:10,fontSize:12,color:'var(--text-muted)',alignItems:'center'}}>
             <span><span style={{display:'inline-block',width:10,height:10,background:'var(--success)',borderRadius:2,marginRight:4}}></span>Entregues</span>
             <span><span style={{display:'inline-block',width:10,height:10,background:'var(--accent)',borderRadius:2,marginRight:4}}></span>Ag. logística</span>
+            {filtroPeriodoAtivo && <span style={{fontSize:11,color:'var(--accent)',fontWeight:600}}>⚡ período filtrado</span>}
           </div>
         </div>
-        {weekData.length === 0 ? <div className="empty-state"><div className="empty-text">Sem dados semanais</div></div> : (
+        {weekDataPeriodo.length === 0 ? <div className="empty-state"><div className="empty-text">Sem dados semanais{weekData.length > 0 ? ' para o período filtrado' : ''}</div></div> : (
           <div className="dashboard-chart-scroll">
-            <div className="dashboard-chart-inner" style={{minWidth: Math.max(weekData.length * 44, 520)}}>
-            {weekData.map(w => {
+            <div className="dashboard-chart-inner" style={{minWidth: Math.max(weekDataPeriodo.length * 44, 520)}}>
+            {weekDataPeriodo.map(w => {
               const totalH = Math.max(8, Math.round((w.total / maxTarefas) * 95));
               const entregueH = w.total > 0 ? Math.round((w.entregues / w.total) * totalH) : 0;
               const pendenteH = Math.max(0, totalH - entregueH);
@@ -2849,9 +3133,9 @@ function ImportClinicas() {
   const key = (v) => norm(v).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
   const onlyDigits = (v) => String(v || '').replace(/\D/g, '');
   const parseQtd = (v) => {
-    const raw = String(v ?? '0').replace(/\./g, '').replace(',', '.');
+    const raw = String(v ?? '').replace(/\./g, '').replace(',', '.');
     const n = Number(raw);
-    return Number.isFinite(n) ? Math.round(n) : 0;
+    return Number.isFinite(n) ? Math.round(n) : null; // null = campo vazio (não preenchido)
   };
   const get = (row, aliases) => {
     const map = {};
@@ -2904,16 +3188,18 @@ function ImportClinicas() {
           uf: norm(get(r, ['uf','estado'])).toUpperCase(),
           endereco: norm(get(r, ['endereco','endereço','logradouro'])),
           vacina,
-          quantidade: qtd,
+          quantidade: qtd !== null ? qtd : 0,
           data: dataRef,
           observacao: norm(get(r, ['observacao','observação','obs'])),
           modalidade: 'rede_credenciada',
-          valido: !!clinica && qtd > 0,
+          valido: !!clinica && qtd !== null, // aceita 0 e negativo
         };
       });
       const valid = rows.filter(r => r.valido);
       const totalDoses = valid.reduce((s,r)=>s+Number(r.quantidade||0),0);
-      setPreview({ total: rows.length, valid: valid.length, invalid: rows.length - valid.length, totalDoses, data: rows });
+      const totalNeg = valid.filter(r => r.quantidade < 0).length;
+      const totalZero = valid.filter(r => r.quantidade === 0).length;
+      setPreview({ total: rows.length, valid: valid.length, invalid: rows.length - valid.length, totalDoses, totalNeg, totalZero, data: rows });
     };
     reader.readAsArrayBuffer(f);
   };
@@ -2990,7 +3276,8 @@ function ImportClinicas() {
             const produtoRef = String(vacina.produto_nome || vacina.nome || '').toLowerCase().trim();
             const candidatos = (estoques || []).filter(e => String(e.vacinas?.produto_nome || e.vacinas?.nome || '').toLowerCase().trim() === produtoRef || String(e.vacina_id) === String(vacina.id));
             const disponivel = candidatos.reduce((s,e)=>s+Number(e.quantidade||0),0);
-            if (disponivel < r.quantidade) throw new Error(`Saldo insuficiente na clínica. Disponível ${disponivel}, solicitado ${r.quantidade}`);
+            // Negativo = devolução/estorno; zero = registro sem consumo — ambos permitidos
+            if (r.quantidade > 0 && disponivel < r.quantidade) throw new Error(`Saldo insuficiente na clínica. Disponível ${disponivel}, solicitado ${r.quantidade}`);
             let restante = r.quantidade;
             const ordenados = candidatos.sort((a,b)=>Number(b.quantidade||0)-Number(a.quantidade||0));
             for (const e of ordenados) {
@@ -3065,10 +3352,12 @@ function ImportClinicas() {
       {preview && (
         <div style={{marginTop:16}}>
           <div style={{display:'flex',gap:12,marginBottom:12,flexWrap:'wrap'}}>
-            <div className="stat-card" style={{flex:1,minWidth:120}}><div className="stat-label">Linhas</div><div className="stat-value" style={{fontSize:22}}>{preview.total}</div></div>
-            <div className="stat-card" style={{flex:1,minWidth:120}}><div className="stat-label">Válidas</div><div className="stat-value" style={{fontSize:22,color:'var(--success)'}}>{preview.valid}</div></div>
-            <div className="stat-card" style={{flex:1,minWidth:120}}><div className="stat-label">Doses</div><div className="stat-value" style={{fontSize:22,color:'var(--accent)'}}>{preview.totalDoses.toLocaleString('pt-BR')}</div></div>
-            <div className="stat-card" style={{flex:1,minWidth:120}}><div className="stat-label">Ignoradas</div><div className="stat-value" style={{fontSize:22,color:preview.invalid?'var(--warning)':'var(--text-muted)'}}>{preview.invalid}</div></div>
+            <div className="stat-card" style={{flex:1,minWidth:100}}><div className="stat-label">Linhas</div><div className="stat-value" style={{fontSize:22}}>{preview.total}</div></div>
+            <div className="stat-card" style={{flex:1,minWidth:100}}><div className="stat-label">Válidas</div><div className="stat-value" style={{fontSize:22,color:'var(--success)'}}>{preview.valid}</div></div>
+            <div className="stat-card" style={{flex:1,minWidth:100}}><div className="stat-label">Doses</div><div className="stat-value" style={{fontSize:22,color:'var(--accent)'}}>{preview.totalDoses.toLocaleString('pt-BR')}</div></div>
+            {preview.totalZero > 0 && <div className="stat-card" style={{flex:1,minWidth:100}}><div className="stat-label">Com saldo 0</div><div className="stat-value" style={{fontSize:22,color:'var(--text-muted)'}}>{preview.totalZero}</div></div>}
+            {preview.totalNeg > 0 && <div className="stat-card" style={{flex:1,minWidth:100}}><div className="stat-label">Negativos</div><div className="stat-value" style={{fontSize:22,color:'var(--warning)'}}>{preview.totalNeg}</div></div>}
+            <div className="stat-card" style={{flex:1,minWidth:100}}><div className="stat-label">Ignoradas</div><div className="stat-value" style={{fontSize:22,color:preview.invalid?'var(--warning)':'var(--text-muted)'}}>{preview.invalid}</div></div>
           </div>
           {importing && <div style={{marginBottom:12}}><div style={{fontSize:13,color:'var(--text-secondary)',marginBottom:6}}>Importando... {progress}%</div><div className="progress-bar"><div className="progress-fill" style={{width:progress+'%'}} /></div></div>}
           {result && <div style={{padding:14,background:'var(--success-bg)',borderRadius:'var(--radius-sm)',border:'1px solid rgba(16,185,129,0.2)',marginBottom:12}}><div style={{fontSize:14,fontWeight:600,color:'var(--success)'}}>✓ Importação concluída</div><div style={{fontSize:13,color:'var(--text-secondary)',marginTop:4}}>{result.imported} novos · {result.updated} atualizados · {result.ignored} ignorados</div>{result.errors?.length > 0 && <div style={{fontSize:11,color:'var(--warning)',marginTop:8}}>{result.errors.map((e,i)=><div key={i}>{e}</div>)}</div>}</div>}
@@ -3600,6 +3889,8 @@ function TarefasEscalasPage({ profile }) {
   const [dataInicioFilter, setDataInicioFilter] = useState('');
   const [dataFimFilter, setDataFimFilter] = useState('');
   const [page, setPage] = useState(0);
+  const [detalheModal, setDetalheModal] = useState(null); // { tarefa, logisticaData }
+  const [loadingDetalhe, setLoadingDetalhe] = useState(false);
   const PAGE_SIZE = 50;
   const toast = useContext(ToastContext);
   const isAdmin = profile?.role === 'admin';
@@ -3692,8 +3983,117 @@ function TarefasEscalasPage({ profile }) {
 
   const fmtDate = d => d ? new Date(d+'T12:00:00').toLocaleDateString('pt-BR') : '—';
 
+  const abrirDetalhe = async (tarefa) => {
+    setLoadingDetalhe(true);
+    setDetalheModal({ tarefa, logisticaData: null });
+    try {
+      // Busca remessas vinculadas ao código da tarefa
+      const { data: remessas } = await sb.from('remessas')
+        .select('id,codigo_rastreio,status,updated_at,ordem_entrega,rotas(id,codigo,status,data_prevista,profiles!rotas_motorista_id_fkey(nome))')
+        .ilike('observacao', '%' + tarefa.codigo + '%')
+        .order('updated_at', { ascending: false });
+
+      // Agrupa por rota, pega a info mais relevante de cada remessa
+      const itens = (remessas || []).map(rem => ({
+        rota_codigo: rem.rotas?.codigo || '—',
+        rota_status: rem.rotas?.status || '—',
+        rota_data: rem.rotas?.data_prevista || null,
+        motorista: rem.rotas?.profiles?.nome || '—',
+        remessa_codigo: rem.codigo_rastreio || '—',
+        remessa_status: rem.status || '—',
+        data_entrega: ['concluida','entregue'].includes(rem.status) ? rem.updated_at : null,
+        ordem: rem.ordem_entrega,
+      }));
+
+      setDetalheModal({ tarefa, logisticaData: itens });
+    } catch(e) {
+      toast('Erro ao carregar detalhes: ' + e.message, 'error');
+      setDetalheModal(null);
+    }
+    setLoadingDetalhe(false);
+  };
+
+  const ST_REM = { planejada:'Planejada', montagem:'Montagem', pronta:'Pronta', carregada:'Carregada', em_transito:'Em Trânsito', concluida:'Entregue', cancelada:'Cancelada', entregue:'Entregue' };
+  const ROTA_ST_MAP = { planejada:'badge-blue', montagem:'badge-yellow', pronta:'badge-cyan', em_transito:'badge-green', concluida:'badge-gray', cancelada:'badge-red' };
+  const REM_BADGE = { planejada:'badge-gray', montagem:'badge-yellow', pronta:'badge-cyan', carregada:'badge-cyan', em_transito:'badge-green', concluida:'badge-green', entregue:'badge-green', cancelada:'badge-red' };
+
   return (
     <div>
+      {/* Modal de detalhe logístico da tarefa */}
+      {detalheModal && (
+        <Modal title={'Detalhes Logísticos — ' + (detalheModal.tarefa.codigo || '')} onClose={() => setDetalheModal(null)} large>
+          <div style={{display:'flex',flexDirection:'column',gap:14}}>
+            {/* Resumo da tarefa */}
+            <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:8}}>
+              {[
+                ['Cliente', detalheModal.tarefa.cliente],
+                ['Data', detalheModal.tarefa.data_inicio ? new Date(detalheModal.tarefa.data_inicio+'T12:00:00').toLocaleDateString('pt-BR') : '—'],
+                ['Cidade/UF', [detalheModal.tarefa.cidade_campanha, detalheModal.tarefa.uf_campanha].filter(Boolean).join('/')],
+                ['Vacina', detalheModal.tarefa.vacina || '—'],
+                ['Doses Previstas', detalheModal.tarefa.doses_previstas || 0],
+                ['Status Tarefa', detalheModal.tarefa.status || '—'],
+              ].map(([l,v]) => (
+                <div key={l} style={{background:'var(--bg-input)',borderRadius:'var(--radius-sm)',padding:'8px 12px',border:'1px solid var(--border)'}}>
+                  <div style={{fontSize:10,color:'var(--text-muted)',fontWeight:700,textTransform:'uppercase',letterSpacing:.5,marginBottom:2}}>{l}</div>
+                  <div style={{fontSize:13,fontWeight:600}}>{v}</div>
+                </div>
+              ))}
+            </div>
+
+            {/* Tabela de rotas/remessas */}
+            <div>
+              <div style={{fontSize:12,fontWeight:700,color:'var(--text-secondary)',textTransform:'uppercase',letterSpacing:.5,marginBottom:8}}>
+                Histórico Logístico {loadingDetalhe && <span style={{color:'var(--text-muted)',fontWeight:400}}>carregando...</span>}
+              </div>
+              {!loadingDetalhe && detalheModal.logisticaData !== null && (
+                detalheModal.logisticaData.length === 0 ? (
+                  <div style={{padding:20,textAlign:'center',color:'var(--text-muted)',background:'var(--bg-input)',borderRadius:'var(--radius-sm)',fontSize:13}}>
+                    Nenhuma rota ou remessa encontrada para esta tarefa.
+                  </div>
+                ) : (
+                  <div className="table-wrap">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Rota</th>
+                          <th>Status Rota</th>
+                          <th>Data Prevista</th>
+                          <th>Motorista</th>
+                          <th>Remessa</th>
+                          <th>Status Remessa</th>
+                          <th>Data Entrega</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {detalheModal.logisticaData.map((item, i) => (
+                          <tr key={i}>
+                            <td className="mono" style={{fontWeight:600,color:'var(--accent)'}}>{item.rota_codigo}</td>
+                            <td><span className={`badge ${ROTA_ST_MAP[item.rota_status]||'badge-gray'}`}>{item.rota_status}</span></td>
+                            <td>{item.rota_data ? new Date(item.rota_data+'T12:00:00').toLocaleDateString('pt-BR') : '—'}</td>
+                            <td style={{fontSize:12}}>{item.motorista}</td>
+                            <td className="mono" style={{fontSize:11,color:'var(--accent)'}}>{item.remessa_codigo}</td>
+                            <td><span className={`badge ${REM_BADGE[item.remessa_status]||'badge-gray'}`}>{ST_REM[item.remessa_status]||item.remessa_status}</span></td>
+                            <td style={{fontSize:12}}>
+                              {item.data_entrega
+                                ? new Date(item.data_entrega).toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',year:'2-digit',hour:'2-digit',minute:'2-digit'})
+                                : <span style={{color:'var(--text-muted)'}}>—</span>}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )
+              )}
+            </div>
+
+            <div className="modal-actions">
+              <button className="btn btn-secondary" onClick={() => setDetalheModal(null)}>Fechar</button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
       <div className="page-header">
         <div>
           <div className="page-title">Tarefas × Escalas</div>
@@ -3774,10 +4174,11 @@ function TarefasEscalasPage({ profile }) {
                   // Células comuns da tarefa (com rowSpan)
                   const tarefaCells = (
                     <>
-                      <td rowSpan={rowSpan} style={{verticalAlign:'top',maxWidth:220}}>
+                      <td rowSpan={rowSpan} style={{verticalAlign:'top',maxWidth:220,cursor:'pointer'}} onClick={() => abrirDetalhe(t)} title="Clique para ver detalhes logísticos">
                         <div className="mono" style={{fontSize:10,color:'var(--accent)',marginBottom:2,overflow:'hidden',textOverflow:'ellipsis'}}>{t.codigo}</div>
                         <div style={{fontSize:12,fontWeight:600,overflow:'hidden',textOverflow:'ellipsis'}}>{t.cliente}</div>
                         <div style={{fontSize:10,color:'var(--text-muted)'}}>{t.cidade_campanha}</div>
+                        <div style={{fontSize:9,color:'var(--text-muted)',marginTop:3,opacity:.7}}>🔍 ver logística</div>
                       </td>
                       <td rowSpan={rowSpan} style={{verticalAlign:'top'}}>{fmtDate(t.data_inicio)}</td>
                       <td rowSpan={rowSpan} style={{verticalAlign:'top'}} className="mono">{t.uf_campanha}</td>
@@ -3840,6 +4241,558 @@ function TarefasEscalasPage({ profile }) {
     </div>
   );
 }
+
+
+// ═══════════════════════════════════════════════
+// PREVISÃO DE DEMANDA
+// ═══════════════════════════════════════════════
+function PrevisaoDemandaPage() {
+  const [loading, setLoading] = useState(true);
+  const [semanas, setSemanas] = useState([]);
+  const [vacinas, setVacinas] = useState([]);
+  const [vacinaFilter, setVacinaFilter] = useState('');
+  const [horizonte, setHorizonte] = useState(4);
+  const [estoqueAtual, setEstoqueAtual] = useState(0);
+  const [adesaoParam, setAdesaoParam] = useState(''); // % adesão manual (vazio = usa histórico)
+  const [historicoAdesao, setHistoricoAdesao] = useState(null); // { media, semanas, min, max }
+  const toast = useContext(ToastContext);
+
+  const DATA_INICIO = '2026-03-08';
+
+  const semanaNum = (dataISO) => {
+    if (!dataISO) return null;
+    const ini = new Date(DATA_INICIO + 'T00:00:00');
+    const d = new Date(String(dataISO).slice(0,10) + 'T00:00:00');
+    if (isNaN(d)) return null;
+    const s = Math.floor((d - ini) / (7 * 24 * 3600 * 1000)) + 1;
+    return s > 0 ? s : null;
+  };
+
+  const semanaAtual = () => {
+    const ini = new Date(DATA_INICIO + 'T00:00:00');
+    const hoje = new Date();
+    const h = new Date(hoje.getFullYear(), hoje.getMonth(), hoje.getDate());
+    return Math.max(1, Math.floor((h - ini) / (7 * 24 * 3600 * 1000)) + 1);
+  };
+
+  const intervalo = (s) => {
+    const ini = new Date(DATA_INICIO + 'T00:00:00');
+    ini.setDate(ini.getDate() + (s - 1) * 7);
+    const fim = new Date(ini); fim.setDate(fim.getDate() + 6);
+    return ini.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }) + ' – ' +
+           fim.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
+  };
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const atualSemana = semanaAtual();
+
+      // ── 0. MAPA DE VACINAS (normaliza texto livre → id) ─────────────────
+      const { data: vacinasData } = await sb.from('vacinas').select('id,nome').order('nome');
+      const vacinasList = vacinasData || [];
+      // Normaliza texto de vacina (ex: "Gripe" → "Influenza Tetravalente")
+      const normVac = (v) => {
+        const s = String(v || '').trim().toLowerCase();
+        if (!s || s === 'gripe' || s.includes('tetrav')) return 'Influenza Tetravalente';
+        if (s.includes('triv') || s === 'gripe trivalente') return 'Influenza Trivalente';
+        if (s.includes('pneumo') || s.includes('pneum')) return 'Pneumo15';
+        if (s.includes('hepat') && s.includes('a')) return 'Hepatite A';
+        if (s.includes('hepat') && s.includes('b')) return 'Hepatite B';
+        if (s.includes('covid') || s.includes('corona')) return 'COVID-19';
+        if (s.includes('febre amarela') || s.includes('amarela')) return 'Febre Amarela';
+        return String(v || '').trim();
+      };
+      // Mapa: nome normalizado → id (match por nome contido)
+      const vacinaIdPorNome = {};
+      vacinasList.forEach(v => {
+        vacinaIdPorNome[v.nome.trim().toLowerCase()] = v.id;
+        vacinaIdPorNome[v.nome.trim()] = v.id;
+      });
+      const resolveVacinaId = (vacinaTexto, vacinaIdDireto) => {
+        if (vacinaIdDireto) return vacinaIdDireto;
+        const nomeNorm = normVac(vacinaTexto);
+        // Match exato primeiro
+        if (vacinaIdPorNome[nomeNorm]) return vacinaIdPorNome[nomeNorm];
+        // Match parcial (nome do banco contém o texto normalizado)
+        const nNorm = nomeNorm.toLowerCase();
+        const found = vacinasList.find(v => v.nome.toLowerCase().includes(nNorm) || nNorm.includes(v.nome.toLowerCase()));
+        return found?.id || null;
+      };
+      if (vacinas.length === 0) setVacinas(vacinasList);
+
+      // ── 1. TAREFAS (busca todas, filtra client-side por vacina) ─────────
+      const allTarefasRaw = [];
+      const pageSize = 1000;
+      for (let from = 0; ; from += pageSize) {
+        const { data, error } = await sb.from('tarefas')
+          .select('id,data_inicio,doses_previstas,doses_aplicadas,status_logistica,vacina_id,vacina')
+          .order('data_inicio', { ascending: true })
+          .range(from, from + pageSize - 1);
+        if (error) throw error;
+        if (!data || data.length === 0) break;
+        allTarefasRaw.push(...data);
+        if (data.length < pageSize) break;
+      }
+      // Resolver vacina_id de cada tarefa e filtrar
+      const allTarefas = allTarefasRaw
+        .map(t => ({ ...t, _vacinaId: resolveVacinaId(t.vacina, t.vacina_id) }))
+        .filter(t => !vacinaFilter || String(t._vacinaId) === String(vacinaFilter));
+
+      // ── 2. ESTOQUE ATUAL (filtrado por vacina_id) ────────────────────────
+      const { data: estoqueData } = await sb.from('estoque')
+        .select('quantidade,vacina_id,localizacao_tipo');
+      const estoqueTotal = (estoqueData || [])
+        .filter(e => !vacinaFilter || String(e.vacina_id) === String(vacinaFilter))
+        .reduce((s, e) => s + Number(e.quantidade || 0), 0);
+      setEstoqueAtual(estoqueTotal);
+
+      // ── 3. AGRUPAR POR SEMANA ───────────────────────────────────────────
+      const porSemana = {};
+      allTarefas.forEach(t => {
+        const s = semanaNum(t.data_inicio);
+        if (!s) return;
+        if (!porSemana[s]) porSemana[s] = { semana: s, previstas: 0, aplicadas: 0, tarefas: 0, perdidas: 0 };
+        porSemana[s].previstas += Number(t.doses_previstas || 0);
+        porSemana[s].aplicadas += Number(t.doses_aplicadas || 0);
+        porSemana[s].tarefas += 1;
+      });
+
+      // ── 4. CALCULAR ADESÃO HISTÓRICA ────────────────────────────────────
+      // Só considera semanas passadas COM dados reais (previstas > 0 E aplicadas > 0)
+      const semanasComAdesao = Object.values(porSemana)
+        .filter(s => s.semana < atualSemana && s.previstas > 0 && s.aplicadas > 0)
+        .map(s => ({
+          semana: s.semana,
+          adesao: s.aplicadas / s.previstas,
+          previstas: s.previstas,
+          aplicadas: s.aplicadas,
+        }));
+
+      const mediaAdesaoHistorica = semanasComAdesao.length > 0
+        ? semanasComAdesao.reduce((s, w) => s + w.adesao, 0) / semanasComAdesao.length
+        : null;
+
+      setHistoricoAdesao(semanasComAdesao.length > 0 ? {
+        media: mediaAdesaoHistorica,
+        semanas: semanasComAdesao.length,
+        min: Math.min(...semanasComAdesao.map(s => s.adesao)),
+        max: Math.max(...semanasComAdesao.map(s => s.adesao)),
+        dados: semanasComAdesao,
+      } : null);
+
+      // % adesão a usar: manual (se informado) ou histórica (se existir) ou 80%
+      const pctAdesaoManual = adesaoParam !== '' ? parseFloat(adesaoParam) / 100 : null;
+      const pctAdesao = pctAdesaoManual !== null
+        ? pctAdesaoManual
+        : (mediaAdesaoHistorica !== null ? mediaAdesaoHistorica : 0.80);
+
+      // ── 5. CONSTRUIR LISTA DE SEMANAS ──────────────────────────────────
+      // Histórico: semanas passadas com dados
+      // Futuro REAL: semanas futuras que já têm tarefas importadas (previstas > 0)
+      // NUNCA projeta demanda para semanas sem dados — mostra 0 demanda
+      const todasSemanas = new Set([
+        ...Object.keys(porSemana).map(Number),
+        // inclui até semana atual + horizonte mas SÓ se tiver dados
+      ]);
+
+      // Semanas futuras com dados reais já importados
+      const semanasComDadosFuturos = Object.values(porSemana)
+        .filter(s => s.semana >= atualSemana && s.previstas > 0)
+        .map(s => s.semana);
+
+      // Range a exibir: últimas 8 semanas históricas + semanas futuras com dados + horizonte de projeção (sem dados = 0)
+      const minSemana = Math.max(1, atualSemana - 8);
+      const maxSemanaComDados = Math.max(
+        atualSemana,
+        ...semanasComDadosFuturos,
+        ...Object.keys(porSemana).map(Number).filter(s => s >= atualSemana)
+      );
+      // Adiciona horizonte APENAS para semanas que já têm dados, mais N semanas a exibir (mas com demanda 0)
+      const maxSemana = maxSemanaComDados + horizonte;
+
+      const lista = [];
+      for (let s = minSemana; s <= maxSemana; s++) {
+        const real = porSemana[s];
+        const isFutura = s >= atualSemana;
+        const isAtual = s === atualSemana;
+        // "tem dados reais" = tarefas já importadas com doses previstas
+        const temDadosReais = real && real.previstas > 0;
+
+        // Demanda desta semana: se tem dados reais, usa. Senão: 0 (não inventa)
+        const demandaSemana = temDadosReais ? real.previstas : 0;
+
+        // Consumo estimado = demanda × % adesão (só faz sentido se tem demanda)
+        const consumoEstimado = isFutura && demandaSemana > 0
+          ? Math.round(demandaSemana * pctAdesao)
+          : (real?.aplicadas || 0);
+
+        // Adesão realizada nesta semana
+        const adesaoRealizada = real?.previstas > 0 && real?.aplicadas > 0
+          ? (real.aplicadas / real.previstas)
+          : null;
+
+        lista.push({
+          semana: s,
+          intervalo: intervalo(s),
+          previstas: real?.previstas || 0,
+          aplicadas: real?.aplicadas || 0,
+          tarefas: real?.tarefas || 0,
+          perdidas: real?.perdidas || 0,
+          demandaSemana,
+          consumoEstimado,
+          adesaoRealizada,
+          isFutura,
+          isAtual,
+          temDadosReais,
+          tipo: isAtual ? 'atual'
+              : isFutura ? (temDadosReais ? 'futuro-real' : 'futuro-sem-dados')
+              : 'historico',
+        });
+      }
+
+      // ── 6. ESTOQUE PROJETADO (acumulativo, semanas futuras) ────────────
+      let estoqueAcc = estoqueTotal;
+      lista.forEach(s => {
+        if (!s.isFutura) { s.estoqueProjetado = null; s.ruptura = false; s.alerta = false; return; }
+        if (s.demandaSemana === 0) {
+          // sem demanda → estoque não muda
+          s.estoqueProjetado = estoqueAcc;
+          s.ruptura = false;
+          s.alerta = false;
+          return;
+        }
+        estoqueAcc -= s.consumoEstimado;
+        s.estoqueProjetado = estoqueAcc;
+        s.ruptura = estoqueAcc < 0;
+        s.alerta = estoqueAcc >= 0 && estoqueAcc < s.demandaSemana;
+      });
+
+      setSemanas(lista);
+
+      // vacinas já carregadas no início do load()
+
+    } catch(err) {
+      toast('Erro ao carregar previsão: ' + err.message, 'error');
+    }
+    setLoading(false);
+  };
+
+  useEffect(() => { load(); }, [vacinaFilter, horizonte, adesaoParam]);
+
+  // ── DERIVADOS ────────────────────────────────────────────────────────────
+  const semanasHistoricas = semanas.filter(s => !s.isFutura);
+  const semanasFuturas = semanas.filter(s => s.isFutura && s.temDadosReais);
+  const primeiraRuptura = semanas.find(s => s.ruptura);
+  const primeiroAlerta = semanas.find(s => s.alerta);
+  const totalDemandaFutura = semanasFuturas.reduce((s, w) => s + w.demandaSemana, 0);
+  const mediaHistorica = semanasHistoricas.filter(s => s.previstas > 0).length > 0
+    ? Math.round(semanasHistoricas.filter(s=>s.previstas>0).reduce((s, w) => s + w.previstas, 0) / semanasHistoricas.filter(s=>s.previstas>0).length)
+    : 0;
+  const tendencia = (() => {
+    const comDados = semanasHistoricas.filter(s => s.previstas > 0);
+    if (comDados.length < 2) return 0;
+    return comDados[comDados.length - 1].previstas - comDados[0].previstas;
+  })();
+
+  const pctAdesaoDisplay = adesaoParam !== ''
+    ? parseFloat(adesaoParam)
+    : historicoAdesao ? (historicoAdesao.media * 100) : 80;
+
+  const BAR_MAX = Math.max(...semanas.map(s => s.demandaSemana), 1);
+
+  const corBarra = (s) => {
+    if (s.tipo === 'historico') return 'var(--accent)';
+    if (s.tipo === 'atual') return 'var(--warning)';
+    if (s.tipo === 'futuro-real') return '#0891b2';
+    return 'rgba(148,163,184,0.2)'; // sem dados = quase invisível
+  };
+
+  const fmt = (n) => Number(n || 0).toLocaleString('pt-BR');
+  const fmtPct = (n) => (Number(n || 0) * 100).toFixed(1).replace('.', ',') + '%';
+
+  return (
+    <div>
+      <div className="page-header">
+        <div>
+          <div className="page-title">Previsão de Demanda</div>
+          <div className="page-subtitle">Demanda real por semana · consumo estimado por % de adesão · alerta de ruptura</div>
+        </div>
+      </div>
+
+      {/* Filtros */}
+      <div className="card" style={{marginBottom:16,padding:14}}>
+        <div style={{display:'flex',gap:12,flexWrap:'wrap',alignItems:'flex-end'}}>
+          <div className="form-group" style={{minWidth:220,flex:2}}>
+            <label className="form-label">Vacina</label>
+            <select className="form-select" value={vacinaFilter} onChange={e=>setVacinaFilter(e.target.value)}>
+              <option value="">Todas as vacinas</option>
+              {vacinas.map(v => <option key={v.id} value={v.id}>{v.nome}</option>)}
+            </select>
+          </div>
+          <div className="form-group" style={{minWidth:140}}>
+            <label className="form-label">% Adesão esperada</label>
+            <div style={{display:'flex',alignItems:'center',gap:6}}>
+              <input className="form-input sm" type="number" min="1" max="100" step="1" style={{width:80}}
+                placeholder={historicoAdesao ? (historicoAdesao.media*100).toFixed(0) : '80'}
+                value={adesaoParam}
+                onChange={e=>setAdesaoParam(e.target.value)} />
+              <span style={{fontSize:12,color:'var(--text-muted)'}}>%</span>
+              {adesaoParam !== '' && <button className="btn btn-secondary btn-sm" style={{padding:'3px 8px'}} onClick={()=>setAdesaoParam('')}>↺</button>}
+            </div>
+            {historicoAdesao && adesaoParam === '' && (
+              <div style={{fontSize:10,color:'var(--text-muted)',marginTop:3}}>
+                Histórico: {(historicoAdesao.media*100).toFixed(1)}% ({historicoAdesao.semanas} semanas)
+              </div>
+            )}
+          </div>
+          <div className="form-group" style={{minWidth:140}}>
+            <label className="form-label">Exibir próximas</label>
+            <select className="form-select" style={{width:150}} value={horizonte} onChange={e=>setHorizonte(Number(e.target.value))}>
+              {[2,4,6,8,12].map(n => <option key={n} value={n}>{n} semanas</option>)}
+            </select>
+          </div>
+          <button className="btn btn-secondary btn-sm" onClick={load} style={{alignSelf:'flex-end',marginBottom:1}}>↻ Atualizar</button>
+        </div>
+      </div>
+
+      {loading ? (
+        <div className="card" style={{padding:40,textAlign:'center',color:'var(--text-muted)'}}>Calculando...</div>
+      ) : (
+        <>
+          {/* KPIs */}
+          <div className="kpi-grid-compact" style={{marginBottom:16}}>
+            <div className="kpi-card-compact">
+              <div className="kpi-icon">📦</div>
+              <div className="kpi-value">{fmt(estoqueAtual)}</div>
+              <div className="kpi-label">Estoque atual</div>
+            </div>
+            <div className="kpi-card-compact">
+              <div className="kpi-icon">📅</div>
+              <div className="kpi-value">{fmt(totalDemandaFutura)}</div>
+              <div className="kpi-label">Demanda futura confirmada</div>
+            </div>
+            <div className="kpi-card-compact">
+              <div className="kpi-icon">📊</div>
+              <div className="kpi-value">{fmt(mediaHistorica)}</div>
+              <div className="kpi-label">Média hist. por semana</div>
+            </div>
+            <div className="kpi-card-compact" style={{borderColor: pctAdesaoDisplay >= 80 ? 'var(--success)' : 'var(--warning)'}}>
+              <div className="kpi-icon">🎯</div>
+              <div className="kpi-value" style={{color: pctAdesaoDisplay >= 80 ? 'var(--success)' : 'var(--warning)'}}>
+                {pctAdesaoDisplay.toFixed(1).replace('.', ',')}%
+              </div>
+              <div className="kpi-label">
+                % Adesão {adesaoParam !== '' ? '(manual)' : historicoAdesao ? '(histórica)' : '(padrão)'}
+              </div>
+            </div>
+            <div className="kpi-card-compact" style={{borderColor: primeiraRuptura ? 'var(--danger)' : primeiroAlerta ? 'var(--warning)' : 'var(--success)'}}>
+              <div className="kpi-icon">{primeiraRuptura ? '🚨' : primeiroAlerta ? '⚠️' : '✅'}</div>
+              <div className="kpi-value" style={{fontSize:16, color: primeiraRuptura ? 'var(--danger)' : primeiroAlerta ? 'var(--warning)' : 'var(--success)'}}>
+                {primeiraRuptura ? 'S' + primeiraRuptura.semana : primeiroAlerta ? 'S' + primeiroAlerta.semana : 'OK'}
+              </div>
+              <div className="kpi-label">{primeiraRuptura ? 'Ruptura estimada' : primeiroAlerta ? 'Estoque crítico' : 'Sem ruptura prevista'}</div>
+            </div>
+          </div>
+
+          {/* Estudo de adesão histórica */}
+          {historicoAdesao && (
+            <div className="card" style={{marginBottom:16}}>
+              <div className="card-header">
+                <div className="card-title">📈 Adesão Realizada — Estudo Histórico</div>
+                <div style={{fontSize:12,color:'var(--text-muted)'}}>
+                  {historicoAdesao.semanas} semanas com dados · média {(historicoAdesao.media*100).toFixed(1)}%
+                </div>
+              </div>
+              <div style={{display:'flex',gap:8,overflowX:'auto',paddingBottom:4}}>
+                {historicoAdesao.dados.map(s => {
+                  const pct = s.adesao * 100;
+                  const cor = pct >= 90 ? 'var(--success)' : pct >= 70 ? 'var(--warning)' : 'var(--danger)';
+                  return (
+                    <div key={s.semana} style={{
+                      minWidth:80, padding:'10px 12px', background:'var(--bg-input)',
+                      border:'1px solid var(--border)', borderRadius:'var(--radius-sm)',
+                      display:'flex',flexDirection:'column',alignItems:'center',gap:4,flexShrink:0
+                    }}>
+                      <div style={{fontSize:11,color:'var(--text-muted)',fontWeight:600}}>S{s.semana}</div>
+                      <div style={{fontSize:11,color:'var(--text-muted)'}}>{intervalo(s.semana)}</div>
+                      <div style={{
+                        fontSize:18, fontWeight:800, color:cor, fontFamily:'JetBrains Mono'
+                      }}>{pct.toFixed(1).replace('.', ',')}%</div>
+                      <div style={{fontSize:10,color:'var(--text-muted)'}}>{fmt(s.aplicadas)} / {fmt(s.previstas)}</div>
+                      {/* Barra de progresso */}
+                      <div style={{width:'100%',height:4,background:'var(--border)',borderRadius:2,overflow:'hidden'}}>
+                        <div style={{height:'100%',width:Math.min(100,pct)+'%',background:cor,borderRadius:2}}></div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              <div style={{marginTop:10,display:'flex',gap:16,fontSize:12,color:'var(--text-muted)',flexWrap:'wrap'}}>
+                <span>Mínimo: <strong>{(historicoAdesao.min*100).toFixed(1).replace('.',',')}%</strong></span>
+                <span>Máximo: <strong>{(historicoAdesao.max*100).toFixed(1).replace('.',',')}%</strong></span>
+                <span>Média: <strong style={{color:'var(--accent)'}}>{(historicoAdesao.media*100).toFixed(1).replace('.',',')}%</strong></span>
+                <span style={{marginLeft:'auto',color:'var(--text-muted)'}}>
+                  {adesaoParam !== '' ? `Usando % manual: ${adesaoParam}%` : `Usando média histórica para projeção de consumo`}
+                </span>
+              </div>
+            </div>
+          )}
+          {!historicoAdesao && !loading && (
+            <div style={{marginBottom:16,padding:12,background:'var(--bg-input)',border:'1px solid var(--border)',borderRadius:'var(--radius-sm)',fontSize:12,color:'var(--text-muted)'}}>
+              ℹ️ Nenhuma semana histórica com dados completos (previstas + aplicadas) encontrada{vacinaFilter ? ' para esta vacina' : ''}. Usando {adesaoParam !== '' ? adesaoParam + '%' : '80%'} como % de adesão para projeção.
+            </div>
+          )}
+
+          {/* Alertas */}
+          {(primeiraRuptura || primeiroAlerta) && (
+            <div style={{display:'flex',flexDirection:'column',gap:8,marginBottom:16}}>
+              {primeiraRuptura && (
+                <div style={{padding:'12px 16px',background:'rgba(239,68,68,0.08)',border:'1px solid rgba(239,68,68,0.3)',borderRadius:'var(--radius-sm)',display:'flex',alignItems:'center',gap:12}}>
+                  <span style={{fontSize:20}}>🚨</span>
+                  <div>
+                    <div style={{fontWeight:700,color:'var(--danger)',fontSize:14}}>Ruptura de estoque prevista na Semana {primeiraRuptura.semana} ({primeiraRuptura.intervalo})</div>
+                    <div style={{fontSize:12,color:'var(--text-secondary)'}}>
+                      Estoque projetado: <strong>{fmt(primeiraRuptura.estoqueProjetado)}</strong> · Demanda: <strong>{fmt(primeiraRuptura.demandaSemana)}</strong> · Consumo estimado ({pctAdesaoDisplay.toFixed(0)}% adesão): <strong>{fmt(primeiraRuptura.consumoEstimado)}</strong>
+                    </div>
+                  </div>
+                </div>
+              )}
+              {primeiroAlerta && !primeiraRuptura && (
+                <div style={{padding:'12px 16px',background:'rgba(245,158,11,0.08)',border:'1px solid rgba(245,158,11,0.3)',borderRadius:'var(--radius-sm)',display:'flex',alignItems:'center',gap:12}}>
+                  <span style={{fontSize:20}}>⚠️</span>
+                  <div>
+                    <div style={{fontWeight:700,color:'var(--warning)',fontSize:14}}>Estoque crítico na Semana {primeiroAlerta.semana} ({primeiroAlerta.intervalo})</div>
+                    <div style={{fontSize:12,color:'var(--text-secondary)'}}>
+                      Estoque projetado: <strong>{fmt(primeiroAlerta.estoqueProjetado)}</strong> · abaixo da demanda semanal ({fmt(primeiroAlerta.demandaSemana)})
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Gráfico */}
+          <div className="card" style={{marginBottom:16}}>
+            <div className="card-header">
+              <div>
+                <div className="card-title">Demanda por Semana</div>
+                <div className="page-subtitle">Azul = histórico · Laranja = semana atual · Ciano = demanda futura confirmada</div>
+              </div>
+              <div style={{display:'flex',gap:12,fontSize:12,color:'var(--text-muted)'}}>
+                <span><span style={{display:'inline-block',width:10,height:10,background:'var(--accent)',borderRadius:2,marginRight:4}}></span>Histórico</span>
+                <span><span style={{display:'inline-block',width:10,height:10,background:'#0891b2',borderRadius:2,marginRight:4}}></span>Confirmado futuro</span>
+                <span style={{fontSize:11}}>Verde = doses aplicadas (sobre o histórico)</span>
+              </div>
+            </div>
+            <div style={{overflowX:'auto'}}>
+              <div style={{minWidth: Math.max(semanas.filter(s=>s.demandaSemana>0||!s.isFutura).length * 58, 500), padding:'8px 0 4px'}}>
+                <div style={{display:'flex',alignItems:'flex-end',gap:4,height:180,padding:'0 8px'}}>
+                  {semanas.filter(s => s.demandaSemana > 0 || !s.isFutura).map(s => {
+                    if (s.demandaSemana === 0 && s.isFutura) return null;
+                    const h = s.demandaSemana > 0 ? Math.max(6, Math.round((s.demandaSemana / BAR_MAX) * 160)) : 6;
+                    const hAplic = s.aplicadas > 0 && s.previstas > 0
+                      ? Math.round((s.aplicadas / s.previstas) * h) : 0;
+                    return (
+                      <div key={s.semana} style={{flex:'0 0 auto',width:52,display:'flex',flexDirection:'column',alignItems:'center',gap:2}}>
+                        {s.demandaSemana > 0 && <div style={{fontSize:9,color:'var(--text-muted)',fontFamily:'monospace',textAlign:'center'}}>{fmt(s.demandaSemana)}</div>}
+                        <div style={{width:'100%',position:'relative',height:h}}>
+                          <div style={{
+                            width:'100%',height:'100%',
+                            background: corBarra(s),
+                            borderRadius:'3px 3px 0 0',
+                            position:'relative',
+                            transition:'height .2s',
+                          }}>
+                            {hAplic > 0 && (
+                              <div style={{position:'absolute',bottom:0,left:0,right:0,height:hAplic,background:'var(--success)',borderRadius:'3px 3px 0 0',opacity:.85}}></div>
+                            )}
+                            {s.ruptura && <div style={{position:'absolute',top:-16,left:'50%',transform:'translateX(-50%)',fontSize:12}}>🚨</div>}
+                            {s.alerta && !s.ruptura && <div style={{position:'absolute',top:-16,left:'50%',transform:'translateX(-50%)',fontSize:12}}>⚠️</div>}
+                          </div>
+                        </div>
+                        <div style={{fontSize:9,color: s.isAtual ? 'var(--warning)' : 'var(--text-muted)',fontWeight: s.isAtual ? 700 : 400,textAlign:'center'}}>S{s.semana}</div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Tabela */}
+          <div className="card">
+            <div className="card-header"><div className="card-title">Detalhamento por Semana</div></div>
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Semana</th>
+                    <th>Período</th>
+                    <th>Tipo</th>
+                    <th style={{textAlign:'right'}}>Tarefas</th>
+                    <th style={{textAlign:'right'}}>Doses previstas</th>
+                    <th style={{textAlign:'right'}}>Doses aplicadas</th>
+                    <th style={{textAlign:'right'}}>% Adesão real</th>
+                    <th style={{textAlign:'right'}}>Consumo estimado</th>
+                    <th style={{textAlign:'right'}}>Estoque pós-semana</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {semanas.filter(s => s.demandaSemana > 0 || !s.isFutura).map(s => (
+                    <tr key={s.semana} style={{
+                      background: s.ruptura ? 'rgba(239,68,68,0.06)' : s.alerta ? 'rgba(245,158,11,0.06)' : s.isAtual ? 'rgba(245,158,11,0.04)' : 'transparent'
+                    }}>
+                      <td className="mono" style={{fontWeight:700,color: s.isAtual ? 'var(--warning)' : 'var(--text-primary)'}}>S{s.semana}</td>
+                      <td style={{fontSize:11,color:'var(--text-muted)',whiteSpace:'nowrap'}}>{s.intervalo}</td>
+                      <td>
+                        {s.tipo === 'historico' && <span className="badge badge-blue">Histórico</span>}
+                        {s.tipo === 'atual' && <span className="badge badge-yellow">Atual</span>}
+                        {s.tipo === 'futuro-real' && <span className="badge badge-cyan">Confirmado</span>}
+                        {s.tipo === 'futuro-sem-dados' && <span className="badge badge-gray">Sem dados</span>}
+                      </td>
+                      <td className="mono" style={{textAlign:'right'}}>{s.tarefas || '—'}</td>
+                      <td className="mono" style={{textAlign:'right'}}>{s.previstas > 0 ? fmt(s.previstas) : '—'}</td>
+                      <td className="mono" style={{textAlign:'right',color:s.aplicadas>0?'var(--success)':'inherit'}}>{s.aplicadas > 0 ? fmt(s.aplicadas) : '—'}</td>
+                      <td className="mono" style={{textAlign:'right'}}>
+                        {s.adesaoRealizada !== null ? (
+                          <span style={{color: s.adesaoRealizada >= 0.8 ? 'var(--success)' : s.adesaoRealizada >= 0.6 ? 'var(--warning)' : 'var(--danger)',fontWeight:600}}>
+                            {(s.adesaoRealizada*100).toFixed(1).replace('.',',')}%
+                          </span>
+                        ) : '—'}
+                      </td>
+                      <td className="mono" style={{textAlign:'right',color:'var(--text-muted)',fontStyle:s.isFutura?'italic':'normal'}}>
+                        {s.isFutura && s.demandaSemana > 0 ? fmt(s.consumoEstimado) : '—'}
+                      </td>
+                      <td className="mono" style={{textAlign:'right'}}>
+                        {s.estoqueProjetado !== null && s.estoqueProjetado !== undefined && s.demandaSemana > 0 ? (
+                          <span style={{color: s.ruptura ? 'var(--danger)' : s.alerta ? 'var(--warning)' : 'var(--success)', fontWeight: (s.ruptura||s.alerta) ? 700 : 400}}>
+                            {fmt(s.estoqueProjetado)}
+                          </span>
+                        ) : '—'}
+                      </td>
+                      <td>
+                        {s.ruptura && <span className="badge badge-red">🚨 Ruptura</span>}
+                        {s.alerta && !s.ruptura && <span className="badge badge-yellow">⚠️ Crítico</span>}
+                        {!s.ruptura && !s.alerta && s.isFutura && s.demandaSemana > 0 && <span className="badge badge-green">✓ OK</span>}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div style={{marginTop:10,padding:'10px 14px',background:'var(--bg-input)',borderRadius:'var(--radius-sm)',fontSize:11,color:'var(--text-muted)'}}>
+              <strong>Como ler:</strong> Semanas históricas mostram dados reais (azul). Semanas futuras com badge "Confirmado" já têm tarefas importadas — a demanda é real, não estimada. O consumo estimado usa {pctAdesaoDisplay.toFixed(0)}% de adesão {adesaoParam !== '' ? '(valor manual)' : historicoAdesao ? '(média histórica)' : '(padrão 80%)'}.
+              Rupturas só aparecem quando há demanda confirmada futura e o estoque projetado fica negativo.
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 
 
 // ═══════════════════════════════════════════════
@@ -5887,6 +6840,9 @@ function ModalDetalheRota({ rota, onClose, ROTA_ST, ROTA_BADGE }) {
   const [rotaData, setRotaData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [remessaDetalhe, setRemessaDetalhe] = useState(null);
+  const [tabDetalhe, setTabDetalhe] = useState('remessas'); // 'remessas' | 'tarefas'
+  const [tarefasRota, setTarefasRota] = useState([]);
+  const [loadingTarefas, setLoadingTarefas] = useState(false);
   const toast = useContext(ToastContext);
 
   useEffect(() => {
@@ -5901,9 +6857,34 @@ function ModalDetalheRota({ rota, onClose, ROTA_ST, ROTA_BADGE }) {
       d.remessas = (d.remessas || []).slice().sort((a, b) => Number(a.ordem_entrega||0) - Number(b.ordem_entrega||0));
       setRotaData(d);
       setLoading(false);
+      // Extrair códigos de tarefas das observações das remessas e buscar tarefas
+      carregarTarefas(d.remessas || []);
     };
     load();
   }, [rota.id]);
+
+  const carregarTarefas = async (remessas) => {
+    setLoadingTarefas(true);
+    try {
+      // Extrai todos os códigos de tarefa das observações
+      const re = /[A-Z0-9]+(?:\.[A-Z0-9&]+){2,}/g;
+      const codigos = [...new Set(
+        remessas.flatMap(r => (String(r.observacao || '').match(re) || []))
+      )];
+      if (codigos.length === 0) { setTarefasRota([]); setLoadingTarefas(false); return; }
+      const BATCH = 100;
+      const todas = [];
+      for (let i = 0; i < codigos.length; i += BATCH) {
+        const { data: ts } = await sb.from('tarefas')
+          .select('id,codigo,cliente,cidade_campanha,uf_campanha,data_inicio,doses_previstas,doses_aplicadas,status,status_logistica,vacina,base_nome')
+          .in('codigo', codigos.slice(i, i + BATCH));
+        todas.push(...(ts || []));
+      }
+      todas.sort((a,b) => (a.data_inicio||'').localeCompare(b.data_inicio||''));
+      setTarefasRota(todas);
+    } catch(e) { console.warn('carregarTarefas:', e.message); }
+    setLoadingTarefas(false);
+  };
 
   const ST_BADGE = { planejada:'badge-blue', montagem:'badge-yellow', pronta:'badge-cyan', em_transito:'badge-green', concluida:'badge-gray', cancelada:'badge-red', entregue:'badge-green' };
   const ST_LABEL = { planejada:'Planejada', montagem:'Em Montagem', pronta:'Pronta', em_transito:'Em Trânsito', concluida:'Concluída', cancelada:'Cancelada', entregue:'Entregue' };
@@ -5933,8 +6914,18 @@ function ModalDetalheRota({ rota, onClose, ROTA_ST, ROTA_BADGE }) {
             ))}
           </div>
 
-          {/* Lista de remessas */}
-          <div>
+          {/* Tabs */}
+          <div style={{display:'flex',gap:6,borderBottom:'2px solid var(--border)',paddingBottom:0,marginBottom:4}}>
+            <button onClick={()=>setTabDetalhe('remessas')} className={tabDetalhe==='remessas'?'tab active':'tab'} style={{fontSize:13}}>
+              📦 Remessas ({rotaData.remessas.length})
+            </button>
+            <button onClick={()=>setTabDetalhe('tarefas')} className={tabDetalhe==='tarefas'?'tab active':'tab'} style={{fontSize:13}}>
+              📋 Tarefas {loadingTarefas ? '...' : `(${tarefasRota.length})`}
+            </button>
+          </div>
+
+          {/* Aba Remessas */}
+          {tabDetalhe === 'remessas' && <div>
             <div style={{fontSize:12,fontWeight:700,color:'var(--text-secondary)',textTransform:'uppercase',letterSpacing:.5,marginBottom:8}}>Remessas ({rotaData.remessas.length})</div>
             {rotaData.remessas.length === 0 ? (
               <div style={{padding:24,textAlign:'center',color:'var(--text-muted)',background:'var(--bg-input)',borderRadius:'var(--radius-sm)'}}>Nenhuma remessa nesta rota.</div>
@@ -5988,7 +6979,59 @@ function ModalDetalheRota({ rota, onClose, ROTA_ST, ROTA_BADGE }) {
                 })}
               </div>
             )}
-          </div>
+          </div>}
+
+          {/* Aba Tarefas */}
+          {tabDetalhe === 'tarefas' && (
+            <div>
+              {loadingTarefas ? (
+                <div style={{padding:24,textAlign:'center',color:'var(--text-muted)'}}>Carregando tarefas...</div>
+              ) : tarefasRota.length === 0 ? (
+                <div style={{padding:24,textAlign:'center',color:'var(--text-muted)',background:'var(--bg-input)',borderRadius:'var(--radius-sm)'}}>
+                  Nenhuma tarefa identificada nesta rota.<br/>
+                  <span style={{fontSize:11}}>As tarefas são extraídas das observações das remessas.</span>
+                </div>
+              ) : (
+                <div className="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Código</th>
+                        <th>Cliente</th>
+                        <th>Cidade/UF</th>
+                        <th>Data</th>
+                        <th>Vacina</th>
+                        <th style={{textAlign:'right'}}>Doses Prev.</th>
+                        <th style={{textAlign:'right'}}>Doses Aplic.</th>
+                        <th>Status</th>
+                        <th>Logística</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {tarefasRota.map(t => {
+                        const LOGISTICA_LABELS = { nao_roteirizado:'Não roteirizado', roteirizado:'Roteirizado', montado:'Montado', carregado:'Carregado', em_rota:'Em rota', concluido:'Concluído' };
+                        const LOGISTICA_BADGES = { nao_roteirizado:'badge-gray', roteirizado:'badge-blue', montado:'badge-yellow', carregado:'badge-cyan', em_rota:'badge-green', concluido:'badge-green' };
+                        const sl = t.status_logistica || 'nao_roteirizado';
+                        return (
+                          <tr key={t.id}>
+                            <td className="mono" style={{fontSize:10,color:'var(--accent)',fontWeight:600,maxWidth:180,overflow:'hidden',textOverflow:'ellipsis'}}>{t.codigo}</td>
+                            <td style={{maxWidth:160,overflow:'hidden',textOverflow:'ellipsis',fontWeight:500}}>{t.cliente}</td>
+                            <td style={{fontSize:11}}>{[t.cidade_campanha,t.uf_campanha].filter(Boolean).join('/')}</td>
+                            <td style={{fontSize:11,whiteSpace:'nowrap'}}>{t.data_inicio ? new Date(t.data_inicio+'T12:00:00').toLocaleDateString('pt-BR') : '—'}</td>
+                            <td style={{fontSize:11,color:'var(--accent)',fontWeight:600}}>{t.vacina||'—'}</td>
+                            <td className="mono" style={{textAlign:'right'}}>{t.doses_previstas||0}</td>
+                            <td className="mono" style={{textAlign:'right',color:t.doses_aplicadas>0?'var(--success)':'inherit'}}>{t.doses_aplicadas||0}</td>
+                            <td><span className={`badge ${STATUS_BADGES[t.status]||'badge-gray'}`}>{STATUS_LABELS[t.status]||t.status}</span></td>
+                            <td><span className={`badge ${LOGISTICA_BADGES[sl]||'badge-gray'}`}>{LOGISTICA_LABELS[sl]||sl}</span></td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          )}
 
           <div className="modal-actions">
             <button className="btn btn-secondary" onClick={onClose}>Fechar</button>
@@ -6010,6 +7053,7 @@ function ModalDetalheRota({ rota, onClose, ROTA_ST, ROTA_BADGE }) {
 function RotasListPage({ onOpenRoteirizacao }) {
   const [rotas, setRotas] = useState([]);
   const [statusFilter, setStatusFilter] = useState('');
+  const [searchCodigo, setSearchCodigo] = useState('');
   const [motoristaFilter, setMotoristaFilter] = useState('');
   const [baseFilter, setBaseFilter] = useState('');
   const [dataInicioFilter, setDataInicioFilter] = useState('');
@@ -6046,6 +7090,7 @@ function RotasListPage({ onOpenRoteirizacao }) {
   const load = async () => {
     let q = sb.from('rotas').select('*, bases!rotas_base_origem_id_fkey(nome,cidade,uf), profiles!rotas_motorista_id_fkey(nome,id), veiculos(placa, modelo)').order('created_at', { ascending: false });
     if (statusFilter) q = q.eq('status', statusFilter);
+    if (searchCodigo.trim()) q = q.ilike('codigo', '%' + searchCodigo.trim() + '%');
     if (dataInicioFilter) q = q.gte('data_prevista', dataInicioFilter);
     if (dataFimFilter) q = q.lte('data_prevista', dataFimFilter);
     const { data, error } = await q;
@@ -6062,7 +7107,7 @@ function RotasListPage({ onOpenRoteirizacao }) {
     const { data: veics } = await sb.from('veiculos').select('id, modelo, placa').order('modelo');
     setVeiculos(veics || []);
   };
-  useEffect(() => { load(); }, [statusFilter, dataInicioFilter, dataFimFilter]);
+  useEffect(() => { load(); }, [statusFilter, searchCodigo, dataInicioFilter, dataFimFilter]);
 
 
   const abrirDetalheSeguro = async (rota) => {
@@ -6372,6 +7417,10 @@ function RotasListPage({ onOpenRoteirizacao }) {
 
       <div className="card" style={{marginBottom:16}}>
         <div style={{display:'flex',gap:10,flexWrap:'wrap',alignItems:'flex-end'}}>
+          <div className="form-group" style={{minWidth:180}}>
+            <label className="form-label">Buscar código</label>
+            <input className="form-input sm" value={searchCodigo} onChange={e=>setSearchCodigo(e.target.value)} placeholder="RT-2026-..." />
+          </div>
           <div className="form-group" style={{minWidth:160}}>
             <label className="form-label">Status</label>
             <select className="form-select" style={{padding:'7px 10px',fontSize:13}} value={statusFilter} onChange={e=>setStatusFilter(e.target.value)}>
@@ -6404,7 +7453,7 @@ function RotasListPage({ onOpenRoteirizacao }) {
             <label className="form-label">Data final</label>
             <input className="form-input sm" type="date" onClick={openDatePicker} onFocus={openDatePicker} value={dataFimFilter} onChange={e=>setDataFimFilter(e.target.value)} />
           </div>
-          <button className="btn btn-secondary btn-sm" onClick={()=>{setMotoristaFilter('');setBaseFilter('');setDataInicioFilter('');setDataFimFilter('');}}>Limpar</button>
+          <button className="btn btn-secondary btn-sm" onClick={()=>{setSearchCodigo('');setMotoristaFilter('');setBaseFilter('');setDataInicioFilter('');setDataFimFilter('');}}>Limpar</button>
         </div>
       </div>
       <div className="card"><div className="table-wrap"><table><thead>
@@ -11335,6 +12384,10 @@ function App() {
   const [conferirDados, setConferirDados] = useState(null);
   const [viewAs, setViewAs] = useState(null); // null = perfil real, ou 'admin'|'planejador'|'motorista' etc
   const [theme, setTheme] = useState(() => localStorage.getItem('vacinalog-theme') || 'dark');
+  const [alertas, setAlertas] = useState([]);
+  const [painelAlertasAberto, setPainelAlertasAberto] = useState(false);
+  const [loadingAlertas, setLoadingAlertas] = useState(false);
+  const alertasTimerRef = React.useRef(null);
 
   const toggleTheme = () => {
     const next = theme === 'dark' ? 'light' : 'dark';
@@ -11355,6 +12408,24 @@ function App() {
     sb.from('profiles').select('*').eq('id', session.user.id).single()
       .then(({ data }) => setProfile(data));
   }, [session]);
+
+  // Checker de alertas: roda quando profile carrega e a cada 5 min
+  const atualizarAlertas = React.useCallback(async (prof) => {
+    const p = prof || profile;
+    if (!p || !['admin','planejador'].includes(p.role)) return;
+    setLoadingAlertas(true);
+    const lista = await calcularAlertas(p);
+    setAlertas(lista);
+    setLoadingAlertas(false);
+  }, [profile]);
+
+  useEffect(() => {
+    if (!profile || !['admin','planejador'].includes(profile.role)) return;
+    atualizarAlertas(profile);
+    if (alertasTimerRef.current) clearInterval(alertasTimerRef.current);
+    alertasTimerRef.current = setInterval(() => atualizarAlertas(profile), 5 * 60 * 1000);
+    return () => { if (alertasTimerRef.current) clearInterval(alertasTimerRef.current); };
+  }, [profile]);
 
   // Verificar se há hash de conferência (bipagem do QR)
   useEffect(() => {
@@ -11396,6 +12467,7 @@ function App() {
       case 'tarefas': return <TarefasPage profile={profile} />;
       case 'escalas': return <EscalasPage />;
       case 'tarefas-escalas': return <TarefasEscalasPage profile={profile} />;
+      case 'previsao': return <PrevisaoDemandaPage />;
       case 'estoque': return <EstoquePage />;
       case 'demanda': return <DemandaOfertaPage profile={profile} />;
       case 'movimentacoes': return <MovimentacoesPage />;
@@ -11443,6 +12515,21 @@ function App() {
         collapsed={sidebarCollapsed} onToggleCollapse={() => setSidebarCollapsed(c => !c)}
         theme={theme} onToggleTheme={toggleTheme} />
       <div className={`main-content ${sidebarCollapsed ? 'collapsed' : ''}`}>
+        {painelAlertasAberto && (
+          <PainelAlertas
+            alertas={alertas}
+            onClose={() => setPainelAlertasAberto(false)}
+            onNavigate={(page) => { setCurrentPage(page); }}
+            onAtualizar={atualizarAlertas}
+            loading={loadingAlertas}
+          />
+        )}
+        {painelAlertasAberto && (
+          <div
+            style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.3)',zIndex:499}}
+            onClick={() => setPainelAlertasAberto(false)}
+          />
+        )}
         {isAdmin && (
           <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:16,padding:'8px 14px',background:'var(--bg-card)',borderRadius:'var(--radius-sm)',border:'1px solid var(--border)',flexWrap:'wrap'}}>
             <button onClick={toggleTheme} className="btn btn-sm btn-secondary" style={{padding:'4px 10px',fontSize:11,marginRight:8}}>
@@ -11465,7 +12552,28 @@ function App() {
             {viewAs && <span style={{fontSize:11,color:'var(--warning)',marginLeft:4}}>⚠ Modo visualização ativo</span>}
           </div>
         )}
-        {renderPage()}
+        {/* Sino de alertas — fixo no topo direito, sempre visível quando logado */}
+        {session && (
+          <div style={{position:'fixed',top:10,right:14,zIndex:300}}>
+            <button
+              className="btn btn-sm btn-secondary"
+              style={{padding:'5px 11px',fontSize:15,position:'relative'}}
+              onClick={() => { setPainelAlertasAberto(v => !v); if (!painelAlertasAberto) atualizarAlertas(); }}
+              title="Alertas">
+              🔔
+              {alertas.length > 0 && (
+                <span style={{
+                  position:'absolute',top:-6,right:-6,
+                  background: alertas.some(a=>a.tipo==='danger') ? 'var(--danger)' : 'var(--warning)',
+                  color:'#fff',borderRadius:'50%',width:17,height:17,
+                  fontSize:9,fontWeight:700,display:'flex',alignItems:'center',justifyContent:'center',
+                  border:'2px solid var(--bg-card)',
+                }}>{alertas.length > 9 ? '9+' : alertas.length}</span>
+              )}
+            </button>
+          </div>
+        )}
+                {renderPage()}
       </div>
     </div>
   );
