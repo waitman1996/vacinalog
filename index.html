@@ -5904,10 +5904,20 @@ function ModalDetalheRota({ rota, onClose, ROTA_ST, ROTA_BADGE }) {
 function RotasListPage({ onOpenRoteirizacao }) {
   const [rotas, setRotas] = useState([]);
   const [statusFilter, setStatusFilter] = useState('');
+  const [motoristaFilter, setMotoristaFilter] = useState('');
+  const [baseFilter, setBaseFilter] = useState('');
+  const [dataInicioFilter, setDataInicioFilter] = useState('');
+  const [dataFimFilter, setDataFimFilter] = useState('');
   const [showMonitoramento, setShowMonitoramento] = useState(false);
   const [rotaDetalhe, setRotaDetalhe] = useState(null);
   const [chatRota, setChatRota] = useState(null);
   const [naoLidas, setNaoLidas] = useState({});
+  const [trocarMotoristaRota, setTrocarMotoristaRota] = useState(null);
+  const [motoristas, setMotoristas] = useState([]);
+  const [veiculos, setVeiculos] = useState([]);
+  const [novoMotoristaId, setNovoMotoristaId] = useState('');
+  const [novoVeiculoId, setNovoVeiculoId] = useState('');
+  const [salvandoMotorista, setSalvandoMotorista] = useState(false);
   const toast = useContext(ToastContext);
 
   const ROTA_ST = { planejada:'Planejada', montagem:'Em Montagem', pronta:'Pronta', em_transito:'Em Trânsito', concluida:'Concluída', cancelada:'Cancelada' };
@@ -5928,8 +5938,10 @@ function RotasListPage({ onOpenRoteirizacao }) {
     : rotas.length;
 
   const load = async () => {
-    let q = sb.from('rotas').select('*, bases!rotas_base_origem_id_fkey(nome,cidade,uf), profiles!rotas_motorista_id_fkey(nome), veiculos(placa, modelo)').order('created_at', { ascending: false });
+    let q = sb.from('rotas').select('*, bases!rotas_base_origem_id_fkey(nome,cidade,uf), profiles!rotas_motorista_id_fkey(nome,id), veiculos(placa, modelo)').order('created_at', { ascending: false });
     if (statusFilter) q = q.eq('status', statusFilter);
+    if (dataInicioFilter) q = q.gte('data_prevista', dataInicioFilter);
+    if (dataFimFilter) q = q.lte('data_prevista', dataFimFilter);
     const { data, error } = await q;
     if (error) toast(error.message, 'error');
     else setRotas(data || []);
@@ -5938,8 +5950,13 @@ function RotasListPage({ onOpenRoteirizacao }) {
     const mapa = {};
     (chats || []).forEach(c => { mapa[c.rota_id] = c.nao_lidas || 0; });
     setNaoLidas(mapa);
+
+    const { data: mots } = await sb.from('profiles').select('id, nome').eq('role', 'motorista').order('nome');
+    setMotoristas(mots || []);
+    const { data: veics } = await sb.from('veiculos').select('id, modelo, placa').order('modelo');
+    setVeiculos(veics || []);
   };
-  useEffect(() => { load(); }, [statusFilter]);
+  useEffect(() => { load(); }, [statusFilter, dataInicioFilter, dataFimFilter]);
 
 
   const abrirDetalheSeguro = async (rota) => {
@@ -6042,6 +6059,24 @@ function RotasListPage({ onOpenRoteirizacao }) {
     if (error) toast(error.message, 'error'); else { toast('Rota cancelada', 'success'); load(); }
   };
 
+
+  const confirmarTrocarMotorista = async () => {
+    if (!novoMotoristaId) { toast('Selecione um motorista', 'error'); return; }
+    setSalvandoMotorista(true);
+    const veiculo = veiculos.find(v => v.id === novoVeiculoId);
+    const { error } = await sb.from('rotas').update({
+      motorista_id: novoMotoristaId,
+      veiculo_id: novoVeiculoId || null,
+      veiculo: veiculo ? `${veiculo.modelo} - ${veiculo.placa}` : null,
+    }).eq('id', trocarMotoristaRota.id);
+    setSalvandoMotorista(false);
+    if (error) { toast('Erro: ' + error.message, 'error'); return; }
+    toast('Motorista atualizado!', 'success');
+    setTrocarMotoristaRota(null);
+    setNovoMotoristaId('');
+    setNovoVeiculoId('');
+    load();
+  };
 
   const imprimirRomaneio = async (rota) => {
     try {
@@ -6162,6 +6197,36 @@ function RotasListPage({ onOpenRoteirizacao }) {
     <div>
       {chatRota && <ChatRotaModal rota={chatRota} onClose={() => { setChatRota(null); load(); }} />}
       {rotaDetalhe && <ModalDetalheRota rota={rotaDetalhe} onClose={() => setRotaDetalhe(null)} ROTA_ST={ROTA_ST} ROTA_BADGE={ROTA_BADGE} />}
+      {trocarMotoristaRota && (
+        <Modal title={`Trocar Motorista — ${trocarMotoristaRota.codigo}`} onClose={()=>setTrocarMotoristaRota(null)}>
+          <div style={{display:'flex',flexDirection:'column',gap:14}}>
+            <div style={{background:'var(--bg-input)',borderRadius:'var(--radius-sm)',padding:'10px 14px',border:'1px solid var(--border)',fontSize:13}}>
+              <div style={{color:'var(--text-muted)',fontSize:11,marginBottom:4}}>Motorista atual</div>
+              <strong>{trocarMotoristaRota.profiles?.nome || '—'}</strong>
+            </div>
+            <div className="form-group">
+              <label className="form-label">Novo Motorista *</label>
+              <select className="form-select" value={novoMotoristaId} onChange={e=>setNovoMotoristaId(e.target.value)}>
+                <option value="">Selecione...</option>
+                {motoristas.map(m => <option key={m.id} value={m.id}>{m.nome}</option>)}
+              </select>
+            </div>
+            <div className="form-group">
+              <label className="form-label">Veículo</label>
+              <select className="form-select" value={novoVeiculoId} onChange={e=>setNovoVeiculoId(e.target.value)}>
+                <option value="">Manter atual</option>
+                {veiculos.map(v => <option key={v.id} value={v.id}>{v.modelo} · {v.placa}</option>)}
+              </select>
+            </div>
+            <div className="modal-actions">
+              <button className="btn btn-secondary" onClick={()=>setTrocarMotoristaRota(null)}>Cancelar</button>
+              <button className="btn btn-primary" onClick={confirmarTrocarMotorista} disabled={salvandoMotorista}>
+                {salvandoMotorista ? 'Salvando...' : '✓ Confirmar Troca'}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
       <div className="page-header">
         <div><div className="page-title">Rotas</div><div className="page-subtitle">Gerencie rotas de entrega e coleta</div></div>
         <div style={{display:'flex',gap:8}}>
@@ -6200,24 +6265,57 @@ function RotasListPage({ onOpenRoteirizacao }) {
       </div>
 
       <div className="card" style={{marginBottom:16}}>
-        <div className="form-group" style={{maxWidth:200}}>
-          <label className="form-label">Status</label>
-          <select className="form-select" style={{padding:'7px 10px',fontSize:13}} value={statusFilter} onChange={e=>setStatusFilter(e.target.value)}>
-            <option value="">Todos</option>{Object.entries(ROTA_ST).map(([k,v]) => <option key={k} value={k}>{v}</option>)}
-          </select>
+        <div style={{display:'flex',gap:10,flexWrap:'wrap',alignItems:'flex-end'}}>
+          <div className="form-group" style={{minWidth:160}}>
+            <label className="form-label">Status</label>
+            <select className="form-select" style={{padding:'7px 10px',fontSize:13}} value={statusFilter} onChange={e=>setStatusFilter(e.target.value)}>
+              <option value="">Todos</option>{Object.entries(ROTA_ST).map(([k,v]) => <option key={k} value={k}>{v}</option>)}
+            </select>
+          </div>
+          <div className="form-group" style={{minWidth:180}}>
+            <label className="form-label">Motorista</label>
+            <select className="form-select" style={{padding:'7px 10px',fontSize:13}} value={motoristaFilter} onChange={e=>setMotoristaFilter(e.target.value)}>
+              <option value="">Todos</option>
+              {[...new Map(rotas.filter(r=>r.profiles?.nome).map(r=>[r.profiles.nome, r.profiles])).values()].sort((a,b)=>a.nome.localeCompare(b.nome)).map(m=>(
+                <option key={m.id||m.nome} value={m.nome}>{m.nome}</option>
+              ))}
+            </select>
+          </div>
+          <div className="form-group" style={{minWidth:160}}>
+            <label className="form-label">Base Origem</label>
+            <select className="form-select" style={{padding:'7px 10px',fontSize:13}} value={baseFilter} onChange={e=>setBaseFilter(e.target.value)}>
+              <option value="">Todas</option>
+              {[...new Set(rotas.filter(r=>r.bases?.nome).map(r=>r.bases.nome))].sort().map(b=>(
+                <option key={b} value={b}>{b}</option>
+              ))}
+            </select>
+          </div>
+          <div className="form-group">
+            <label className="form-label">Data inicial</label>
+            <input className="form-input sm" type="date" onClick={openDatePicker} onFocus={openDatePicker} value={dataInicioFilter} onChange={e=>setDataInicioFilter(e.target.value)} />
+          </div>
+          <div className="form-group">
+            <label className="form-label">Data final</label>
+            <input className="form-input sm" type="date" onClick={openDatePicker} onFocus={openDatePicker} value={dataFimFilter} onChange={e=>setDataFimFilter(e.target.value)} />
+          </div>
+          <button className="btn btn-secondary btn-sm" onClick={()=>{setMotoristaFilter('');setBaseFilter('');setDataInicioFilter('');setDataFimFilter('');}}>Limpar</button>
         </div>
       </div>
       <div className="card"><div className="table-wrap"><table><thead>
         <tr><th>Código</th><th>Data</th><th>Base Origem</th><th>Motorista</th><th>Veículo</th><th>Status</th><th>Check-in</th><th>Check-out</th><th>Duração</th><th>Ações</th></tr>
       </thead><tbody>
         {rotas.length === 0 && <tr><td colSpan={10}><div className="empty-state"><div className="empty-icon">🚚</div><div className="empty-text">Nenhuma rota encontrada</div></div></td></tr>}
-        {rotas.map(r => {
+        {rotas
+          .filter(r => (!motoristaFilter || r.profiles?.nome === motoristaFilter) && (!baseFilter || r.bases?.nome === baseFilter))
+          .map(r => {
           const fmtDT = (dt) => dt ? new Date(dt).toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}) : '—';
           const duracao = () => {
             if (!r.checkin_at || !r.checkout_at) return '—';
             const mins = Math.round((new Date(r.checkout_at)-new Date(r.checkin_at))/60000);
             return mins < 60 ? `${mins}min` : `${Math.floor(mins/60)}h${mins%60>0?String(mins%60).padStart(2,'0')+'min':''}`;
           };
+          const podeCancel = ['planejada','montagem'].includes(r.status);
+          const podeTrocarMot = !r.checkin_at && !['concluida','cancelada'].includes(r.status);
           return (
           <tr key={r.id}>
             <td className="mono" style={{fontWeight:600,color:'var(--accent)'}}>{r.codigo}</td>
@@ -6257,7 +6355,13 @@ function RotasListPage({ onOpenRoteirizacao }) {
               <button className="btn btn-secondary btn-sm" onClick={() => setChatRota(r)}>
                 💬 Chat {naoLidas[r.id] ? <span className="badge badge-red" style={{marginLeft:4}}>{naoLidas[r.id]}</span> : null}
               </button>
-              {r.status==='planejada' && <><button className="btn btn-success btn-sm" onClick={()=>enviarMontagem(r.id)}>→ Montagem</button><button className="btn btn-danger btn-sm" onClick={()=>cancelar(r.id)}>Cancelar</button></>}
+              {r.status==='planejada' && <button className="btn btn-success btn-sm" onClick={()=>enviarMontagem(r.id)}>→ Montagem</button>}
+              {podeTrocarMot && (
+                <button className="btn btn-secondary btn-sm" onClick={()=>{ setTrocarMotoristaRota(r); setNovoMotoristaId(r.motorista_id||''); setNovoVeiculoId(r.veiculo_id||''); }}>
+                  🔄 Motorista
+                </button>
+              )}
+              {podeCancel && <button className="btn btn-danger btn-sm" onClick={()=>cancelar(r.id)}>Cancelar</button>}
               {r.status==='em_transito' && <span style={{fontSize:10,color:'var(--success)'}}>🟢 ao vivo</span>}
             </div></td>
           </tr>
