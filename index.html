@@ -2418,17 +2418,22 @@ function ImportConsulta() {
       const baseMap = {};
       (bases || []).forEach(b => { baseMap[b.nome.toLowerCase()] = b.id; });
 
-      const { data: vacinas, error: vErr } = await sb.from('vacinas').select('id, nome');
+      const { data: vacinas, error: vErr } = await sb.from('vacinas').select('id, nome, produto_nome');
       if (vErr) throw new Error('Erro ao carregar vacinas: ' + vErr.message);
       const vacinaMap = {};
-      (vacinas || []).forEach(v => { vacinaMap[v.nome.toLowerCase()] = v.id; });
+      (vacinas || []).forEach(v => {
+        vacinaMap[v.nome.toLowerCase()] = v.id;
+        if (v.produto_nome) vacinaMap[String(v.produto_nome).toLowerCase()] = v.id;
+      });
+      const vacinaInfoMap = {};
+      (vacinas || []).forEach(v => { vacinaInfoMap[v.id] = v; });
 
       // Buscar tarefas já existentes para detectar novas doses aplicadas
       // Paginar em lotes de 200 (limite seguro do .in() do Supabase)
       toast('Verificando tarefas existentes...', 'info');
       const codigos = preview.data.map(r => r['Código']).filter(Boolean);
       const existingMap = {};
-      const LOOKUP_BATCH = 200;
+      const LOOKUP_BATCH = 500;
       for (let i = 0; i < codigos.length; i += LOOKUP_BATCH) {
         const { data: existing, error: exErr } = await sb.from('tarefas')
           .select('id, codigo, doses_aplicadas')
@@ -2445,9 +2450,49 @@ function ImportConsulta() {
         const { data: escalasData } = await sb.from('escalas')
           .select('id, codigo_tarefa, aplicador_id, vacina_id, status, vacinas(nome, produto_nome)')
           .in('codigo_tarefa', codigos.slice(i, i + LOOKUP_BATCH))
-          .in('status', ['aprovada','em_validacao','em_execucao','pronta_faturamento']);
+          .neq('status', 'cancelada');
         (escalasData || []).forEach(e => {
           if (!escalaMap[e.codigo_tarefa]) escalaMap[e.codigo_tarefa] = e;
+        });
+      }
+
+      // Pré-carregar movimentações de aplicação uma única vez.
+      // Antes, o sistema fazia 1 consulta por tarefa quando as doses já estavam iguais;
+      // em arquivos grandes isso deixava a importação muito lenta.
+      toast('Verificando abatimentos já existentes...', 'info');
+      const tarefasComMovimentacao = new Set();
+      for (let from = 0; ; from += 1000) {
+        const { data: movs, error: movsErr } = await sb.from('movimentacoes')
+          .select('observacao')
+          .eq('tipo', 'aplicacao')
+          .range(from, from + 999);
+        if (movsErr) {
+          console.warn('Erro ao pré-carregar movimentações:', movsErr.message);
+          break;
+        }
+        (movs || []).forEach(m => {
+          const obs = String(m.observacao || '');
+          const match = obs.match(/Tarefa\s+([A-Z0-9.&_-]+(?:\.[A-Z0-9&_-]+)*)/i);
+          if (match && match[1]) tarefasComMovimentacao.add(match[1].trim());
+        });
+        if (!movs || movs.length < 1000) break;
+      }
+
+      // Pré-carregar estoque dos aplicadores envolvidos nas escalas do arquivo.
+      // Isso elimina a consulta de estoque dentro de cada abatimento.
+      toast('Carregando estoque dos aplicadores...', 'info');
+      const aplicadorIds = [...new Set(Object.values(escalaMap).map(e => e.aplicador_id).filter(Boolean))];
+      const estoquePorAplicador = {};
+      for (let i = 0; i < aplicadorIds.length; i += LOOKUP_BATCH) {
+        const { data: estRows, error: estErr } = await sb.from('estoque')
+          .select('id, quantidade, vacina_id, aplicador_id, vacinas(nome, produto_nome)')
+          .in('aplicador_id', aplicadorIds.slice(i, i + LOOKUP_BATCH))
+          .eq('localizacao_tipo', 'aplicador')
+          .gt('quantidade', 0);
+        if (estErr) console.warn('Erro ao pré-carregar estoque:', estErr.message);
+        (estRows || []).forEach(e => {
+          if (!estoquePorAplicador[e.aplicador_id]) estoquePorAplicador[e.aplicador_id] = [];
+          estoquePorAplicador[e.aplicador_id].push({ ...e, quantidade: Number(e.quantidade || 0) });
         });
       }
 
@@ -2462,30 +2507,28 @@ function ImportConsulta() {
 
       // Debita estoque do aplicador por PRODUTO, não por lote/vacina_id específico.
       // Isso resolve casos em que o aplicador tem saldo em outro lote do mesmo produto.
-      const debitarAplicadorPorProduto = async ({ escala, quantidade, codigo, totalAplicadas }) => {
-        if (!escala?.aplicador_id || !escala?.vacina_id || !quantidade || quantidade <= 0) return false;
-
-        const produtoEscala = String(escala.vacinas?.produto_nome || escala.vacinas?.nome || '').trim().toLowerCase();
-
-        const { data: estoqueRows, error: estErr } = await sb.from('estoque')
-          .select('id, quantidade, vacina_id, vacinas(nome, produto_nome)')
-          .eq('aplicador_id', escala.aplicador_id)
-          .eq('localizacao_tipo', 'aplicador')
-          .gt('quantidade', 0);
-
-        if (estErr) {
-          console.warn(`Erro ao consultar estoque do aplicador para ${codigo}:`, estErr.message);
+      const debitarAplicadorPorProduto = async ({ escala, quantidade, codigo, totalAplicadas, vacinaFallbackId, vacinaFallbackNome }) => {
+        const vacinaRefId = escala?.vacina_id || vacinaFallbackId;
+        if (!escala?.aplicador_id || !vacinaRefId || !quantidade || quantidade <= 0) {
+          console.warn(`Abatimento ignorado para ${codigo}: escala sem aplicador_id ou sem vacina_id/fallback.`);
           return false;
         }
 
-        let candidatos = (estoqueRows || []).filter(e => {
+        const vacinaRef = vacinaInfoMap[vacinaRefId] || {};
+        const produtoEscala = String(
+          escala.vacinas?.produto_nome || escala.vacinas?.nome ||
+          vacinaRef.produto_nome || vacinaRef.nome || vacinaFallbackNome || ''
+        ).trim().toLowerCase();
+
+        const estoqueRows = estoquePorAplicador[escala.aplicador_id] || [];
+        let candidatos = estoqueRows.filter(e => {
           const produtoEstoque = String(e.vacinas?.produto_nome || e.vacinas?.nome || '').trim().toLowerCase();
-          return produtoEscala && produtoEstoque === produtoEscala;
+          return produtoEscala && produtoEstoque === produtoEscala && Number(e.quantidade || 0) > 0;
         });
 
-        // Fallback de segurança: se o produto_nome ainda não estiver preenchido, tenta pelo vacina_id antigo.
+        // Fallback: se o produto_nome não bater, tenta pelo vacina_id da tarefa/escala.
         if (candidatos.length === 0) {
-          candidatos = (estoqueRows || []).filter(e => String(e.vacina_id) === String(escala.vacina_id));
+          candidatos = estoqueRows.filter(e => String(e.vacina_id) === String(vacinaRefId) && Number(e.quantidade || 0) > 0);
         }
 
         const disponivel = candidatos.reduce((s, e) => s + Number(e.quantidade || 0), 0);
@@ -2496,16 +2539,18 @@ function ImportConsulta() {
 
         let restante = quantidade;
         const ordenados = [...candidatos].sort((a,b) => Number(b.quantidade||0) - Number(a.quantidade||0));
-        const vacinaMovId = ordenados[0]?.vacina_id || escala.vacina_id;
+        const vacinaMovId = ordenados[0]?.vacina_id || vacinaRefId;
 
         for (const item of ordenados) {
           if (restante <= 0) break;
           const saldo = Number(item.quantidade || 0);
           const debito = Math.min(saldo, restante);
+          const novoSaldo = saldo - debito;
           const { error: debErr } = await sb.from('estoque')
-            .update({ quantidade: saldo - debito })
+            .update({ quantidade: novoSaldo })
             .eq('id', item.id);
           if (debErr) throw debErr;
+          item.quantidade = novoSaldo; // atualiza o cache local para próximos abatimentos no mesmo arquivo
           restante -= debito;
         }
 
@@ -2515,11 +2560,12 @@ function ImportConsulta() {
           quantidade,
           origem_tipo: 'aplicador',
           origem_aplicador_id: escala.aplicador_id,
-          observacao: `Importação Consulta: +${quantidade} doses aplicadas (total: ${totalAplicadas}) | Tarefa ${codigo} | Data corte: ${dataCorte} | Débito por produto`,
+          observacao: `Importação Consulta: +${quantidade} doses aplicadas (total: ${totalAplicadas}) | Tarefa ${codigo} | Data corte: ${dataCorte || 'sem corte'} | Débito por produto`,
           criado_por: userId,
         });
 
         if (movErr) throw movErr;
+        tarefasComMovimentacao.add(String(codigo).trim());
         return true;
       };
 
@@ -2632,13 +2678,15 @@ function ImportConsulta() {
               const dentroDoCorte = dataCorte ? (novo.data_inicio || '') >= dataCorte : false;
               if (novo.doses_aplicadas > 0 && dentroDoCorte && escala?.id) {
                 await sb.from('escalas')
-                  .update({ doses_aplicadas: novo.doses_aplicadas })
+                  .update({ doses_aplicadas: novo.doses_aplicadas, vacina_id: escala.vacina_id || novo.vacina_id || null })
                   .eq('id', escala.id);
                 const ok = await debitarAplicadorPorProduto({
                   escala,
                   quantidade: novo.doses_aplicadas,
                   codigo: novo.codigo,
                   totalAplicadas: novo.doses_aplicadas,
+                  vacinaFallbackId: novo.vacina_id,
+                  vacinaFallbackNome: novo.vacina,
                 });
                 if (ok) abatimentos++;
               }
@@ -2665,12 +2713,9 @@ function ImportConsulta() {
           let qtdParaDebitar = incremento;
 
           if (incremento === 0 && dosesNovas > 0) {
-            const { data: movExistente } = await sb.from('movimentacoes')
-              .select('id')
-              .eq('tipo', 'aplicacao')
-              .ilike('observacao', `%Tarefa ${fields.codigo || id}%`)
-              .limit(1);
-            if (!movExistente || movExistente.length === 0) {
+            // Reprocessamento: se a tarefa já tem doses aplicadas, mas não existe movimentação,
+            // gera o abatimento pendente sem fazer consulta individual no Supabase.
+            if (!tarefasComMovimentacao.has(String(fields.codigo || id).trim())) {
               qtdParaDebitar = dosesNovas;
             }
           }
@@ -2693,7 +2738,7 @@ function ImportConsulta() {
             // Atualizar doses_aplicadas na escala vinculada
             if (escala?.id && dosesNovas >= 0) {
               await sb.from('escalas')
-                .update({ doses_aplicadas: dosesNovas })
+                .update({ doses_aplicadas: dosesNovas, vacina_id: escala.vacina_id || fields.vacina_id || null })
                 .eq('id', escala.id);
             }
 
@@ -2702,12 +2747,14 @@ function ImportConsulta() {
             const dataInicio = fields.data_inicio || '';
             const dentroDoCorte = dataCorte ? dataInicio >= dataCorte : false;
 
-            if (qtdParaDebitar > 0 && dentroDoCorte && escala?.aplicador_id && escala?.vacina_id) {
+            if (qtdParaDebitar > 0 && dentroDoCorte && escala?.aplicador_id && (escala?.vacina_id || fields.vacina_id)) {
               const ok = await debitarAplicadorPorProduto({
                 escala,
                 quantidade: qtdParaDebitar,
                 codigo: fields.codigo || id,
                 totalAplicadas: dosesNovas,
+                vacinaFallbackId: fields.vacina_id,
+                vacinaFallbackNome: fields.vacina,
               });
               if (ok) abatimentos++;
             }
@@ -2878,7 +2925,12 @@ function ImportTutores() {
 
       const { data: vacinas } = await sb.from('vacinas').select('id, nome');
       const vacinaMap = {};
-      (vacinas || []).forEach(v => { vacinaMap[v.nome.toLowerCase()] = v.id; });
+      (vacinas || []).forEach(v => {
+        vacinaMap[v.nome.toLowerCase()] = v.id;
+        if (v.produto_nome) vacinaMap[String(v.produto_nome).toLowerCase()] = v.id;
+      });
+      const vacinaInfoMap = {};
+      (vacinas || []).forEach(v => { vacinaInfoMap[v.id] = v; });
 
       // Buscar tarefas para resolver tarefa_id via código
       const { data: tarefas } = await sb.from('tarefas').select('id, codigo');
