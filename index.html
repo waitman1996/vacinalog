@@ -7745,7 +7745,7 @@ function MonitoramentoAoVivo({ onClose }) {
 
   const loadRotas = async () => {
     const { data, error } = await sb.from('rotas')
-      .select('id,codigo,status,veiculo,checkin_lat,checkin_lng,current_lat,current_lng,current_location_at,current_speed,base_origem_id,bases!rotas_base_origem_id_fkey(nome,latitude,longitude),profiles!rotas_motorista_id_fkey(nome),remessas(id,status,ordem_entrega,destino_tipo,aplicadores(nome,cpf,cidade,uf),bases(nome,cidade,uf))')
+      .select('id,codigo,status,veiculo,checkin_lat,checkin_lng,current_lat,current_lng,current_location_at,current_speed,base_origem_id,bases!rotas_base_origem_id_fkey(nome,latitude,longitude),profiles!rotas_motorista_id_fkey(nome),remessas(id,status,ordem_entrega,destino_tipo,aplicadores!remessas_destino_aplicador_id_fkey(nome,cpf,cidade,uf),bases(nome,cidade,uf))')
       .in('status', ['em_transito','pronta','montagem'])
       .not('current_lat', 'is', null);
     if (error) { toast('Erro ao carregar mapa: ' + error.message, 'error'); return []; }
@@ -8199,7 +8199,7 @@ function ModalDetalheRota({ rota, onClose, ROTA_ST, ROTA_BADGE }) {
     const load = async () => {
       setLoading(true);
       const { data, error } = await sb.from('rotas')
-        .select('id,codigo,data_prevista,status,veiculo,base_origem_id,bases!rotas_base_origem_id_fkey(nome,cidade,uf),profiles!rotas_motorista_id_fkey(nome),veiculos(placa,modelo),remessas(id,codigo_rastreio,status,ordem_entrega,destino_tipo,observacao,bases(nome,cidade,uf),aplicadores(nome,cpf,cidade,uf,endereco),remessa_itens(id,quantidade,vacinas(nome,lote)))')
+        .select('id,codigo,data_prevista,status,veiculo,base_origem_id,bases!rotas_base_origem_id_fkey(nome,cidade,uf),profiles!rotas_motorista_id_fkey(nome),veiculos(placa,modelo),remessas(id,codigo_rastreio,status,ordem_entrega,destino_tipo,observacao,bases(nome,cidade,uf),aplicadores!remessas_destino_aplicador_id_fkey(nome,cpf,cidade,uf,endereco),remessa_itens(id,quantidade,vacinas(nome,lote)))')
         .eq('id', rota.id)
         .single();
       if (error) { toast('Erro ao carregar rota: ' + error.message, 'error'); onClose(); return; }
@@ -8578,7 +8578,7 @@ function RotasListPage({ onOpenRoteirizacao }) {
       }
 
       const { data, error } = await sb.from('rotas')
-        .select('id,codigo,data_prevista,status,veiculo,bases!rotas_base_origem_id_fkey(nome,cidade,uf),profiles!rotas_motorista_id_fkey(nome),remessas(id,status,ordem_entrega,destino_tipo,observacao,bases(nome,cidade,uf),aplicadores(nome,cpf,cidade,uf),remessa_itens(quantidade,vacinas(nome,lote)))')
+        .select('id,codigo,data_prevista,status,veiculo,bases!rotas_base_origem_id_fkey(nome,cidade,uf),profiles!rotas_motorista_id_fkey(nome),remessas(id,status,ordem_entrega,destino_tipo,observacao,bases(nome,cidade,uf),aplicadores!remessas_destino_aplicador_id_fkey(nome,cpf,cidade,uf),remessa_itens(quantidade,vacinas(nome,lote)))')
         .eq('id', rota.id)
         .single();
 
