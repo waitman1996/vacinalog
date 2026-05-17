@@ -4684,6 +4684,10 @@ function CriarRotaColeta({ onNavigate }) {
   const [form, setForm] = useState({ base_id:'', motorista_id:'', veiculo_id:'', data:'', rota_entrega_id:'' });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [filtroNome, setFiltroNome] = useState('');
+  const [filtroPonto, setFiltroPonto] = useState('');
+  const [filtroCidade, setFiltroCidade] = useState('');
+  const [filtroUF, setFiltroUF] = useState('');
   const toast = useContext(ToastContext);
 
   useEffect(() => {
@@ -4695,7 +4699,7 @@ function CriarRotaColeta({ onNavigate }) {
         sb.from('bases').select('id,nome,cidade,uf').order('nome'),
         sb.from('profiles').select('id,nome').eq('role','motorista').order('nome'),
         sb.from('veiculos').select('id,modelo,placa').order('modelo'),
-        sb.from('aplicadores').select('id,nome,cpf,cidade,uf').order('nome'),
+        sb.from('aplicadores').select('id,nome,cpf,cidade,uf,ponto_partida').order('nome'),
         sb.from('estoque').select('id,quantidade,vacina_id,aplicador_id,vacinas(nome,lote)').eq('localizacao_tipo','aplicador').gt('quantidade',0),
         sb.from('rotas').select('id,codigo,status,data_prevista,bases!rotas_base_origem_id_fkey(nome)').not('status','in','(concluida,cancelada)').eq('tipo','entrega').order('data_prevista',{ascending:false}),
       ]);
@@ -4811,16 +4815,41 @@ function CriarRotaColeta({ onNavigate }) {
       {/* Painel esquerdo: lista de aplicadores */}
       <div>
         <div className="card" style={{marginBottom:12,padding:14}}>
+          {/* Filtros */}
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:12}}>
+            <input className="form-input sm" placeholder="Nome do profissional..." value={filtroNome} onChange={e=>setFiltroNome(e.target.value)} />
+            <input className="form-input sm" placeholder="Ponto de partida..." value={filtroPonto} onChange={e=>setFiltroPonto(e.target.value)} />
+            <input className="form-input sm" placeholder="Cidade..." value={filtroCidade} onChange={e=>setFiltroCidade(e.target.value)} />
+            <div style={{display:'flex',gap:6}}>
+              <input className="form-input sm" placeholder="UF..." value={filtroUF} onChange={e=>setFiltroUF(e.target.value.toUpperCase())} style={{width:70}} />
+              {(filtroNome||filtroPonto||filtroCidade||filtroUF) && (
+                <button className="btn btn-secondary btn-sm" onClick={()=>{setFiltroNome('');setFiltroPonto('');setFiltroCidade('');setFiltroUF('');}}>✕</button>
+              )}
+            </div>
+          </div>
+          {(() => {
+            const norm = s => String(s||'').toLowerCase();
+            const aplicadoresFiltrados = aplicadores.filter(a =>
+              (!filtroNome   || norm(a.nome).includes(norm(filtroNome))) &&
+              (!filtroPonto  || norm(a.ponto_partida).includes(norm(filtroPonto))) &&
+              (!filtroCidade || norm(a.cidade).includes(norm(filtroCidade))) &&
+              (!filtroUF     || norm(a.uf).startsWith(norm(filtroUF)))
+            );
+            return (<>
           <div style={{fontSize:13,fontWeight:700,marginBottom:10}}>
-            Aplicadores com doses em estoque ({aplicadores.length})
+            Aplicadores com doses em estoque ({aplicadoresFiltrados.length}{aplicadoresFiltrados.length !== aplicadores.length ? ` de ${aplicadores.length}` : ''})
           </div>
           {aplicadores.length === 0 ? (
             <div style={{padding:24,textAlign:'center',color:'var(--text-muted)',fontSize:13}}>
               Nenhum aplicador com estoque positivo encontrado.
             </div>
+          ) : aplicadoresFiltrados.length === 0 ? (
+            <div style={{padding:16,textAlign:'center',color:'var(--text-muted)',fontSize:13}}>
+              Nenhum aplicador encontrado com esses filtros.
+            </div>
           ) : (
             <div style={{display:'flex',flexDirection:'column',gap:8}}>
-              {aplicadores.map(a => {
+              {aplicadoresFiltrados.map(a => {
                 const sel = paradas.find(p => p.id === a.id);
                 return (
                   <div key={a.id} style={{
@@ -4834,6 +4863,7 @@ function CriarRotaColeta({ onNavigate }) {
                       <div style={{flex:1}}>
                         <div style={{fontWeight:700,fontSize:13}}>{a.nome}</div>
                         <div style={{fontSize:11,color:'var(--text-muted)'}}>{a.cpf} · {a.cidade}/{a.uf}</div>
+                        {a.ponto_partida && <div style={{fontSize:11,color:'var(--text-muted)'}}>📍 {a.ponto_partida}</div>}
                         <div style={{display:'flex',gap:6,flexWrap:'wrap',marginTop:4}}>
                           {a.itens.map(it => (
                             <span key={it.id} style={{fontSize:11,padding:'2px 8px',borderRadius:4,background:'var(--accent-subtle)',color:'var(--accent)',fontWeight:600}}>
@@ -4871,6 +4901,8 @@ function CriarRotaColeta({ onNavigate }) {
               })}
             </div>
           )}
+            </>);
+          })()}
         </div>
       </div>
 
@@ -8669,7 +8701,7 @@ function RotasListPage({ onOpenRoteirizacao }) {
       if (rotaError) throw rotaError;
 
       const { data: remessasData, error: remessasError } = await sb.from('remessas')
-        .select('*, remessa_itens(*, vacinas(nome, lote)), bases(nome, cidade, uf, endereco), aplicadores(nome, cpf, cidade, uf, endereco)')
+        .select('*, remessa_itens(*, vacinas(nome, lote)), bases(nome, cidade, uf, endereco), aplicadores!remessas_destino_aplicador_id_fkey(nome, cpf, cidade, uf, endereco)')
         .eq('rota_id', rota.id)
         .order('ordem_entrega', { ascending: true });
 
@@ -9026,7 +9058,7 @@ async function atualizarTarefasDaRota(rotaId, novoStatusLogistica) {
   try {
     // 1. Buscar remessas da rota (com destino_aplicador_id)
     const { data: remessas } = await sb.from('remessas')
-      .select('id, observacao, destino_aplicador_id, aplicadores(cpf)')
+      .select('id, observacao, destino_aplicador_id, aplicadores!remessas_destino_aplicador_id_fkey(cpf)')
       .eq('rota_id', rotaId);
     if (!remessas || remessas.length === 0) return;
 
@@ -10555,7 +10587,7 @@ function MontagemPage() {
     setRotaSel(rota);
     setLoadingRemessas(true);
     const { data } = await sb.from('remessas')
-      .select('*, remessa_itens(*, vacinas(nome, lote)), bases(nome, cidade, uf), aplicadores(nome, cpf, cidade, uf, endereco)')
+      .select('*, remessa_itens(*, vacinas(nome, lote)), bases(nome, cidade, uf), aplicadores!remessas_destino_aplicador_id_fkey(nome, cpf, cidade, uf, endereco)')
       .eq('rota_id', rota.id)
       .order('ordem_entrega');
     setRemessas(data || []);
@@ -11175,7 +11207,7 @@ function EtiquetasPage() {
 
   const montarQuery = () => {
     let q = sb.from('remessas')
-      .select('*, remessa_itens(*, vacinas(nome, lote)), bases(nome, cidade, uf), aplicadores(nome, cpf, cidade, uf, endereco), rotas(id, codigo, data_prevista, veiculo, base_origem_id, bases!rotas_base_origem_id_fkey(nome), profiles!rotas_motorista_id_fkey(nome))')
+      .select('*, remessa_itens(*, vacinas(nome, lote)), bases(nome, cidade, uf), aplicadores!remessas_destino_aplicador_id_fkey(nome, cpf, cidade, uf, endereco), rotas(id, codigo, data_prevista, veiculo, base_origem_id, bases!rotas_base_origem_id_fkey(nome), profiles!rotas_motorista_id_fkey(nome))')
       .order('created_at', { ascending: false })
       .limit(80);
     if (filters.rastreio.trim()) q = q.ilike('codigo_rastreio', `%${filters.rastreio.trim()}%`);
@@ -12029,7 +12061,7 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
     setLoading(true);
     const [remRes, rotaRes] = await Promise.all([
       sb.from('remessas')
-        .select('*, remessa_itens(quantidade, vacinas(nome)), bases(nome,cidade,uf), aplicadores(nome,cpf,cidade,uf,endereco)')
+        .select('*, remessa_itens(quantidade, vacinas(nome)), bases(nome,cidade,uf), aplicadores!remessas_destino_aplicador_id_fkey(nome,cpf,cidade,uf,endereco)')
         .eq('rota_id', rota.id).order('ordem_entrega'),
       sb.from('rotas')
         .select('*, bases!rotas_base_origem_id_fkey(nome), profiles!rotas_motorista_id_fkey(nome)')
@@ -12175,7 +12207,7 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
   const confirmarEntrega = async (remId) => {
     // Buscar dados completos da remessa com itens
     const { data: rem, error: remErr } = await sb.from('remessas')
-      .select('*, remessa_itens(id, vacina_id, quantidade, vacinas(nome, produto_nome)), aplicadores(nome, cpf)')
+      .select('*, remessa_itens(id, vacina_id, quantidade, vacinas(nome, produto_nome)), aplicadores!remessas_destino_aplicador_id_fkey(nome, cpf)')
       .eq('id', remId).single();
     if (remErr) { toast(remErr.message, 'error'); return; }
 
@@ -13776,7 +13808,7 @@ function AumentoDosesPage({ profile }) {
     setLoadingBusca(true);
     try {
       let query = sb.from('remessas')
-        .select('id,codigo_rastreio,status,updated_at,observacao,destino_aplicador_id,rota_id,aplicadores(nome,cpf,cidade,uf),rotas(id,codigo,base_origem_id,bases(nome)),remessa_itens(id,quantidade,vacina_id,lote,vacinas(id,nome,produto_nome,lote))')
+        .select('id,codigo_rastreio,status,updated_at,observacao,destino_aplicador_id,rota_id,aplicadores!remessas_destino_aplicador_id_fkey(nome,cpf,cidade,uf),rotas(id,codigo,base_origem_id,bases(nome)),remessa_itens(id,quantidade,vacina_id,lote,vacinas(id,nome,produto_nome,lote))')
         .in('status', statusConcluidosBanco)
         .order('updated_at', { ascending: false })
         .limit(250);
