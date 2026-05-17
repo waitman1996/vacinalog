@@ -6138,7 +6138,7 @@ function MapaEstoquePage() {
         setLoading(true);
         try {
             const { data, error } = await sb.from('estoque')
-                .select('*, vacinas(nome, lote), bases(nome, cidade, uf), aplicadores(nome, cpf, cidade, uf)')
+                .select('*, vacinas(nome, lote), bases(id, nome, cidade, uf, ativa), aplicadores(nome, cpf, cidade, uf)')
                 .order('localizacao_tipo');
             if (error)
                 throw error;
@@ -6257,9 +6257,9 @@ function EstoquePage() {
         const { data, error } = await sb.from('estoque')
             .select('*, vacinas(nome, lote), bases(nome, cidade, uf), aplicadores(nome, cpf, cidade, uf)')
             .order('localizacao_tipo');
-        console.log('[ESTOQUE] data:', data?.length, 'error:', error?.message || null);
+
         if (error) {
-            console.error('[ESTOQUE ERROR]', error);
+    
             toast(error.message, 'error');
             return;
         }
@@ -6278,9 +6278,22 @@ function EstoquePage() {
         });
         // Filtrar zeros após consolidação
         const consolidated = Object.values(map).filter(i => i.quantidade !== 0);
-        const _dbg = [...new Set(consolidated.map(i => i.localizacao_tipo + '|' + (i.bases ? i.bases.nome : 'NO-JOIN') + '|bid:' + (i.base_id||'null')))].sort();
-        console.log('[ESTOQUE DEBUG] total=' + consolidated.length);
-        _dbg.slice(0,30).forEach(r => console.log('  ' + r));
+        // Fetch base names for records where join returned null
+        const missingBaseIds = [...new Set(
+            consolidated.filter(i => i.base_id && !i.bases).map(i => i.base_id)
+        )];
+        if (missingBaseIds.length > 0) {
+            const { data: basesExtra } = await sb.from('bases')
+                .select('id, nome, cidade, uf')
+                .in('id', missingBaseIds.slice(0, 500));
+            const basesMap = {};
+            (basesExtra || []).forEach(b => { basesMap[b.id] = b; });
+            consolidated.forEach(i => {
+                if (i.base_id && !i.bases && basesMap[i.base_id]) {
+                    i.bases = basesMap[i.base_id];
+                }
+            });
+        }
         setItems(consolidated);
     };
     useEffect(() => {
