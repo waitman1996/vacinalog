@@ -4692,59 +4692,125 @@ function CriarRotaColeta({ onNavigate }) {
 
   useEffect(() => {
     const load = async () => {
-      const [
-        { data: b }, { data: m }, { data: v },
-        { data: aplic }, { data: est }, { data: rotEnt },
-      ] = await Promise.all([
-        sb.from('bases').select('id,nome,cidade,uf').order('nome'),
-        sb.from('profiles').select('id,nome').eq('role','motorista').order('nome'),
-        sb.from('veiculos').select('id,modelo,placa').order('modelo'),
-        sb.from('aplicadores').select('id,nome,cpf,cidade,uf,ponto_partida').order('nome'),
-        sb.from('estoque').select('id,quantidade,vacina_id,aplicador_id,vacinas(nome,lote),aplicadores(id,nome,cpf,cidade,uf,ponto_partida)').eq('localizacao_tipo','aplicador').gte('quantidade',1),
-        sb.from('rotas').select('id,codigo,status,data_prevista,bases!rotas_base_origem_id_fkey(nome)').not('status','in','(concluida,cancelada)').eq('tipo','entrega').order('data_prevista',{ascending:false}),
-      ]);
-      setBases(b||[]);
-      setRotasEntrega(rotEnt||[]);
-      setMotoristas(m||[]);
-      setVeiculos(v||[]);
-      // Agrupa estoque por aplicador.
-      // Correção: em alguns registros o saldo aparece com o relacionamento aplicadores(),
-      // mas o aplicador_id bruto pode vir vazio/descasado. Por isso a lista agora é
-      // montada a partir do próprio estoque, usando aplicadores.id quando disponível.
-      const aplicById = {};
-      (aplic || []).forEach(a => { aplicById[String(a.id)] = a; });
-      const estMap = {};
-      const aplicMap = {};
-      (est || []).forEach(e => {
-        const rel = e.aplicadores || null;
-        const aplicId = e.aplicador_id || rel?.id;
-        if (!aplicId) return;
-        const key = String(aplicId);
-        if (!estMap[key]) estMap[key] = [];
-        estMap[key].push({ ...e, aplicador_id: aplicId });
-        if (!aplicMap[key]) {
-          aplicMap[key] = {
-            ...(aplicById[key] || {}),
-            ...(rel || {}),
-            id: aplicId,
-            nome: rel?.nome || aplicById[key]?.nome || 'Aplicador sem nome',
-            cpf: rel?.cpf || aplicById[key]?.cpf || '',
-            cidade: rel?.cidade || aplicById[key]?.cidade || '',
-            uf: rel?.uf || aplicById[key]?.uf || '',
-            ponto_partida: rel?.ponto_partida || aplicById[key]?.ponto_partida || '',
-          };
+      setLoading(true);
+      try {
+        // Carregamentos principais. O estoque é buscado separado e com "*"
+        // para não quebrar quando a tabela usa localizacao_id/local_id em vez de aplicador_id
+        // ou quando o relacionamento automático com aplicadores não está configurado no Supabase.
+        const [basesRes, motoristasRes, veiculosRes, aplicRes, rotEntRes] = await Promise.all([
+          sb.from('bases').select('id,nome,cidade,uf').order('nome'),
+          sb.from('profiles').select('id,nome').eq('role','motorista').order('nome'),
+          sb.from('veiculos').select('id,modelo,placa').order('modelo'),
+          sb.from('aplicadores').select('id,nome,cpf,cidade,uf,ponto_partida,endereco').order('nome'),
+          sb.from('rotas').select('id,codigo,status,data_prevista,bases!rotas_base_origem_id_fkey(nome)').not('status','in','(concluida,cancelada)').eq('tipo','entrega').order('data_prevista',{ascending:false}),
+        ]);
+
+        setBases(basesRes.data || []);
+        setMotoristas(motoristasRes.data || []);
+        setVeiculos(veiculosRes.data || []);
+        setRotasEntrega(rotEntRes.data || []);
+
+        if (basesRes.error) toast('Erro ao carregar bases: ' + basesRes.error.message, 'error');
+        if (motoristasRes.error) toast('Erro ao carregar motoristas: ' + motoristasRes.error.message, 'error');
+        if (veiculosRes.error) toast('Erro ao carregar veículos: ' + veiculosRes.error.message, 'error');
+        if (aplicRes.error) toast('Erro ao carregar aplicadores: ' + aplicRes.error.message, 'error');
+
+        const aplicadoresCadastro = aplicRes.data || [];
+        const aplicById = {};
+        aplicadoresCadastro.forEach(a => { aplicById[String(a.id)] = a; });
+
+        // Busca estoque positivo sem depender de FK/relacionamento.
+        const { data: estoqueBruto, error: estoqueErr } = await sb
+          .from('estoque')
+          .select('*')
+          .order('id', { ascending: true });
+        if (estoqueErr) throw new Error('Erro ao carregar estoque: ' + estoqueErr.message);
+
+        const estoqueRows = (estoqueBruto || []).filter(e => {
+          const qtd = Number(e.quantidade ?? e.saldo ?? e.qtd ?? 0);
+          if (qtd <= 0) return false;
+          const tipo = String(e.localizacao_tipo || e.tipo_localizacao || e.tipo || '').toLowerCase();
+          // Aceita tanto registros marcados como aplicador quanto registros que tenham aplicador_id.
+          return tipo.includes('aplicador') || !!e.aplicador_id;
+        });
+
+        const vacinaIds = [...new Set(estoqueRows.map(e => e.vacina_id).filter(Boolean))];
+        let vacinaById = {};
+        if (vacinaIds.length > 0) {
+          const { data: vacs, error: vacErr } = await sb.from('vacinas').select('id,nome,lote').in('id', vacinaIds);
+          if (vacErr) toast('Erro ao carregar nomes das vacinas: ' + vacErr.message, 'error');
+          (vacs || []).forEach(v => { vacinaById[String(v.id)] = v; });
         }
-      });
-      const aplicComEstoque = Object.values(aplicMap)
-        .map(a => ({ ...a, itens: estMap[String(a.id)] || [], totalDoses: (estMap[String(a.id)] || []).reduce((s,e)=>s+Number(e.quantidade||0),0) }))
-        .filter(a => a.totalDoses > 0)
-        .sort((a,b) => String(a.nome||'').localeCompare(String(b.nome||''), 'pt-BR'));
-      if (aplicComEstoque.length === 0 && (est||[]).length > 0) {
-        toast('Estoque de aplicador encontrado (' + (est||[]).length + ' registros), mas sem vínculo legível com cadastro de aplicadores. Confira se a FK estoque → aplicadores está ativa.', 'error');
+
+        const estMap = {};
+        const aplicMap = {};
+        const semVinculo = [];
+
+        estoqueRows.forEach(e => {
+          const tipo = String(e.localizacao_tipo || e.tipo_localizacao || e.tipo || '').toLowerCase();
+          // Ordem de tentativa:
+          // 1) aplicador_id direto;
+          // 2) quando localizacao_tipo = aplicador, tenta campos genéricos usados em algumas versões do banco;
+          // 3) origem/destino como último recurso para bases antigas.
+          const aplicId = e.aplicador_id ||
+            (tipo.includes('aplicador') ? (e.localizacao_id || e.local_id || e.localidade_id || e.entidade_id || e.pessoa_id || e.profissional_id) : null) ||
+            e.origem_aplicador_id || e.destino_aplicador_id ||
+            (tipo.includes('aplicador') ? (e.origem_id || e.destino_id) : null);
+
+          if (!aplicId) { semVinculo.push(e); return; }
+          const key = String(aplicId);
+          const ap = aplicById[key] || {};
+          const item = {
+            ...e,
+            id: e.id || (key + '-' + e.vacina_id),
+            aplicador_id: aplicId,
+            quantidade: Number(e.quantidade ?? e.saldo ?? e.qtd ?? 0),
+            vacinas: vacinaById[String(e.vacina_id)] || { nome: e.vacina_nome || e.nome_vacina || 'Vacina', lote: e.lote || '' },
+          };
+          if (!estMap[key]) estMap[key] = [];
+          estMap[key].push(item);
+          if (!aplicMap[key]) {
+            aplicMap[key] = {
+              id: aplicId,
+              nome: ap.nome || e.aplicador_nome || e.nome_aplicador || 'Aplicador sem nome',
+              cpf: ap.cpf || e.aplicador_cpf || e.cpf || '',
+              cidade: ap.cidade || e.cidade || '',
+              uf: ap.uf || e.uf || '',
+              ponto_partida: ap.ponto_partida || e.ponto_partida || e.endereco || '',
+            };
+          }
+        });
+
+        const aplicComEstoque = Object.values(aplicMap)
+          .map(a => ({
+            ...a,
+            itens: estMap[String(a.id)] || [],
+            totalDoses: (estMap[String(a.id)] || []).reduce((s,e)=>s+Number(e.quantidade||0),0),
+          }))
+          .filter(a => a.totalDoses > 0)
+          .sort((a,b) => String(a.nome||'').localeCompare(String(b.nome||''), 'pt-BR'));
+
+        setAplicadores(aplicComEstoque);
+        setEstoque(estMap);
+
+        if (aplicComEstoque.length === 0) {
+          const totalPositivo = (estoqueBruto || []).filter(e => Number(e.quantidade ?? e.saldo ?? e.qtd ?? 0) > 0).length;
+          toast('Não consegui montar a lista. Estoque positivo lido: ' + totalPositivo + ' registro(s); estoque marcado como aplicador: ' + estoqueRows.length + ' registro(s); sem vínculo de aplicador: ' + semVinculo.length + '. Veja o console para as colunas encontradas.', 'error');
+          console.warn('Diagnóstico estoque recolhimento:', {
+            totalEstoque: (estoqueBruto || []).length,
+            totalPositivo,
+            estoqueAplicador: estoqueRows.length,
+            semVinculo: semVinculo.slice(0, 5),
+            exemploEstoque: (estoqueBruto || [])[0],
+            colunasExemplo: Object.keys((estoqueBruto || [])[0] || {})
+          });
+        }
+      } catch (err) {
+        console.error('Erro na tela de recolhimento:', err);
+        toast(err.message || 'Erro ao carregar recolhimento', 'error');
+      } finally {
+        setLoading(false);
       }
-      setAplicadores(aplicComEstoque);
-      setEstoque(estMap);
-      setLoading(false);
     };
     load();
   }, []);
