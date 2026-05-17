@@ -4724,18 +4724,29 @@ function CriarRotaColeta({ onNavigate }) {
 
       if (aplicComEstoque.length === 0 && (est||[]).length > 0) {
         try {
-          const [{ data: entregues }, { data: coletadas }] = await Promise.all([
-            sb.from('remessas')
-              .select('id,destino_aplicador_id,remessa_itens(quantidade,vacina_id,vacinas(nome,lote))')
-              .eq('tipo','entrega')
-              .eq('status','concluida')
-              .not('destino_aplicador_id','is',null),
-            sb.from('remessas')
-              .select('id,origem_aplicador_id,remessa_itens(quantidade,vacina_id,vacinas(nome,lote))')
-              .eq('tipo','coleta')
-              .eq('status','concluida')
-              .not('origem_aplicador_id','is',null),
-          ]);
+          // Busca remessas concluídas sem depender só do campo aplicador_id.
+          // Em algumas remessas antigas o destino_aplicador_id ficou vazio, mas o CPF/nome do aplicador está na observação.
+          const { data: remessasConcluidas, error: remErrFallback } = await sb.from('remessas')
+            .select('id,tipo,status,destino_aplicador_id,origem_aplicador_id,observacao,remessa_itens(quantidade,vacina_id,vacinas(nome,lote))')
+            .eq('status','concluida');
+          if (remErrFallback) throw remErrFallback;
+
+          const cpfDigits = (v) => String(v || '').replace(/\D/g, '');
+          const aplicadoresLista = aplic || [];
+          const resolveAplicadorId = (rem, sentido) => {
+            const direto = sentido === 'coleta' ? rem.origem_aplicador_id : rem.destino_aplicador_id;
+            if (direto) return direto;
+            const obs = String(rem.observacao || '');
+            const obsDigits = cpfDigits(obs);
+            const porCpf = aplicadoresLista.find(a => {
+              const cpf = cpfDigits(a.cpf);
+              return cpf && obsDigits.includes(cpf);
+            });
+            if (porCpf) return porCpf.id;
+            const obsLower = obs.toLowerCase();
+            const porNome = aplicadoresLista.find(a => a.nome && obsLower.includes(String(a.nome).toLowerCase()));
+            return porNome ? porNome.id : null;
+          };
 
           const calc = {};
           const addSaldo = (apId, item, sinal) => {
@@ -4755,8 +4766,13 @@ function CriarRotaColeta({ onNavigate }) {
             calc[key].quantidade += qtd;
           };
 
-          (entregues||[]).forEach(rem => (rem.remessa_itens||[]).forEach(it => addSaldo(rem.destino_aplicador_id, it, +1)));
-          (coletadas||[]).forEach(rem => (rem.remessa_itens||[]).forEach(it => addSaldo(rem.origem_aplicador_id, it, -1)));
+          (remessasConcluidas||[]).forEach(rem => {
+            const tipo = String(rem.tipo || '').toLowerCase();
+            const obs = String(rem.observacao || '').toLowerCase();
+            const isColeta = tipo === 'coleta' || obs.includes('coleta de doses') || obs.includes('rota de coleta');
+            const apId = resolveAplicadorId(rem, isColeta ? 'coleta' : 'entrega');
+            (rem.remessa_itens||[]).forEach(it => addSaldo(apId, it, isColeta ? -1 : +1));
+          });
 
           estMap = {};
           Object.values(calc).forEach(e => {
