@@ -793,7 +793,7 @@ function Sidebar({ profile, currentPage, onNavigate, open, onClose, collapsed, o
         {!collapsed && (
           <div style={{fontSize:9,color:'var(--text-muted)',textAlign:'center',marginTop:6,padding:'4px 0',borderTop:'1px solid var(--border)',opacity:0.6}}>
             {'🕐 Atualizado em'}<br/>
-            <span style={{fontFamily:'JetBrains Mono',fontSize:9}}>{'17/05/2026 às 17:20'}</span>
+            <span style={{fontFamily:'JetBrains Mono',fontSize:9}}>{'15/05/2026 às 10:50'}</span>
           </div>
         )}
       </div>
@@ -4700,7 +4700,7 @@ function CriarRotaColeta({ onNavigate }) {
         sb.from('profiles').select('id,nome').eq('role','motorista').order('nome'),
         sb.from('veiculos').select('id,modelo,placa').order('modelo'),
         sb.from('aplicadores').select('id,nome,cpf,cidade,uf,ponto_partida').order('nome'),
-        sb.from('estoque').select('id,quantidade,vacina_id,aplicador_id,vacinas(nome,lote)').eq('localizacao_tipo','aplicador').gte('quantidade',1),
+        sb.from('estoque').select('id,quantidade,vacina_id,aplicador_id,vacinas(nome,lote),aplicadores(id,nome,cpf,cidade,uf,ponto_partida)').eq('localizacao_tipo','aplicador').gte('quantidade',1),
         sb.from('rotas').select('id,codigo,status,data_prevista,bases!rotas_base_origem_id_fkey(nome)').not('status','in','(concluida,cancelada)').eq('tipo','entrega').order('data_prevista',{ascending:false}),
       ]);
       setBases(b||[]);
@@ -4708,107 +4708,40 @@ function CriarRotaColeta({ onNavigate }) {
       setMotoristas(m||[]);
       setVeiculos(v||[]);
       // Agrupa estoque por aplicador.
-      // Regra principal: tabela estoque com localizacao_tipo='aplicador' e aplicador_id preenchido.
-      let estMap = {};
-      (est||[]).forEach(e => {
-        if (!e.aplicador_id) return;
-        if (!estMap[e.aplicador_id]) estMap[e.aplicador_id] = [];
-        estMap[e.aplicador_id].push(e);
+      // Correção: em alguns registros o saldo aparece com o relacionamento aplicadores(),
+      // mas o aplicador_id bruto pode vir vazio/descasado. Por isso a lista agora é
+      // montada a partir do próprio estoque, usando aplicadores.id quando disponível.
+      const aplicById = {};
+      (aplic || []).forEach(a => { aplicById[String(a.id)] = a; });
+      const estMap = {};
+      const aplicMap = {};
+      (est || []).forEach(e => {
+        const rel = e.aplicadores || null;
+        const aplicId = e.aplicador_id || rel?.id;
+        if (!aplicId) return;
+        const key = String(aplicId);
+        if (!estMap[key]) estMap[key] = [];
+        estMap[key].push({ ...e, aplicador_id: aplicId });
+        if (!aplicMap[key]) {
+          aplicMap[key] = {
+            ...(aplicById[key] || {}),
+            ...(rel || {}),
+            id: aplicId,
+            nome: rel?.nome || aplicById[key]?.nome || 'Aplicador sem nome',
+            cpf: rel?.cpf || aplicById[key]?.cpf || '',
+            cidade: rel?.cidade || aplicById[key]?.cidade || '',
+            uf: rel?.uf || aplicById[key]?.uf || '',
+            ponto_partida: rel?.ponto_partida || aplicById[key]?.ponto_partida || '',
+          };
+        }
       });
-
-      let aplicComEstoque = (aplic||[])
-        .filter(a => estMap[a.id] && estMap[a.id].length > 0)
-        .map(a => ({ ...a, itens: estMap[a.id], totalDoses: estMap[a.id].reduce((s,e)=>s+Number(e.quantidade||0),0) }));
-
-      // Plano B: se a tabela estoque não tiver saldo vinculado ao aplicador,
-      // reconstrói o saldo pelas movimentações. Isso permite criar coleta mesmo
-      // quando o estoque físico ficou sem aplicador_id por erro antigo de lançamento.
-      if (aplicComEstoque.length === 0) {
-        const { data: movs, error: movErr } = await sb.from('movimentacoes')
-          .select('id,tipo,quantidade,vacina_id,origem_tipo,origem_id,origem_aplicador_id,destino_tipo,destino_id,destino_aplicador_id,vacinas(nome,lote)')
-          .or('origem_tipo.eq.aplicador,destino_tipo.eq.aplicador');
-
-        if (!movErr && movs?.length) {
-          const saldo = {};
-          (movs||[]).forEach(m => {
-            const qtd = Number(m.quantidade || 0);
-            const destApId = m.destino_aplicador_id || (m.destino_tipo === 'aplicador' ? m.destino_id : null);
-            const origApId = m.origem_aplicador_id || (m.origem_tipo === 'aplicador' ? m.origem_id : null);
-            if (String(m.destino_tipo || '').toLowerCase() === 'aplicador' && destApId) {
-              const k = destApId + '|' + m.vacina_id;
-              if (!saldo[k]) saldo[k] = {
-                id: 'mov-' + k,
-                quantidade: 0,
-                vacina_id: m.vacina_id,
-                aplicador_id: destApId,
-                vacinas: m.vacinas || {}
-              };
-              saldo[k].quantidade += qtd;
-            }
-            if (String(m.origem_tipo || '').toLowerCase() === 'aplicador' && origApId) {
-              const k = origApId + '|' + m.vacina_id;
-              if (!saldo[k]) saldo[k] = {
-                id: 'mov-' + k,
-                quantidade: 0,
-                vacina_id: m.vacina_id,
-                aplicador_id: origApId,
-                vacinas: m.vacinas || {}
-              };
-              saldo[k].quantidade -= qtd;
-            }
-          });
-
-          Object.values(saldo).forEach(e => {
-            if (Number(e.quantidade || 0) <= 0) return;
-            if (!estMap[e.aplicador_id]) estMap[e.aplicador_id] = [];
-            estMap[e.aplicador_id].push(e);
-          });
-
-          aplicComEstoque = (aplic||[])
-            .filter(a => estMap[a.id] && estMap[a.id].length > 0)
-            .map(a => ({ ...a, itens: estMap[a.id], totalDoses: estMap[a.id].reduce((s,e)=>s+Number(e.quantidade||0),0) }));
-        }
+      const aplicComEstoque = Object.values(aplicMap)
+        .map(a => ({ ...a, itens: estMap[String(a.id)] || [], totalDoses: (estMap[String(a.id)] || []).reduce((s,e)=>s+Number(e.quantidade||0),0) }))
+        .filter(a => a.totalDoses > 0)
+        .sort((a,b) => String(a.nome||'').localeCompare(String(b.nome||''), 'pt-BR'));
+      if (aplicComEstoque.length === 0 && (est||[]).length > 0) {
+        toast('Estoque de aplicador encontrado (' + (est||[]).length + ' registros), mas sem vínculo legível com cadastro de aplicadores. Confira se a FK estoque → aplicadores está ativa.', 'error');
       }
-
-      // Plano C: banco antigo pode ter criado remessas com origem_id/destino_id,
-      // sem movimentações completas. Nesse caso, calcula entrega - coleta por remessa_itens.
-      if (aplicComEstoque.length === 0) {
-        const { data: remItens, error: remItensErr } = await sb.from('remessa_itens')
-          .select('id,quantidade,vacina_id,vacinas(nome,lote),remessas(tipo,status,origem_tipo,origem_id,origem_aplicador_id,destino_tipo,destino_id,destino_aplicador_id)');
-        if (!remItensErr && remItens?.length) {
-          const saldoRem = {};
-          const statusOk = ['concluida','concluido','entregue','finalizada','finalizado','em_transito','pronta','planejada'];
-          (remItens||[]).forEach(ri => {
-            const rem = ri.remessas || {};
-            const st = String(rem.status || '').toLowerCase();
-            if (st && !statusOk.includes(st)) return;
-            const qtd = Number(ri.quantidade || 0);
-            const destApId = rem.destino_aplicador_id || (rem.destino_tipo === 'aplicador' ? rem.destino_id : null);
-            const origApId = rem.origem_aplicador_id || (rem.origem_tipo === 'aplicador' ? rem.origem_id : null);
-            const add = (apId, delta) => {
-              if (!apId || !ri.vacina_id || !delta) return;
-              const k = apId + '|' + ri.vacina_id;
-              if (!saldoRem[k]) saldoRem[k] = { id:'rem-' + k, quantidade:0, vacina_id:ri.vacina_id, aplicador_id:apId, vacinas:ri.vacinas || {} };
-              saldoRem[k].quantidade += delta;
-            };
-            if (destApId) add(destApId, qtd); // entrega para aplicador
-            if (origApId) add(origApId, -qtd); // coleta/devolução saindo do aplicador
-          });
-          Object.values(saldoRem).forEach(e => {
-            if (Number(e.quantidade || 0) <= 0) return;
-            if (!estMap[e.aplicador_id]) estMap[e.aplicador_id] = [];
-            estMap[e.aplicador_id].push(e);
-          });
-          aplicComEstoque = (aplic||[])
-            .filter(a => estMap[a.id] && estMap[a.id].length > 0)
-            .map(a => ({ ...a, itens: estMap[a.id], totalDoses: estMap[a.id].reduce((s,e)=>s+Number(e.quantidade||0),0) }));
-        }
-      }
-
-      if (aplicComEstoque.length === 0) {
-        toast('Nenhum aplicador com saldo positivo encontrado. Se houver doses paradas com aplicador, ajuste a tabela estoque ou registre a transferência para o aplicador.', 'info');
-      }
-
       setAplicadores(aplicComEstoque);
       setEstoque(estMap);
       setLoading(false);
