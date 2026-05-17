@@ -2494,18 +2494,22 @@ function ImportConsulta() {
       }
 
       const rows = rowsDeduped;
-      const batchSize = 100;
+      const batchSize = 500;
       let imported = 0, ignored = 0, atualizados = 0, abatimentos = 0;
 
+      // Importação rápida em lote:
+      // - não debita estoque
+      // - não cria movimentações
+      // - usa UPSERT por código para reduzir milhares de updates individuais
+      // - preserva a regra de não diminuir doses_aplicadas
       for (let i = 0; i < rows.length; i += batchSize) {
         const batch = rows.slice(i, i + batchSize);
-
-        // Separar novos e existentes
-        const novos = [];
-        const paraAtualizar = [];
+        const upsertPayload = [];
 
         batch.forEach(r => {
-          const codigo = r['Código'] || '';
+          const codigo = String(r['Código'] || '').trim();
+          if (!codigo) return;
+
           const statusRaw = r['Status'] || '';
           const status = STATUS_MAP[statusRaw] || 'aprovada';
           const baseNome = (String(r['Bases'] || '')).trim();
@@ -2515,15 +2519,24 @@ function ImportConsulta() {
           const horaInicio = excelTimeToString(r['Horas']);
           const horaTermino = excelTimeToString(r['Horas_1'] || r['Horas.1']);
           const dosesAplicadas = Math.round(parseFloat(r['Doses Aplicadas'])) || 0;
-          // Helper para buscar valor da coluna ignorando espaços extras
+
           const getCol = (row, key) => {
             if (row[key] !== undefined) return row[key];
-            // Tentar match por nome normalizado
             const normKey = key.trim().toLowerCase().replace(/\s+/g, ' ');
             const found = Object.keys(row).find(k => k.trim().toLowerCase().replace(/\s+/g, ' ') === normKey);
             return found ? row[found] : undefined;
           };
           const dosesPrevistas = Math.round(parseFloat(getCol(r, preview.dosesCol) ?? getCol(r, 'Doses Previstas'))) || 0;
+
+          const existente = existingMap[codigo];
+          const dosesAntigas = existente?.doses_aplicadas || 0;
+
+          // Segurança: não deixa uma planilha antiga diminuir as doses aplicadas já registradas.
+          if (existente && dosesAplicadas < dosesAntigas) {
+            console.warn(`Ignorando ${codigo}: tentativa de diminuir doses (${dosesAntigas} → ${dosesAplicadas})`);
+            ignored++;
+            return;
+          }
 
           const payload = {
             codigo,
@@ -2561,62 +2574,32 @@ function ImportConsulta() {
             importacao_id: imp.id,
           };
 
-          if (existingMap[codigo]) {
-            // Tarefa existente → atualizar
-            paraAtualizar.push({
-              ...payload,
-              id: existingMap[codigo].id,
-              dosesAntigas: existingMap[codigo].doses_aplicadas || 0,
-              dosesNovas: dosesAplicadas,
-            });
-          } else {
-            novos.push(payload);
-          }
+          upsertPayload.push(payload);
+          if (existente) atualizados++; else imported++;
         });
 
-        // INSERT para novas tarefas
-        if (novos.length > 0) {
-          const { data: insertedData, error: insertErr } = await sb.from('tarefas').insert(novos).select('id,codigo');
-          if (insertErr) {
-            ignored += novos.length;
-          } else {
-            imported += (insertedData?.length || novos.length);
+        if (upsertPayload.length > 0) {
+          const { error: upsertErr } = await sb.from('tarefas')
+            .upsert(upsertPayload, { onConflict: 'codigo', ignoreDuplicates: false });
 
-            // Importação separada do abatimento: tarefas novas não debitam estoque aqui.
-          }
-        }
+          if (upsertErr) {
+            // Fallback seguro: se o upsert em lote falhar, tenta linha a linha para não perder tudo.
+            console.warn('Falha no upsert em lote. Tentando fallback linha a linha:', upsertErr.message);
+            imported = Math.max(0, imported - upsertPayload.filter(x => !existingMap[x.codigo]).length);
+            atualizados = Math.max(0, atualizados - upsertPayload.filter(x => existingMap[x.codigo]).length);
 
-        // UPDATE para tarefas existentes + abatimento se houver novas doses
-        for (const t of paraAtualizar) {
-          const { id, dosesAntigas, dosesNovas, ...fields } = t;
-          delete fields.importacao_id;
-
-          // REGRA: não pode diminuir doses aplicadas
-          if (dosesNovas < dosesAntigas) {
-            console.warn(`Ignorando ${fields.codigo||id}: tentativa de diminuir doses (${dosesAntigas} → ${dosesNovas})`);
-            ignored++;
-            continue;
-          }
-
-          // O abatimento não é mais executado durante a importação.
-          // O botão de reprocessamento no banco trata pendências sem duplicar.
-
-          const { error: updErr } = await sb.from('tarefas')
-            .update({
-              doses_previstas: fields.doses_previstas,
-              doses_consumidas: fields.doses_consumidas,
-              doses_aplicadas: dosesNovas,
-              status: fields.status,
-              status_original: fields.status_original,
-            })
-            .eq('id', id);
-
-          if (updErr) {
-            ignored++;
-          } else {
-            atualizados++;
-
-            // Sem abatimento aqui. Use o botão "Reprocessar abatimentos pendentes" após a importação.
+            for (const payload of upsertPayload) {
+              const existente = existingMap[payload.codigo];
+              if (existente) {
+                const { error: updErr } = await sb.from('tarefas')
+                  .update({ ...payload, importacao_id: undefined })
+                  .eq('codigo', payload.codigo);
+                if (updErr) ignored++; else atualizados++;
+              } else {
+                const { error: insErr } = await sb.from('tarefas').insert(payload);
+                if (insErr) ignored++; else imported++;
+              }
+            }
           }
         }
 
@@ -2631,7 +2614,7 @@ function ImportConsulta() {
 
       setResult({ imported, atualizados, abatimentos: 0, ignored, total: rows.length });
       toast(
-        `Importação concluída! ${imported} novas · ${atualizados} atualizadas · nenhum abatimento gerado nesta etapa.`,
+        `Importação rápida concluída! ${imported} novas · ${atualizados} atualizadas · nenhum abatimento gerado nesta etapa.`,
         'success'
       );
     } catch (err) {
@@ -2825,7 +2808,7 @@ function ImportTutores() {
       }).select().single();
 
       const rows = preview.data;
-      const batchSize = 100;
+      const batchSize = 500;
       let imported = 0, ignored = 0, aplicadoresCriados = 0;
 
       // Primeiro pass: criar aplicadores que não existem
