@@ -6145,6 +6145,17 @@ function MapaEstoquePage() {
         const { data, error } = estoqueRes;
         const basesLookup = {};
         (basesRes.data || []).forEach(b => { basesLookup[b.id] = b; });
+        // If RLS blocked the bases query, fetch by specific IDs from estoque
+        if ((basesRes.data || []).length === 0 && data && data.length > 0) {
+            const baseIds = [...new Set(data.filter(r => r.base_id).map(r => r.base_id))];
+            if (baseIds.length > 0) {
+                const { data: basesById } = await sb.from('bases')
+                    .select('id, nome, cidade, uf')
+                    .in('id', baseIds.slice(0, 500));
+                (basesById || []).forEach(b => { basesLookup[b.id] = b; });
+            }
+        }
+        console.log('[BASES LOOKUP] count:', Object.keys(basesLookup).length, Object.values(basesLookup).map(b=>b.nome).slice(0,10).join('|'));
         console.log('[BASES LOOKUP] keys:', Object.keys(basesLookup).length, Object.values(basesLookup).map(b=>b.nome).join('|'));
             if (error)
                 throw error;
@@ -6264,7 +6275,7 @@ function EstoquePage() {
         // Load estoque and bases separately to avoid RLS join issues on bases
         const [estoqueRes, basesRes] = await Promise.all([
             sb.from('estoque').select('*, vacinas(nome, lote), aplicadores(nome, cpf, cidade, uf)').order('localizacao_tipo'),
-            sb.from('bases').select('id, nome, cidade, uf')
+            sb.from('bases').select('id, nome, cidade, uf').or('nome.ilike.*Rede Credenciada*,nome.ilike.*línica*,nome.ilike.*linica*')
         ]);
         const { data, error } = estoqueRes;
         const basesLookup = {};
