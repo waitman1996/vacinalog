@@ -5016,7 +5016,7 @@ function AcompanharColetas() {
       // Atualiza remessa com observação de conferência e conclui
       const obsBase = '
 [CONFERENCIA_BASE ' + new Date().toLocaleString('pt-BR') + '] ' + (obsDanificados ? 'Danificadas: ' + obsDanificados : 'Sem danos registrados');
-      await sb.from('remessas').update({ status:'concluida', observacao: sb.rpc ? undefined : obsBase }).eq('id', remId);
+      await sb.from('remessas').update({ status:'concluida' }).eq('id', remId);
 
       // Se todas as remessas da rota de coleta estão concluídas → fecha a rota
       const { data: allRem } = await sb.from('remessas').select('status').eq('rota_id', rotaId);
