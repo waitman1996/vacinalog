@@ -6145,6 +6145,7 @@ function MapaEstoquePage() {
         const { data, error } = estoqueRes;
         const basesLookup = {};
         (basesRes.data || []).forEach(b => { basesLookup[b.id] = b; });
+        console.log('[BASES LOOKUP] keys:', Object.keys(basesLookup).length, Object.values(basesLookup).map(b=>b.nome).join('|'));
             if (error)
                 throw error;
             const map = {};
