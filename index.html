@@ -6227,6 +6227,7 @@ function MapaEstoquePage() {
         loading ? (React.createElement("div", { className: "card", style: { padding: 30, textAlign: 'center', color: 'var(--text-muted)' } }, "Carregando mapa...")) : (React.createElement(EstoqueLocalidadeMap, { items: itemsFiltrados }))));
 }
 function EstoquePage() {
+  const isClinicaEstoque = isClinicaEstoqueGlobal;
     const [items, setItems] = useState([]);
     const [showEntrada, setShowEntrada] = useState(false);
     const [editingId, setEditingId] = useState(null);
