@@ -528,12 +528,13 @@ function getEstoqueCidadeUf(i) {
     return { cidade: ((_c = i.aplicadores) === null || _c === void 0 ? void 0 : _c.cidade) || '', uf: ((_d = i.aplicadores) === null || _d === void 0 ? void 0 : _d.uf) || '' };
 }
 function isClinicaEstoqueGlobal(i) {
-    var _a, _b;
     if (!i) return false;
-    // Suporte a localizacao_tipo='clinica' (caso futuro)
     if (i.localizacao_tipo === 'clinica') return true;
-    // Padrão atual: localizacao_tipo='base' com nome iniciando em 'Clínica'
-    const nomeBase = String(((_a = i.bases) === null || _a === void 0 ? void 0 : _a.nome) || ((_b = i) === null || _b === void 0 ? void 0 : _b.base_nome) || '');
+    // Identificação direta pelo base_id da Rede Credenciada - Clínicas Parceiras
+    if (i.base_id === '795b9bb9-a0ec-4d4c-8d20-c905772c8f13') return true;
+    // Fallback por nome da base (quando join disponível)
+    var _a;
+    const nomeBase = String(((_a = i.bases) === null || _a === void 0 ? void 0 : _a.nome) || '');
     return i.localizacao_tipo === 'base' && /^cl[ií]nica|rede credenciada/i.test(nomeBase);
 }
 function tipoEstoqueLabelGlobal(i) {
@@ -6155,7 +6156,6 @@ function MapaEstoquePage() {
                 (basesById || []).forEach(b => { basesLookup[b.id] = b; });
             }
         }
-        console.log('[BASES LOOKUP] count:', Object.keys(basesLookup).length, Object.values(basesLookup).map(b=>b.nome).slice(0,10).join('|'));
         console.log('[BASES LOOKUP] keys:', Object.keys(basesLookup).length, Object.values(basesLookup).map(b=>b.nome).join('|'));
             if (error)
                 throw error;
@@ -6271,8 +6271,7 @@ function EstoquePage() {
     const [conciliacaoVal, setConciliacaoVal] = useState('');
     const toast = useContext(ToastContext);
     const load = async () => {
-      try {
-        // Load estoque and bases separately to avoid RLS join issues on bases
+      // Load estoque and bases separately to avoid RLS join issues on bases
         const [estoqueRes, basesRes] = await Promise.all([
             sb.from('estoque').select('*, vacinas(nome, lote), aplicadores(nome, cpf, cidade, uf)').order('localizacao_tipo'),
             sb.from('bases').select('id, nome, cidade, uf').or('nome.ilike.*Rede Credenciada*,nome.ilike.*línica*,nome.ilike.*linica*')
@@ -6306,11 +6305,7 @@ function EstoquePage() {
         const consolidated = Object.values(map).filter(i => i.quantidade !== 0);
 
         setItems(consolidated);
-        console.log('[LOAD DONE] items set:', consolidated.length);
-      } catch(err) {
-        console.error('[LOAD ERROR]', err.message, err.stack);
-        alert('Erro no load: ' + err.message);
-      }
+
     };
     useEffect(() => {
         load();
