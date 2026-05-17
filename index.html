@@ -528,9 +528,13 @@ function getEstoqueCidadeUf(i) {
     return { cidade: ((_c = i.aplicadores) === null || _c === void 0 ? void 0 : _c.cidade) || '', uf: ((_d = i.aplicadores) === null || _d === void 0 ? void 0 : _d.uf) || '' };
 }
 function isClinicaEstoqueGlobal(i) {
-    var _a;
-    const nomeBase = String(((_a = i === null || i === void 0 ? void 0 : i.bases) === null || _a === void 0 ? void 0 : _a.nome) || '');
-    return (i === null || i === void 0 ? void 0 : i.localizacao_tipo) === 'base' && /clinica|clínica|rede credenciada/i.test(nomeBase);
+    var _a, _b;
+    if (!i) return false;
+    // Suporte a localizacao_tipo='clinica' (caso futuro)
+    if (i.localizacao_tipo === 'clinica') return true;
+    // Padrão atual: localizacao_tipo='base' com nome iniciando em 'Clínica'
+    const nomeBase = String(((_a = i.bases) === null || _a === void 0 ? void 0 : _a.nome) || ((_b = i) === null || _b === void 0 ? void 0 : _b.base_nome) || '');
+    return i.localizacao_tipo === 'base' && /^cl[ií]nica|rede credenciada/i.test(nomeBase);
 }
 function tipoEstoqueLabelGlobal(i) {
     return isClinicaEstoqueGlobal(i) ? 'Clínica' : ((i === null || i === void 0 ? void 0 : i.localizacao_tipo) === 'base' ? 'Base' : 'Aplicador');
@@ -6273,6 +6277,13 @@ function EstoquePage() {
         });
         // Filtrar zeros após consolidação
         const consolidated = Object.values(map).filter(i => i.quantidade !== 0);
+        // Debug: log how many clinica records found
+        const clinicas = consolidated.filter(i => isClinicaEstoqueGlobal(i));
+        const basesNomes = [...new Set(consolidated.filter(i=>i.localizacao_tipo==='base').map(i=>i.bases?.nome||'(sem nome)'))];
+        if (clinicas.length === 0 && consolidated.length > 0) {
+            console.warn('[Estoque] 0 clínicas identificadas. Bases encontradas:', basesNomes.slice(0,10));
+            toast('Debug: ' + consolidated.length + ' registros carregados, bases: ' + basesNomes.slice(0,5).join(', '), 'info');
+        }
         setItems(consolidated);
     };
     useEffect(() => {
