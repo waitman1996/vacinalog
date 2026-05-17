@@ -6257,7 +6257,9 @@ function EstoquePage() {
         const { data, error } = await sb.from('estoque')
             .select('*, vacinas(nome, lote), bases(nome, cidade, uf), aplicadores(nome, cpf, cidade, uf)')
             .order('localizacao_tipo');
+        console.log('[ESTOQUE] data:', data?.length, 'error:', error?.message || null);
         if (error) {
+            console.error('[ESTOQUE ERROR]', error);
             toast(error.message, 'error');
             return;
         }
