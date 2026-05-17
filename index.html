@@ -2085,6 +2085,8 @@ function BasesPage() {
         </div>
         <button className="btn btn-primary" onClick={() => setModal(emptyForm)}>+ Nova Base</button>
       </div>
+      <EstoqueLocalidadeMap items={itemsFiltrados} />
+
       <div className="card">
         <div className="table-wrap">
           <table>
@@ -3109,10 +3111,32 @@ function ImportClinicas() {
   };
 
   const ensureClinica = async (row) => {
-    // O banco atual não possui a tabela public.clinicas.
-    // Por isso a importação de clínicas parceiras é feita diretamente no estoque,
-    // consolidando por vacina/produto e guardando o nome da clínica na observação da movimentação.
     return key(row.cnpj || row.clinica || 'clinica');
+  };
+
+  const nomeBaseClinica = (row) => `Clínica - ${String(row.clinica || 'Parceira').trim()}`;
+
+  const ensureBaseClinicaParceira = async (row) => {
+    const nome = nomeBaseClinica(row);
+    const { data: existentes, error: selErr } = await sb.from('bases')
+      .select('id,nome,cidade,uf')
+      .ilike('nome', nome)
+      .limit(1);
+    if (selErr) throw selErr;
+    if (existentes && existentes.length) {
+      await sb.from('bases').update({
+        cidade: row.cidade || existentes[0].cidade || 'Rede Credenciada',
+        uf: row.uf || existentes[0].uf || 'BR',
+        ativa: true
+      }).eq('id', existentes[0].id);
+      return existentes[0].id;
+    }
+    const { data: nova, error: insErr } = await sb.from('bases')
+      .insert({ nome, cidade: row.cidade || 'Rede Credenciada', uf: row.uf || 'BR', ativa: true })
+      .select('id')
+      .single();
+    if (insErr) throw insErr;
+    return nova.id;
   };
 
   const findVacina = async (nome) => {
@@ -3154,11 +3178,11 @@ function ImportClinicas() {
       }).select().single();
 
       const rows = preview.data.filter(r => r.valido);
-      const baseClinicasId = await ensureBaseClinicasParceiras();
       for (let i=0; i<rows.length; i++) {
         const r = rows[i];
         try {
           const clinicaKey = await ensureClinica(r);
+          const baseClinicasId = await ensureBaseClinicaParceira(r);
           const vacina = await findVacina(r.vacina);
 
           if (tab === 'saldo') {
@@ -3230,7 +3254,7 @@ function ImportClinicas() {
       <div className="card-header">
         <div>
           <div className="card-title">Importar Clínicas Parceiras</div>
-          <div className="page-subtitle">Rede Credenciada — saldos consolidados em base técnica de Rede Credenciada, sem usar enum clínicа</div>
+          <div className="page-subtitle">Rede Credenciada — cria uma base por clínica parceira e lança saldo como estoque de base</div>
         </div>
         <button className="btn btn-secondary btn-sm" type="button" onClick={baixarModeloClinicas}>⬇️ Baixar modelo</button>
       </div>
@@ -3692,6 +3716,9 @@ function TarefasPage({ profile }) {
   useEffect(() => { load(); }, [page, statusFilter, dataInicioFilter, dataFimFilter]);
 
   const isAdmin = profile?.role === 'admin';
+  const isClinicaEstoque = (i) => i.localizacao_tipo === 'base' && /clinica|clínica|rede credenciada/i.test(String(i.bases?.nome || ''));
+  const tipoEstoqueLabel = (i) => isClinicaEstoque(i) ? 'Clínica' : (i.localizacao_tipo === 'base' ? 'Base' : 'Aplicador');
+  const tipoEstoqueBadge = (i) => isClinicaEstoque(i) ? 'badge-cyan' : (i.localizacao_tipo === 'base' ? 'badge-blue' : 'badge-yellow');
 
   const updateStatusLogistica = async (tarefaId, novoStatus) => {
     if (!isAdmin) return;
@@ -6345,6 +6372,89 @@ function EscalasPage() {
 // ═══════════════════════════════════════════════
 // ESTOQUE
 // ═══════════════════════════════════════════════
+
+function EstoqueLocalidadeMap({ items }) {
+  const mapRef = useRef(null);
+  const boxRef = useRef(null);
+  const markersRef = useRef([]);
+
+  const resumo = React.useMemo(() => {
+    const m = {};
+    (items || []).forEach(i => {
+      const nomeBase = String(i.bases?.nome || '');
+      const isClinica = i.localizacao_tipo === 'base' && /clinica|clínica|rede credenciada/i.test(nomeBase);
+      const cidade = (i.localizacao_tipo === 'base' ? i.bases?.cidade : i.aplicadores?.cidade) || 'Sem cidade';
+      const uf = (i.localizacao_tipo === 'base' ? i.bases?.uf : i.aplicadores?.uf) || '';
+      const key = `${cidade}|${uf}`;
+      if (!m[key]) m[key] = { cidade, uf, base:0, aplicador:0, clinica:0, total:0, vacinas:{} };
+      const qtd = Number(i.quantidade || 0);
+      if (isClinica) m[key].clinica += qtd;
+      else if (i.localizacao_tipo === 'base') m[key].base += qtd;
+      else if (i.localizacao_tipo === 'aplicador') m[key].aplicador += qtd;
+      m[key].total += qtd;
+      const vac = i.vacinas?.nome || 'Vacina';
+      m[key].vacinas[vac] = (m[key].vacinas[vac] || 0) + qtd;
+    });
+    return Object.values(m).filter(x => x.total !== 0).sort((a,b)=>b.total-a.total);
+  }, [items]);
+
+  useEffect(() => {
+    if (!boxRef.current || !window.L) return;
+    if (!mapRef.current) {
+      mapRef.current = L.map(boxRef.current, { scrollWheelZoom:false }).setView([-14.235, -51.925], 4);
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '&copy; OpenStreetMap' }).addTo(mapRef.current);
+    }
+    const map = mapRef.current;
+    markersRef.current.forEach(m => map.removeLayer(m));
+    markersRef.current = [];
+    const cacheKey = 'vacinalog-geocode-localidades-v1';
+    const cache = JSON.parse(localStorage.getItem(cacheKey) || '{}');
+    const fallbackCoords = {
+      'sao paulo|sp': [-23.5505,-46.6333], 'rio de janeiro|rj': [-22.9068,-43.1729], 'belo horizonte|mg': [-19.9167,-43.9345],
+      'curitiba|pr': [-25.4284,-49.2733], 'porto alegre|rs': [-30.0346,-51.2177], 'florianopolis|sc': [-27.5949,-48.5482],
+      'salvador|ba': [-12.9777,-38.5016], 'recife|pe': [-8.0476,-34.8770], 'fortaleza|ce': [-3.7319,-38.5267],
+      'brasilia|df': [-15.7939,-47.8828], 'goiania|go': [-16.6869,-49.2648], 'campinas|sp': [-22.9056,-47.0608],
+      'marilia|sp': [-22.2171,-49.9501], 'ribeirao preto|sp': [-21.1775,-47.8103], 'sorocaba|sp': [-23.5015,-47.4526]
+    };
+    const normKey = (cidade, uf) => String(`${cidade}|${uf}`).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
+    const addMarker = (r, lat, lon) => {
+      const radius = Math.max(8, Math.min(34, Math.sqrt(Math.abs(r.total)) * 1.3));
+      const popup = `<strong>${r.cidade}/${r.uf || ''}</strong><br/>Total: ${r.total.toLocaleString('pt-BR')} doses<br/>Bases: ${r.base.toLocaleString('pt-BR')} · Aplicadores: ${r.aplicador.toLocaleString('pt-BR')} · Clínicas: ${r.clinica.toLocaleString('pt-BR')}<br/><br/>` + Object.entries(r.vacinas).slice(0,8).map(([v,q]) => `${v}: ${Number(q).toLocaleString('pt-BR')}`).join('<br/>');
+      const mk = L.circleMarker([lat, lon], { radius, weight:2, fillOpacity:.35 }).bindPopup(popup).addTo(map);
+      markersRef.current.push(mk);
+    };
+    resumo.forEach((r, idx) => {
+      const k = normKey(r.cidade, r.uf);
+      const cached = cache[k] || fallbackCoords[k];
+      if (cached) {
+        addMarker(r, cached[0], cached[1]);
+      } else if (r.cidade !== 'Sem cidade') {
+        setTimeout(async () => {
+          try {
+            const url = `https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(r.cidade + ' ' + (r.uf||'') + ' Brasil')}`;
+            const resp = await fetch(url);
+            const js = await resp.json();
+            if (js && js[0]) {
+              cache[k] = [Number(js[0].lat), Number(js[0].lon)];
+              localStorage.setItem(cacheKey, JSON.stringify(cache));
+              addMarker(r, cache[k][0], cache[k][1]);
+            }
+          } catch(e) {}
+        }, idx * 250);
+      }
+    });
+    setTimeout(() => map.invalidateSize(), 100);
+  }, [resumo]);
+
+  return (
+    <div className="card" style={{marginBottom:16}}>
+      <div className="card-header"><div className="card-title">🗺️ Mapa de estoque por localidade</div><div style={{fontSize:12,color:'var(--text-muted)'}}>{resumo.length} localidades</div></div>
+      <div ref={boxRef} style={{height:360,borderRadius:'var(--radius-sm)',overflow:'hidden',border:'1px solid var(--border)',background:'var(--bg-input)'}} />
+      <div style={{fontSize:11,color:'var(--text-muted)',marginTop:8}}>O mapa usa cidade/UF das bases, clínicas parceiras e aplicadores. Quando a cidade ainda não tem coordenada salva, ela é localizada automaticamente e fica em cache no navegador.</div>
+    </div>
+  );
+}
+
 function EstoquePage() {
   const [items, setItems] = useState([]);
   const [showEntrada, setShowEntrada] = useState(false);
@@ -6457,14 +6567,15 @@ function EstoquePage() {
   // Aplicar filtros
   const itemsFiltrados = items.filter(i => {
     if (filterVacina && i.vacinas?.nome !== filterVacina) return false;
-    if (filterTipo && i.localizacao_tipo !== filterTipo) return false;
+    if (filterTipo === 'clinica' && !isClinicaEstoque(i)) return false;
+    if (filterTipo && filterTipo !== 'clinica' && i.localizacao_tipo !== filterTipo) return false;
     return true;
   });
 
   const exportarEstoqueXLSX = (dados, filtroVacina, filtroTipo) => {
     const agora = new Date().toLocaleString('pt-BR');
     const rows = dados.map(i => ({
-      'Tipo': i.localizacao_tipo === 'base' ? 'Base' : 'Aplicador',
+      'Tipo': tipoEstoqueLabel(i),
       'Localização': i.localizacao_tipo === 'base' ? (i.bases?.nome || '—') : (i.aplicadores?.nome || '—'),
       'CPF': i.aplicadores?.cpf || '—',
       'Cidade': i.localizacao_tipo === 'base' ? (i.bases?.cidade || '—') : (i.aplicadores?.cidade || '—'),
@@ -6475,7 +6586,8 @@ function EstoquePage() {
     }));
 
     // Totais por tipo
-    const totalBase = dados.filter(i=>i.localizacao_tipo==='base').reduce((s,i)=>s+i.quantidade,0);
+    const totalClin = dados.filter(i=>isClinicaEstoque(i)).reduce((s,i)=>s+i.quantidade,0);
+    const totalBase = dados.filter(i=>i.localizacao_tipo==='base' && !isClinicaEstoque(i)).reduce((s,i)=>s+i.quantidade,0);
     const totalAp = dados.filter(i=>i.localizacao_tipo==='aplicador').reduce((s,i)=>s+i.quantidade,0);
 
     const wb = XLSX.utils.book_new();
@@ -6498,7 +6610,8 @@ function EstoquePage() {
       ['RESUMO', ''],
       ['Doses em Bases:', totalBase],
       ['Doses com Aplicadores:', totalAp],
-      ['Total Geral:', totalBase + totalAp],
+      ['Doses em Clínicas:', totalClin],
+      ['Total Geral:', totalBase + totalAp + totalClin],
       ['Registros:', dados.length],
     ];
     const wsResumo = XLSX.utils.aoa_to_sheet(resumo);
@@ -6531,7 +6644,8 @@ function EstoquePage() {
     setConciliando(null); setConciliacaoVal('');
   };
 
-  const totalBases = itemsFiltrados.filter(i => i.localizacao_tipo === 'base').reduce((s, i) => s + i.quantidade, 0);
+  const totalClinicas = itemsFiltrados.filter(i => isClinicaEstoque(i)).reduce((s, i) => s + i.quantidade, 0);
+  const totalBases = itemsFiltrados.filter(i => i.localizacao_tipo === 'base' && !isClinicaEstoque(i)).reduce((s, i) => s + i.quantidade, 0);
   const totalAp = itemsFiltrados.filter(i => i.localizacao_tipo === 'aplicador').reduce((s, i) => s + i.quantidade, 0);
 
   return (
@@ -6554,6 +6668,11 @@ function EstoquePage() {
           <div className="stat-icon" style={{background:'var(--accent-subtle)',color:'var(--accent)'}}>🏢</div>
           <div className="stat-value">{totalBases.toLocaleString('pt-BR')}</div>
           <div className="stat-label">Doses em Bases</div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-icon" style={{background:'var(--info-bg)',color:'var(--info)'}}>🏥</div>
+          <div className="stat-value">{totalClinicas.toLocaleString('pt-BR')}</div>
+          <div className="stat-label">Doses em Clínicas</div>
         </div>
         <div className="stat-card">
           <div className="stat-icon" style={{background:'var(--warning-bg)',color:'var(--warning)'}}>👤</div>
@@ -6595,6 +6714,7 @@ function EstoquePage() {
           <select className="form-select" style={{padding:'6px 10px',fontSize:13}} value={filterTipo} onChange={e=>setFilterTipo(e.target.value)}>
             <option value="">Todos</option>
             <option value="base">Base</option>
+            <option value="clinica">Clínica Parceira</option>
             <option value="aplicador">Aplicador</option>
           </select>
         </div>
@@ -6623,7 +6743,7 @@ function EstoquePage() {
               )}
               {itemsFiltrados.map(i => (
                 <tr key={i.id}>
-                  <td><span className={`badge ${i.localizacao_tipo==='base'?'badge-blue':'badge-yellow'}`}>{i.localizacao_tipo==='base'?'Base':'Aplicador'}</span></td>
+                  <td><span className={`badge ${tipoEstoqueBadge(i)}`}>{tipoEstoqueLabel(i)}</span></td>
                   <td style={{color:'var(--text-primary)',fontWeight:500}}>
                     {i.localizacao_tipo === 'base' ? i.bases?.nome : i.aplicadores?.nome}
                   </td>
@@ -7019,7 +7139,7 @@ function DemandaOfertaPage({ profile }) {
       const [escalas, tarefasFallback, estoque, vacinas, bases, aplicadores, planning] = await Promise.all([
         fetchAll('escalas', 'id,tarefa_id,codigo_tarefa,aplicador_id,tutor_nome,tutor_cpf,ponto_partida,doses_necessarias,doses_aplicadas,vacina_id,tipo_vacina,data_inicio,data_termino,semanas,status,base_id,base_nome'),
         fetchAll('tarefas', 'id,codigo,cliente,cidade_campanha,uf_campanha,data_inicio,doses_previstas,status,status_logistica,semanas,vacina_id,vacina,ponto_partida,base_id,base_nome'),
-        fetchAll('estoque', 'vacina_id,aplicador_id,base_id,localizacao_tipo,quantidade,aplicadores(id,nome,cpf,cidade,uf,base_vinculada_id),vacinas(id,nome)', q => q.eq('localizacao_tipo','aplicador')),
+        fetchAll('estoque', 'vacina_id,aplicador_id,base_id,localizacao_tipo,quantidade,aplicadores(id,nome,cpf,cidade,uf,base_vinculada_id),bases(id,nome,cidade,uf,ponto_partida),vacinas(id,nome)'),
         fetchAll('vacinas', 'id,nome'),
         fetchAll('bases', 'id,nome,cidade,uf,ponto_partida'),
         fetchAll('aplicadores', 'id,nome,cpf,cidade,uf,base_vinculada_id'),
@@ -7063,9 +7183,19 @@ function DemandaOfertaPage({ profile }) {
       };
       const resolveVacinaNome = (id, e={}, t={}) => vacinaMap[id] || normVacina(e.tipo_vacina || t.vacina) || 'Vacina';
 
+      const clinicSaldoMap = {};
+      const locKey = (cidade, uf, vacinaId) => `${norm(cidade)}|${String(uf || '').trim().toUpperCase()}|${vacinaId || ''}`;
+      (estoque || []).forEach(e => {
+        const nomeBase = String(e.bases?.nome || '');
+        const isClinica = e.localizacao_tipo === 'base' && /clinica|clínica|rede credenciada/i.test(nomeBase);
+        if (!isClinica || !e.vacina_id) return;
+        const k = locKey(e.bases?.cidade || '', e.bases?.uf || '', e.vacina_id);
+        clinicSaldoMap[k] = (clinicSaldoMap[k] || 0) + Number(e.quantidade || 0);
+      });
+
       const estoqueMap = {};
       (estoque || []).forEach(e => {
-        if (!e.aplicador_id || !e.vacina_id) return;
+        if (e.localizacao_tipo !== 'aplicador' || !e.aplicador_id || !e.vacina_id) return;
         const k = `${e.aplicador_id}|${e.vacina_id}`;
         if (!estoqueMap[k]) {
           const ap = e.aplicadores || apMap[e.aplicador_id] || {};
@@ -7298,7 +7428,8 @@ function DemandaOfertaPage({ profile }) {
       let rows = Object.values(grouped).map(i => {
         const saldo = Number(i.estoque_atual || 0) - Number(i.demanda_futura || 0);
         const necessidade = Math.max(0, Number(i.demanda_futura || 0) - Number(i.estoque_atual || 0));
-        return { ...i, saldo_projetado: saldo, necessidade, sugestao: necessidade > 0 ? `Enviar ${necessidade}` : 'Não enviar' };
+        const clinica_saldo = clinicSaldoMap[locKey(i.cidade || '', i.uf || '', i.vacina_id)] || 0;
+        return { ...i, saldo_clinica_localidade: clinica_saldo, saldo_projetado: saldo, necessidade, sugestao: necessidade > 0 ? `Enviar ${necessidade}` : 'Não enviar' };
       });
 
       // Sugestão profissional de transferência: dentro do mesmo ponto + vacina, procura aplicadores com sobra.
@@ -7486,6 +7617,7 @@ function DemandaOfertaPage({ profile }) {
   const vacinasLista = [...new Map(items.map(i => [i.vacina_id, i.vacina_nome]).filter(x=>x[0])).entries()].sort((a,b)=>String(a[1]).localeCompare(String(b[1])));
   const totalEnviar = filtered.reduce((s,i)=>s + Number(i.necessidade||0),0);
   const totalEstoque = filtered.reduce((s,i)=>s + Number(i.estoque_atual||0),0);
+  const totalClinicaLocalidade = filtered.reduce((s,i)=>s + Number(i.saldo_clinica_localidade||0),0);
   const totalDemanda = filtered.reduce((s,i)=>s + Number(i.demanda_futura||0),0);
   const semEnvio = filtered.filter(i => i.demanda_futura > 0 && i.necessidade <= 0).length;
   const range = weekRange(semana);
@@ -7504,6 +7636,7 @@ function DemandaOfertaPage({ profile }) {
         <div className="stat-card"><div className="stat-icon" style={{background:'var(--danger-bg)',color:'var(--danger)'}}>🚚</div><div className="stat-value">{totalEnviar.toLocaleString('pt-BR')}</div><div className="stat-label">Doses sugeridas p/ envio</div></div>
         <div className="stat-card"><div className="stat-icon" style={{background:'var(--success-bg)',color:'var(--success)'}}>✅</div><div className="stat-value">{semEnvio}</div><div className="stat-label">Aplicadores sem envio</div></div>
         <div className="stat-card"><div className="stat-icon" style={{background:'var(--accent-subtle)',color:'var(--accent)'}}>📦</div><div className="stat-value">{totalEstoque.toLocaleString('pt-BR')}</div><div className="stat-label">Estoque dos aplicadores</div></div>
+        <div className="stat-card"><div className="stat-icon" style={{background:'var(--info-bg)',color:'var(--info)'}}>🏥</div><div className="stat-value">{totalClinicaLocalidade.toLocaleString('pt-BR')}</div><div className="stat-label">Saldo clínica na localidade</div></div>
         <div className="stat-card"><div className="stat-icon" style={{background:'var(--warning-bg)',color:'var(--warning)'}}>📋</div><div className="stat-value">{totalDemanda.toLocaleString('pt-BR')}</div><div className="stat-label">Demanda futura</div></div>
       </div>
 
@@ -7522,11 +7655,11 @@ function DemandaOfertaPage({ profile }) {
         <div className="table-wrap">
           <table>
             <thead>
-              <tr><th>Aplicador</th><th>Ponto</th><th>Vacina</th><th>Estoque</th><th>Demanda</th><th>Saldo</th><th>Sugestão</th><th>Status</th><th>Ação ADM</th></tr>
+              <tr><th>Aplicador</th><th>Ponto</th><th>Vacina</th><th>Estoque Aplicador</th><th>Saldo Clínica</th><th>Demanda</th><th>Saldo</th><th>Sugestão</th><th>Status</th><th>Ação ADM</th></tr>
             </thead>
             <tbody>
-              {loading && <tr><td colSpan={9}><div className="empty-state"><div className="empty-text">Carregando...</div></div></td></tr>}
-              {!loading && filtered.length === 0 && <tr><td colSpan={9}><div className="empty-state"><div className="empty-text">Nenhum registro encontrado. Confira a semana, tire o filtro ou verifique se existem escalas/tarefas futuras importadas.</div></div></td></tr>}
+              {loading && <tr><td colSpan={10}><div className="empty-state"><div className="empty-text">Carregando...</div></div></td></tr>}
+              {!loading && filtered.length === 0 && <tr><td colSpan={10}><div className="empty-state"><div className="empty-text">Nenhum registro encontrado. Confira a semana, tire o filtro ou verifique se existem escalas/tarefas futuras importadas.</div></div></td></tr>}
               {!loading && filtered.slice(0,300).map(i => {
                 const st = statusPlanejamento(i);
                 return (
@@ -7535,6 +7668,7 @@ function DemandaOfertaPage({ profile }) {
                     <td>{i.ponto_partida || '—'}<div style={{fontSize:11,color:'var(--text-muted)'}}>Base: {i.base_origem_nome}</div></td>
                     <td>{i.vacina_nome}</td>
                     <td className="mono" style={{color:'var(--accent)',fontWeight:700}}>{Number(i.estoque_atual||0).toLocaleString('pt-BR')}</td>
+                    <td className="mono" style={{color:'var(--info)',fontWeight:700}}>{Number(i.saldo_clinica_localidade||0).toLocaleString('pt-BR')}<div style={{fontSize:10,color:'var(--text-muted)'}}>{i.cidade || '—'}/{i.uf || '—'}</div></td>
                     <td className="mono" style={{fontWeight:700}}>{Number(i.demanda_futura||0).toLocaleString('pt-BR')}<div style={{fontSize:10,color:'var(--text-muted)'}}>{i.tarefas.length} tarefa(s)</div></td>
                     <td className="mono" style={{fontWeight:700,color:i.saldo_projetado>=0?'var(--success)':'var(--danger)'}}>{i.saldo_projetado>=0?'+':''}{Number(i.saldo_projetado||0).toLocaleString('pt-BR')}</td>
                     <td><span className={`badge ${i.necessidade>0?'badge-yellow':'badge-green'}`}>{i.sugestao}</span></td>
