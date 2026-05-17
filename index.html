@@ -793,7 +793,7 @@ function Sidebar({ profile, currentPage, onNavigate, open, onClose, collapsed, o
         {!collapsed && (
           <div style={{fontSize:9,color:'var(--text-muted)',textAlign:'center',marginTop:6,padding:'4px 0',borderTop:'1px solid var(--border)',opacity:0.6}}>
             {'🕐 Atualizado em'}<br/>
-            <span style={{fontFamily:'JetBrains Mono',fontSize:9}}>{'15/05/2026 às 10:50'}</span>
+            <span style={{fontFamily:'JetBrains Mono',fontSize:9}}>{'17/05/2026 às 17:20'}</span>
           </div>
         )}
       </div>
@@ -4725,31 +4725,33 @@ function CriarRotaColeta({ onNavigate }) {
       // quando o estoque físico ficou sem aplicador_id por erro antigo de lançamento.
       if (aplicComEstoque.length === 0) {
         const { data: movs, error: movErr } = await sb.from('movimentacoes')
-          .select('id,tipo,quantidade,vacina_id,origem_tipo,origem_aplicador_id,destino_tipo,destino_aplicador_id,vacinas(nome,lote)')
+          .select('id,tipo,quantidade,vacina_id,origem_tipo,origem_id,origem_aplicador_id,destino_tipo,destino_id,destino_aplicador_id,vacinas(nome,lote)')
           .or('origem_tipo.eq.aplicador,destino_tipo.eq.aplicador');
 
         if (!movErr && movs?.length) {
           const saldo = {};
           (movs||[]).forEach(m => {
             const qtd = Number(m.quantidade || 0);
-            if (m.destino_tipo === 'aplicador' && m.destino_aplicador_id) {
-              const k = m.destino_aplicador_id + '|' + m.vacina_id;
+            const destApId = m.destino_aplicador_id || (m.destino_tipo === 'aplicador' ? m.destino_id : null);
+            const origApId = m.origem_aplicador_id || (m.origem_tipo === 'aplicador' ? m.origem_id : null);
+            if (String(m.destino_tipo || '').toLowerCase() === 'aplicador' && destApId) {
+              const k = destApId + '|' + m.vacina_id;
               if (!saldo[k]) saldo[k] = {
                 id: 'mov-' + k,
                 quantidade: 0,
                 vacina_id: m.vacina_id,
-                aplicador_id: m.destino_aplicador_id,
+                aplicador_id: destApId,
                 vacinas: m.vacinas || {}
               };
               saldo[k].quantidade += qtd;
             }
-            if (m.origem_tipo === 'aplicador' && m.origem_aplicador_id) {
-              const k = m.origem_aplicador_id + '|' + m.vacina_id;
+            if (String(m.origem_tipo || '').toLowerCase() === 'aplicador' && origApId) {
+              const k = origApId + '|' + m.vacina_id;
               if (!saldo[k]) saldo[k] = {
                 id: 'mov-' + k,
                 quantidade: 0,
                 vacina_id: m.vacina_id,
-                aplicador_id: m.origem_aplicador_id,
+                aplicador_id: origApId,
                 vacinas: m.vacinas || {}
               };
               saldo[k].quantidade -= qtd;
@@ -4762,6 +4764,41 @@ function CriarRotaColeta({ onNavigate }) {
             estMap[e.aplicador_id].push(e);
           });
 
+          aplicComEstoque = (aplic||[])
+            .filter(a => estMap[a.id] && estMap[a.id].length > 0)
+            .map(a => ({ ...a, itens: estMap[a.id], totalDoses: estMap[a.id].reduce((s,e)=>s+Number(e.quantidade||0),0) }));
+        }
+      }
+
+      // Plano C: banco antigo pode ter criado remessas com origem_id/destino_id,
+      // sem movimentações completas. Nesse caso, calcula entrega - coleta por remessa_itens.
+      if (aplicComEstoque.length === 0) {
+        const { data: remItens, error: remItensErr } = await sb.from('remessa_itens')
+          .select('id,quantidade,vacina_id,vacinas(nome,lote),remessas(tipo,status,origem_tipo,origem_id,origem_aplicador_id,destino_tipo,destino_id,destino_aplicador_id)');
+        if (!remItensErr && remItens?.length) {
+          const saldoRem = {};
+          const statusOk = ['concluida','concluido','entregue','finalizada','finalizado','em_transito','pronta','planejada'];
+          (remItens||[]).forEach(ri => {
+            const rem = ri.remessas || {};
+            const st = String(rem.status || '').toLowerCase();
+            if (st && !statusOk.includes(st)) return;
+            const qtd = Number(ri.quantidade || 0);
+            const destApId = rem.destino_aplicador_id || (rem.destino_tipo === 'aplicador' ? rem.destino_id : null);
+            const origApId = rem.origem_aplicador_id || (rem.origem_tipo === 'aplicador' ? rem.origem_id : null);
+            const add = (apId, delta) => {
+              if (!apId || !ri.vacina_id || !delta) return;
+              const k = apId + '|' + ri.vacina_id;
+              if (!saldoRem[k]) saldoRem[k] = { id:'rem-' + k, quantidade:0, vacina_id:ri.vacina_id, aplicador_id:apId, vacinas:ri.vacinas || {} };
+              saldoRem[k].quantidade += delta;
+            };
+            if (destApId) add(destApId, qtd); // entrega para aplicador
+            if (origApId) add(origApId, -qtd); // coleta/devolução saindo do aplicador
+          });
+          Object.values(saldoRem).forEach(e => {
+            if (Number(e.quantidade || 0) <= 0) return;
+            if (!estMap[e.aplicador_id]) estMap[e.aplicador_id] = [];
+            estMap[e.aplicador_id].push(e);
+          });
           aplicComEstoque = (aplic||[])
             .filter(a => estMap[a.id] && estMap[a.id].length > 0)
             .map(a => ({ ...a, itens: estMap[a.id], totalDoses: estMap[a.id].reduce((s,e)=>s+Number(e.quantidade||0),0) }));
