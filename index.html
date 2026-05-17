@@ -684,6 +684,7 @@ function Sidebar({ profile, currentPage, onNavigate, open, onClose, collapsed, o
       { id: 'montagem', icon: '📦', label: 'Fila de Montagem' },
       { id: 'etiquetas', icon: '🏷️', label: 'Etiquetas/Recibos' },
       { id: 'transferencia', icon: '↔️', label: 'Transferência' },
+      { id: 'recolhimento', icon: '↩️', label: 'Recolhimento' },
       { id: 'movimentacoes', icon: '📜', label: 'Movimentações' },
       { id: 'aumentos-doses', icon: '➕', label: 'Aumento de Doses' },
     );
@@ -4633,6 +4634,624 @@ function RelatorioExecutivoPage() {
                   ))}
                 </tbody>
               </table>
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+
+// ═══════════════════════════════════════════════
+// RECOLHIMENTO DE DOSES
+// ═══════════════════════════════════════════════
+function RecolhimentoPage({ onNavigate }) {
+  const [aba, setAba] = useState('criar'); // 'criar' | 'acompanhar' | 'inventario'
+  return (
+    <div>
+      <div className="page-header">
+        <div>
+          <div className="page-title">Recolhimento de Doses</div>
+          <div className="page-subtitle">Rotas de coleta · acompanhamento · inventário pós-campanha</div>
+        </div>
+      </div>
+      <div style={{display:'flex',gap:6,borderBottom:'2px solid var(--border)',marginBottom:20}}>
+        {[
+          { id:'criar', label:'📦 Criar Rota de Coleta' },
+          { id:'acompanhar', label:'🚚 Acompanhar Coletas' },
+          { id:'inventario', label:'📊 Inventário Pós-Campanha' },
+        ].map(t => (
+          <button key={t.id} className={`tab${aba===t.id?' active':''}`} onClick={()=>setAba(t.id)}>{t.label}</button>
+        ))}
+      </div>
+      {aba === 'criar'      && <CriarRotaColeta onNavigate={onNavigate} />}
+      {aba === 'acompanhar' && <AcompanharColetas />}
+      {aba === 'inventario' && <InventarioPosColeta />}
+    </div>
+  );
+}
+
+// ── ABA 1: Criar Rota de Coleta ─────────────────────────────────────────────
+function CriarRotaColeta({ onNavigate }) {
+  const [bases, setBases] = useState([]);
+  const [motoristas, setMotoristas] = useState([]);
+  const [veiculos, setVeiculos] = useState([]);
+  const [aplicadores, setAplicadores] = useState([]);
+  const [estoque, setEstoque] = useState([]); // estoque por aplicador
+  const [paradas, setParadas] = useState([]);
+  const [form, setForm] = useState({ base_id:'', motorista_id:'', veiculo_id:'', data:'' });
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const toast = useContext(ToastContext);
+
+  useEffect(() => {
+    const load = async () => {
+      const [
+        { data: b }, { data: m }, { data: v },
+        { data: aplic }, { data: est },
+      ] = await Promise.all([
+        sb.from('bases').select('id,nome,cidade,uf').order('nome'),
+        sb.from('profiles').select('id,nome').eq('role','motorista').order('nome'),
+        sb.from('veiculos').select('id,modelo,placa').order('modelo'),
+        sb.from('aplicadores').select('id,nome,cpf,cidade,uf').order('nome'),
+        sb.from('estoque').select('id,quantidade,vacina_id,aplicador_id,vacinas(nome,lote)').eq('localizacao_tipo','aplicador').gt('quantidade',0),
+      ]);
+      setBases(b||[]);
+      setMotoristas(m||[]);
+      setVeiculos(v||[]);
+      // Agrupa estoque por aplicador
+      const estMap = {};
+      (est||[]).forEach(e => {
+        if (!estMap[e.aplicador_id]) estMap[e.aplicador_id] = [];
+        estMap[e.aplicador_id].push(e);
+      });
+      // Só mostra aplicadores com estoque > 0
+      const aplicComEstoque = (aplic||[])
+        .filter(a => estMap[a.id] && estMap[a.id].length > 0)
+        .map(a => ({ ...a, itens: estMap[a.id], totalDoses: estMap[a.id].reduce((s,e)=>s+Number(e.quantidade||0),0) }));
+      setAplicadores(aplicComEstoque);
+      setEstoque(estMap);
+      setLoading(false);
+    };
+    load();
+  }, []);
+
+  const toggleParada = (aplic) => {
+    setParadas(prev => {
+      const exists = prev.find(p => p.id === aplic.id);
+      if (exists) return prev.filter(p => p.id !== aplic.id);
+      return [...prev, { ...aplic, itensColeta: aplic.itens.map(i => ({ ...i, qtdColeta: Number(i.quantidade||0) })) }];
+    });
+  };
+
+  const updateQtdColeta = (aplicId, estoqueId, qtd) => {
+    setParadas(prev => prev.map(p => p.id !== aplicId ? p : {
+      ...p,
+      itensColeta: p.itensColeta.map(i => i.id !== estoqueId ? i : { ...i, qtdColeta: Math.max(0, Math.min(Number(i.quantidade||0), Number(qtd)||0)) })
+    }));
+  };
+
+  const criarRota = async () => {
+    if (!form.base_id) { toast('Selecione a base de destino', 'error'); return; }
+    if (!form.motorista_id) { toast('Selecione o motorista', 'error'); return; }
+    if (paradas.length === 0) { toast('Adicione pelo menos uma parada', 'error'); return; }
+    if (!form.data) { toast('Informe a data prevista', 'error'); return; }
+    setSaving(true);
+    try {
+      const { data: userInfo } = await sb.auth.getUser();
+      const veiculo = veiculos.find(v => v.id === form.veiculo_id);
+
+      // 1. Criar rota de coleta
+      const { data: rota, error: re } = await sb.from('rotas').insert({
+        base_origem_id: form.base_id,
+        data_prevista: form.data,
+        tipo: 'coleta',
+        motorista_id: form.motorista_id,
+        veiculo_id: form.veiculo_id || null,
+        veiculo: veiculo ? `${veiculo.modelo} - ${veiculo.placa}` : null,
+        criado_por: userInfo?.user?.id,
+        codigo: '',
+        status: 'planejada',
+      }).select().single();
+      if (re) throw new Error(re.message);
+
+      // 2. Criar remessa por parada (origem: aplicador → destino: base)
+      for (let i = 0; i < paradas.length; i++) {
+        const p = paradas[i];
+        const totalQtd = p.itensColeta.reduce((s,it)=>s+Number(it.qtdColeta||0),0);
+        const obs = `Coleta de doses — Aplicador: ${p.nome} (CPF: ${p.cpf}) | ${p.itensColeta.filter(it=>it.qtdColeta>0).map(it=>`${it.vacinas?.nome}: ${it.qtdColeta}`).join(' | ')}`;
+        const { data: rem, error: remErr } = await sb.from('remessas').insert({
+          rota_id: rota.id,
+          tipo: 'coleta',
+          destino_tipo: 'base',
+          destino_base_id: form.base_id,
+          destino_aplicador_id: null,
+          // Origem é o aplicador (invertido vs entrega)
+          origem_tipo: 'aplicador',
+          origem_aplicador_id: p.id,
+          ordem_entrega: i + 1,
+          observacao: obs,
+          codigo_rastreio: '',
+          status: 'planejada',
+        }).select().single();
+        if (remErr) { console.error(remErr.message); continue; }
+
+        // 3. Criar itens da remessa
+        for (const it of p.itensColeta) {
+          if (Number(it.qtdColeta||0) <= 0) continue;
+          await sb.from('remessa_itens').insert({
+            remessa_id: rem.id,
+            vacina_id: it.vacina_id,
+            quantidade: Number(it.qtdColeta),
+          });
+        }
+      }
+
+      toast(`Rota de coleta ${rota.codigo||'criada'} com ${paradas.length} parada(s)!`, 'success');
+      setParadas([]);
+      setForm({ base_id:'', motorista_id:'', veiculo_id:'', data:'' });
+      if (onNavigate) onNavigate('rotas');
+    } catch(err) {
+      toast('Erro ao criar rota: ' + err.message, 'error');
+    }
+    setSaving(false);
+  };
+
+  const fmt = n => Number(n||0).toLocaleString('pt-BR');
+
+  if (loading) return <div className="card" style={{padding:32,textAlign:'center',color:'var(--text-muted)'}}>Carregando...</div>;
+
+  return (
+    <div style={{display:'grid',gridTemplateColumns:'1fr 340px',gap:16,alignItems:'start'}}>
+      {/* Painel esquerdo: lista de aplicadores */}
+      <div>
+        <div className="card" style={{marginBottom:12,padding:14}}>
+          <div style={{fontSize:13,fontWeight:700,marginBottom:10}}>
+            Aplicadores com doses em estoque ({aplicadores.length})
+          </div>
+          {aplicadores.length === 0 ? (
+            <div style={{padding:24,textAlign:'center',color:'var(--text-muted)',fontSize:13}}>
+              Nenhum aplicador com estoque positivo encontrado.
+            </div>
+          ) : (
+            <div style={{display:'flex',flexDirection:'column',gap:8}}>
+              {aplicadores.map(a => {
+                const sel = paradas.find(p => p.id === a.id);
+                return (
+                  <div key={a.id} style={{
+                    padding:'12px 14px',borderRadius:'var(--radius-sm)',
+                    border:`1px solid ${sel?'var(--accent)':'var(--border)'}`,
+                    background: sel ? 'rgba(59,130,246,0.06)' : 'var(--bg-input)',
+                    cursor:'pointer',
+                  }} onClick={() => toggleParada(a)}>
+                    <div style={{display:'flex',alignItems:'center',gap:10}}>
+                      <input type="checkbox" checked={!!sel} onChange={()=>toggleParada(a)} onClick={e=>e.stopPropagation()} />
+                      <div style={{flex:1}}>
+                        <div style={{fontWeight:700,fontSize:13}}>{a.nome}</div>
+                        <div style={{fontSize:11,color:'var(--text-muted)'}}>{a.cpf} · {a.cidade}/{a.uf}</div>
+                        <div style={{display:'flex',gap:6,flexWrap:'wrap',marginTop:4}}>
+                          {a.itens.map(it => (
+                            <span key={it.id} style={{fontSize:11,padding:'2px 8px',borderRadius:4,background:'var(--accent-subtle)',color:'var(--accent)',fontWeight:600}}>
+                              {it.vacinas?.nome}: {fmt(it.quantidade)}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                      <div style={{textAlign:'right',flexShrink:0}}>
+                        <div style={{fontSize:16,fontWeight:800,color:'var(--success)'}}>{fmt(a.totalDoses)}</div>
+                        <div style={{fontSize:10,color:'var(--text-muted)'}}>doses</div>
+                      </div>
+                    </div>
+                    {/* Qtd de coleta por vacina */}
+                    {sel && (
+                      <div style={{marginTop:10,paddingTop:10,borderTop:'1px solid var(--border)'}}>
+                        <div style={{fontSize:11,color:'var(--text-muted)',marginBottom:6,fontWeight:600}}>Quantidade a recolher:</div>
+                        {sel.itensColeta.map(it => (
+                          <div key={it.id} style={{display:'flex',alignItems:'center',gap:8,marginBottom:4}}>
+                            <span style={{fontSize:12,flex:1}}>{it.vacinas?.nome}</span>
+                            <span style={{fontSize:11,color:'var(--text-muted)'}}>máx {fmt(it.quantidade)}</span>
+                            <input
+                              type="number" min="0" max={it.quantidade}
+                              value={it.qtdColeta} className="form-input"
+                              style={{width:80,padding:'4px 8px',fontSize:12}}
+                              onClick={e=>e.stopPropagation()}
+                              onChange={e=>{ e.stopPropagation(); updateQtdColeta(a.id, it.id, e.target.value); }}
+                            />
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Painel direito: configuração da rota */}
+      <div style={{display:'flex',flexDirection:'column',gap:12}}>
+        <div className="card" style={{padding:14}}>
+          <div style={{fontSize:13,fontWeight:700,marginBottom:12}}>Configurar Rota de Coleta</div>
+          <div className="form-group">
+            <label className="form-label">Base de destino *</label>
+            <select className="form-select" value={form.base_id} onChange={e=>setForm(f=>({...f,base_id:e.target.value}))}>
+              <option value="">Selecione...</option>
+              {bases.map(b=><option key={b.id} value={b.id}>{b.nome} · {b.cidade}/{b.uf}</option>)}
+            </select>
+          </div>
+          <div className="form-group">
+            <label className="form-label">Data prevista *</label>
+            <input className="form-input" type="date" onClick={openDatePicker} onFocus={openDatePicker} value={form.data} onChange={e=>setForm(f=>({...f,data:e.target.value}))} />
+          </div>
+          <div className="form-group">
+            <label className="form-label">Motorista *</label>
+            <select className="form-select" value={form.motorista_id} onChange={e=>setForm(f=>({...f,motorista_id:e.target.value}))}>
+              <option value="">Selecione...</option>
+              {motoristas.map(m=><option key={m.id} value={m.id}>{m.nome}</option>)}
+            </select>
+          </div>
+          <div className="form-group">
+            <label className="form-label">Veículo</label>
+            <select className="form-select" value={form.veiculo_id} onChange={e=>setForm(f=>({...f,veiculo_id:e.target.value}))}>
+              <option value="">Sem veículo específico</option>
+              {veiculos.map(v=><option key={v.id} value={v.id}>{v.modelo} · {v.placa}</option>)}
+            </select>
+          </div>
+        </div>
+
+        {/* Resumo das paradas */}
+        <div className="card" style={{padding:14}}>
+          <div style={{fontSize:13,fontWeight:700,marginBottom:8}}>
+            Paradas selecionadas ({paradas.length})
+          </div>
+          {paradas.length === 0 ? (
+            <div style={{fontSize:12,color:'var(--text-muted)',padding:'12px 0'}}>Nenhuma parada selecionada.</div>
+          ) : (
+            <>
+              {paradas.map((p,i) => {
+                const total = p.itensColeta.reduce((s,it)=>s+Number(it.qtdColeta||0),0);
+                return (
+                  <div key={p.id} style={{display:'flex',gap:8,alignItems:'center',padding:'6px 0',borderBottom:'1px solid var(--border)'}}>
+                    <div style={{width:22,height:22,borderRadius:'50%',background:'var(--accent)',color:'#fff',display:'flex',alignItems:'center',justifyContent:'center',fontSize:11,fontWeight:700,flexShrink:0}}>{i+1}</div>
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{fontSize:12,fontWeight:600,overflow:'hidden',textOverflow:'ellipsis'}}>{p.nome}</div>
+                      <div style={{fontSize:10,color:'var(--text-muted)'}}>{p.cidade}/{p.uf}</div>
+                    </div>
+                    <div style={{fontSize:13,fontWeight:700,color:'var(--success)',flexShrink:0}}>{fmt(total)}</div>
+                  </div>
+                );
+              })}
+              <div style={{marginTop:8,paddingTop:8,borderTop:'2px solid var(--border)',display:'flex',justifyContent:'space-between',fontSize:13}}>
+                <span style={{fontWeight:700}}>Total a recolher</span>
+                <span style={{fontWeight:800,color:'var(--success)'}}>
+                  {fmt(paradas.reduce((s,p)=>s+p.itensColeta.reduce((ss,it)=>ss+Number(it.qtdColeta||0),0),0))} doses
+                </span>
+              </div>
+            </>
+          )}
+        </div>
+
+        <button className="btn btn-primary" onClick={criarRota} disabled={saving||paradas.length===0}>
+          {saving ? '⏳ Criando...' : '↩ Criar Rota de Coleta'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ── ABA 2: Acompanhar Coletas ───────────────────────────────────────────────
+function AcompanharColetas() {
+  const [rotas, setRotas] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [detalhe, setDetalhe] = useState(null);
+  const toast = useContext(ToastContext);
+
+  const load = async () => {
+    setLoading(true);
+    const { data, error } = await sb.from('rotas')
+      .select('id,codigo,status,data_prevista,veiculo,bases!rotas_base_origem_id_fkey(nome,cidade,uf),profiles!rotas_motorista_id_fkey(nome),remessas(id,status,ordem_entrega,observacao,origem_aplicador_id,remessa_itens(quantidade,vacinas(nome)))')
+      .eq('tipo', 'coleta')
+      .order('data_prevista', { ascending: false });
+    if (error) toast(error.message, 'error');
+    setRotas(data || []);
+    setLoading(false);
+  };
+
+  useEffect(() => { load(); }, []);
+
+  const confirmarColeta = async (remId, rotaId) => {
+    // Marca remessa como concluída e move estoque: aplicador → base
+    try {
+      const { data: rota } = await sb.from('rotas').select('base_origem_id,remessas(id,status,origem_aplicador_id,remessa_itens(quantidade,vacina_id))').eq('id', rotaId).single();
+      const rem = (rota?.remessas||[]).find(r => r.id === remId);
+      if (!rem) return;
+
+      // Mover estoque: debita aplicador, credita base
+      for (const it of rem.remessa_itens || []) {
+        const qtd = Number(it.quantidade||0);
+        if (qtd <= 0) continue;
+        // Debita estoque do aplicador
+        const { data: estAplic } = await sb.from('estoque').select('id,quantidade')
+          .eq('vacina_id', it.vacina_id).eq('aplicador_id', rem.origem_aplicador_id).eq('localizacao_tipo','aplicador').limit(1);
+        if (estAplic?.[0]) {
+          await sb.from('estoque').update({ quantidade: Math.max(0, Number(estAplic[0].quantidade) - qtd) }).eq('id', estAplic[0].id);
+        }
+        // Credita estoque da base
+        const { data: estBase } = await sb.from('estoque').select('id,quantidade')
+          .eq('vacina_id', it.vacina_id).eq('base_id', rota.base_origem_id).eq('localizacao_tipo','base').limit(1);
+        if (estBase?.[0]) {
+          await sb.from('estoque').update({ quantidade: Number(estBase[0].quantidade) + qtd }).eq('id', estBase[0].id);
+        } else {
+          await sb.from('estoque').insert({ vacina_id: it.vacina_id, base_id: rota.base_origem_id, localizacao_tipo:'base', quantidade: qtd });
+        }
+        // Movimentação
+        await sb.from('movimentacoes').insert({ tipo:'coleta', vacina_id: it.vacina_id, quantidade: qtd, origem_tipo:'aplicador', origem_id: rem.origem_aplicador_id, destino_tipo:'base', destino_id: rota.base_origem_id, remessa_id: remId, observacao: 'Recolhimento de doses' });
+      }
+      await sb.from('remessas').update({ status:'concluida' }).eq('id', remId);
+      // Se todas concluídas, fechar rota
+      const { data: allRem } = await sb.from('remessas').select('status').eq('rota_id', rotaId);
+      if ((allRem||[]).every(r => r.status === 'concluida')) {
+        await sb.from('rotas').update({ status:'concluida' }).eq('id', rotaId);
+      }
+      toast('Coleta confirmada! Estoque atualizado.', 'success');
+      load();
+    } catch(e) {
+      toast('Erro: ' + e.message, 'error');
+    }
+  };
+
+  const fmt = n => Number(n||0).toLocaleString('pt-BR');
+  const fmtDt = d => d ? new Date(d+'T12:00:00').toLocaleDateString('pt-BR') : '—';
+
+  if (loading) return <div className="card" style={{padding:32,textAlign:'center',color:'var(--text-muted)'}}>Carregando...</div>;
+  if (rotas.length === 0) return <div className="card" style={{padding:32,textAlign:'center',color:'var(--text-muted)'}}>Nenhuma rota de coleta encontrada.</div>;
+
+  return (
+    <div style={{display:'flex',flexDirection:'column',gap:12}}>
+      {rotas.map(r => {
+        const totalRem = r.remessas?.length || 0;
+        const concluidas = r.remessas?.filter(rm=>rm.status==='concluida').length || 0;
+        const isOpen = detalhe === r.id;
+        return (
+          <div key={r.id} className="card" style={{padding:14}}>
+            <div style={{display:'flex',alignItems:'center',gap:12,cursor:'pointer'}} onClick={()=>setDetalhe(isOpen?null:r.id)}>
+              <div style={{flex:1}}>
+                <div style={{display:'flex',gap:8,alignItems:'center',marginBottom:4}}>
+                  <span style={{fontFamily:'JetBrains Mono',fontSize:12,color:'var(--accent)',fontWeight:700}}>{r.codigo||'—'}</span>
+                  <span className={`badge ${ROTA_BADGE[r.status]||'badge-gray'}`}>{ROTA_ST[r.status]||r.status}</span>
+                  <span className="badge badge-cyan" style={{fontSize:10}}>↩ coleta</span>
+                </div>
+                <div style={{fontSize:12,color:'var(--text-muted)'}}>
+                  {fmtDt(r.data_prevista)} · {r.bases?.nome||'—'} · Motorista: {r.profiles?.nome||'—'}
+                </div>
+              </div>
+              <div style={{textAlign:'right',flexShrink:0}}>
+                <div style={{fontSize:13,fontWeight:700}}>{concluidas}/{totalRem} paradas</div>
+                <div style={{width:80,height:6,background:'var(--border)',borderRadius:3,marginTop:4,overflow:'hidden'}}>
+                  <div style={{height:'100%',width:(totalRem>0?concluidas/totalRem*100:0)+'%',background:'var(--success)',borderRadius:3}}></div>
+                </div>
+              </div>
+              <div style={{color:'var(--text-muted)',fontSize:16}}>{isOpen?'▲':'▼'}</div>
+            </div>
+
+            {isOpen && (
+              <div style={{marginTop:12,paddingTop:12,borderTop:'1px solid var(--border)'}}>
+                {(r.remessas||[]).sort((a,b)=>Number(a.ordem_entrega)-Number(b.ordem_entrega)).map(rem => {
+                  const doses = rem.remessa_itens?.reduce((s,it)=>s+Number(it.quantidade||0),0)||0;
+                  const isConcluida = rem.status === 'concluida';
+                  return (
+                    <div key={rem.id} style={{
+                      padding:'10px 12px',marginBottom:8,borderRadius:'var(--radius-sm)',
+                      border:`1px solid ${isConcluida?'rgba(16,185,129,0.35)':'var(--border)'}`,
+                      background: isConcluida ? 'rgba(16,185,129,0.04)' : 'var(--bg-input)',
+                      display:'flex',gap:12,alignItems:'center'
+                    }}>
+                      <div style={{width:24,height:24,borderRadius:'50%',background:isConcluida?'var(--success)':'var(--accent)',color:'#fff',display:'flex',alignItems:'center',justifyContent:'center',fontSize:11,fontWeight:700,flexShrink:0}}>{rem.ordem_entrega}</div>
+                      <div style={{flex:1,minWidth:0}}>
+                        <div style={{fontSize:12,color:'var(--text-muted)',overflow:'hidden',textOverflow:'ellipsis'}}>{(rem.observacao||'').split('|')[0].replace('Coleta de doses — Aplicador:','').trim()}</div>
+                        <div style={{display:'flex',gap:6,flexWrap:'wrap',marginTop:4}}>
+                          {(rem.remessa_itens||[]).map((it,i)=>(
+                            <span key={i} style={{fontSize:11,padding:'2px 7px',borderRadius:4,background:'var(--accent-subtle)',color:'var(--accent)',fontWeight:600}}>
+                              {it.vacinas?.nome}: {fmt(it.quantidade)}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                      <div style={{flexShrink:0}}>
+                        {isConcluida
+                          ? <span className="badge badge-green">✓ Coletado</span>
+                          : <button className="btn btn-success btn-sm" onClick={()=>confirmarColeta(rem.id, r.id)}>✓ Confirmar Coleta</button>
+                        }
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ── ABA 3: Inventário Pós-Campanha ──────────────────────────────────────────
+function InventarioPosColeta() {
+  const [loading, setLoading] = useState(true);
+  const [dados, setDados] = useState(null);
+  const [periodoFim, setPeriodoFim] = useState('');
+  const toast = useContext(ToastContext);
+
+  const calcular = async () => {
+    setLoading(true);
+    setDados(null);
+    try {
+      // Busca remessas de ENTREGA concluídas (o que saiu)
+      let qEntrega = sb.from('remessas').select('id,status,destino_aplicador_id,remessa_itens(quantidade,vacinas(nome,lote),vacina_id),aplicadores!remessas_destino_aplicador_id_fkey(nome,cpf,cidade,uf)').eq('tipo','entrega').eq('status','concluida');
+      const { data: entregues } = await qEntrega;
+
+      // Busca remessas de COLETA concluídas (o que voltou)
+      const { data: coletadas } = await sb.from('remessas').select('id,status,origem_aplicador_id,remessa_itens(quantidade,vacinas(nome),vacina_id),aplicadores!remessas_origem_aplicador_id_fkey(nome,cpf)').eq('tipo','coleta').eq('status','concluida');
+
+      // Busca estoque atual dos aplicadores
+      const { data: estAtual } = await sb.from('estoque').select('quantidade,vacina_id,aplicador_id,vacinas(nome),aplicadores(nome,cpf)').eq('localizacao_tipo','aplicador');
+
+      // Agrupa por aplicador
+      const apMap = {};
+      const addAp = (id, nome, cpf, cidade, uf) => {
+        if (!apMap[id]) apMap[id] = { id, nome: nome||'—', cpf: cpf||'—', cidade: cidade||'—', uf: uf||'—', enviado: {}, recolhido: {}, emMaos: {} };
+      };
+
+      (entregues||[]).forEach(rem => {
+        const aId = rem.destino_aplicador_id;
+        if (!aId) return;
+        const ap = rem.aplicadores;
+        addAp(aId, ap?.nome, ap?.cpf, ap?.cidade, ap?.uf);
+        (rem.remessa_itens||[]).forEach(it => {
+          const key = it.vacinas?.nome || '—';
+          apMap[aId].enviado[key] = (apMap[aId].enviado[key]||0) + Number(it.quantidade||0);
+        });
+      });
+
+      (coletadas||[]).forEach(rem => {
+        const aId = rem.origem_aplicador_id;
+        if (!aId) return;
+        const ap = rem.aplicadores;
+        addAp(aId, ap?.nome, ap?.cpf);
+        (rem.remessa_itens||[]).forEach(it => {
+          const key = it.vacinas?.nome || '—';
+          apMap[aId].recolhido[key] = (apMap[aId].recolhido[key]||0) + Number(it.quantidade||0);
+        });
+      });
+
+      (estAtual||[]).forEach(e => {
+        const aId = e.aplicador_id;
+        if (!aId) return;
+        addAp(aId, e.aplicadores?.nome, e.aplicadores?.cpf);
+        const key = e.vacinas?.nome || '—';
+        apMap[aId].emMaos[key] = (apMap[aId].emMaos[key]||0) + Number(e.quantidade||0);
+      });
+
+      // Calcular divergência por aplicador+vacina
+      const rows = [];
+      Object.values(apMap).forEach(ap => {
+        const vacinas = new Set([...Object.keys(ap.enviado), ...Object.keys(ap.recolhido), ...Object.keys(ap.emMaos)]);
+        vacinas.forEach(vac => {
+          const enviado = ap.enviado[vac]||0;
+          const recolhido = ap.recolhido[vac]||0;
+          const emMaos = ap.emMaos[vac]||0;
+          // Abatimentos estimados = enviado - recolhido - emMaos
+          const abatidoEstimado = Math.max(0, enviado - recolhido - emMaos);
+          const divergencia = enviado - recolhido - emMaos - abatidoEstimado;
+          if (enviado > 0 || recolhido > 0 || emMaos > 0) {
+            rows.push({ ...ap, vacina: vac, enviado, recolhido, emMaos, abatidoEstimado, divergencia });
+          }
+        });
+      });
+
+      rows.sort((a,b) => Math.abs(b.divergencia)-Math.abs(a.divergencia));
+
+      const totalEnviado = rows.reduce((s,r)=>s+r.enviado,0);
+      const totalRecolhido = rows.reduce((s,r)=>s+r.recolhido,0);
+      const totalEmMaos = rows.reduce((s,r)=>s+r.emMaos,0);
+      const totalAbatido = rows.reduce((s,r)=>s+r.abatidoEstimado,0);
+
+      setDados({ rows, totalEnviado, totalRecolhido, totalEmMaos, totalAbatido });
+    } catch(e) {
+      toast('Erro: ' + e.message, 'error');
+    }
+    setLoading(false);
+  };
+
+  useEffect(() => { calcular(); }, []);
+
+  const fmt = n => Number(n||0).toLocaleString('pt-BR');
+
+  const exportarXLSX = () => {
+    if (!dados) return;
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet([
+      ['Inventário Pós-Campanha — VacinaLog', '', '', new Date().toLocaleString('pt-BR')],
+      [],
+      ['Aplicador','CPF','Cidade/UF','Vacina','Enviado','Recolhido','Em mãos','Abatido estimado','Divergência'],
+      ...dados.rows.map(r=>[r.nome,r.cpf,`${r.cidade}/${r.uf}`,r.vacina,r.enviado,r.recolhido,r.emMaos,r.abatidoEstimado,r.divergencia]),
+      [],
+      ['TOTAIS','','','',dados.totalEnviado,dados.totalRecolhido,dados.totalEmMaos,dados.totalAbatido,''],
+    ]);
+    ws['!cols']=[{wch:28},{wch:16},{wch:14},{wch:22},{wch:10},{wch:12},{wch:10},{wch:18},{wch:14}];
+    XLSX.utils.book_append_sheet(wb, ws, 'Inventário');
+    XLSX.writeFile(wb, `inventario_recolhimento_${new Date().toISOString().slice(0,10)}.xlsx`);
+  };
+
+  return (
+    <div>
+      <div style={{display:'flex',gap:10,alignItems:'center',marginBottom:16,flexWrap:'wrap'}}>
+        <div style={{flex:1,fontSize:13,color:'var(--text-muted)'}}>
+          Reconciliação: doses enviadas vs. recolhidas vs. em mãos vs. abatidas. Divergência = o que não fecha.
+        </div>
+        <button className="btn btn-secondary btn-sm" onClick={calcular}>↻ Recalcular</button>
+        {dados && <button className="btn btn-secondary btn-sm" onClick={exportarXLSX}>⬇️ Exportar XLSX</button>}
+      </div>
+
+      {loading && <div className="card" style={{padding:32,textAlign:'center',color:'var(--text-muted)'}}>Calculando inventário...</div>}
+
+      {dados && !loading && (
+        <>
+          <div className="kpi-grid-compact" style={{marginBottom:16}}>
+            {[
+              { icon:'📤', val:fmt(dados.totalEnviado), label:'Doses Enviadas', color:'var(--accent)' },
+              { icon:'↩',  val:fmt(dados.totalRecolhido), label:'Recolhidas', color:'var(--success)' },
+              { icon:'👤', val:fmt(dados.totalEmMaos), label:'Ainda em mãos', color:'var(--warning)' },
+              { icon:'✅', val:fmt(dados.totalAbatido), label:'Abatidas (est.)', color:'var(--text-muted)' },
+            ].map(k => (
+              <div key={k.label} className="kpi-card-compact">
+                <div className="kpi-icon">{k.icon}</div>
+                <div className="kpi-value" style={{color:k.color,fontSize:20}}>{k.val}</div>
+                <div className="kpi-label">{k.label}</div>
+              </div>
+            ))}
+          </div>
+
+          <div className="card">
+            <div className="card-header">
+              <div className="card-title">Reconciliação por Aplicador e Vacina</div>
+              <div style={{fontSize:11,color:'var(--text-muted)'}}>Ordenado por magnitude da divergência</div>
+            </div>
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Aplicador</th><th>CPF</th><th>UF</th><th>Vacina</th>
+                    <th style={{textAlign:'right'}}>Enviado</th>
+                    <th style={{textAlign:'right'}}>Recolhido</th>
+                    <th style={{textAlign:'right'}}>Em mãos</th>
+                    <th style={{textAlign:'right'}}>Abatido</th>
+                    <th style={{textAlign:'right'}}>Divergência</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {dados.rows.map((r,i) => (
+                    <tr key={i} style={{background: Math.abs(r.divergencia)>0 ? 'rgba(245,158,11,0.04)' : 'transparent'}}>
+                      <td style={{fontWeight:600,fontSize:12}}>{r.nome}</td>
+                      <td className="mono" style={{fontSize:11}}>{r.cpf}</td>
+                      <td className="mono" style={{fontSize:11}}>{r.uf}</td>
+                      <td style={{fontSize:12,color:'var(--accent)',fontWeight:600}}>{r.vacina}</td>
+                      <td className="mono" style={{textAlign:'right'}}>{fmt(r.enviado)}</td>
+                      <td className="mono" style={{textAlign:'right',color:'var(--success)'}}>{fmt(r.recolhido)}</td>
+                      <td className="mono" style={{textAlign:'right',color:r.emMaos>0?'var(--warning)':'inherit'}}>{fmt(r.emMaos)}</td>
+                      <td className="mono" style={{textAlign:'right',color:'var(--text-muted)'}}>{fmt(r.abatidoEstimado)}</td>
+                      <td className="mono" style={{textAlign:'right',fontWeight:Math.abs(r.divergencia)>0?700:400,color:r.divergencia<0?'var(--danger)':r.divergencia>0?'var(--warning)':'var(--success)'}}>
+                        {r.divergencia===0 ? '✓ 0' : (r.divergencia>0?'+':'')+fmt(r.divergencia)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div style={{marginTop:10,padding:'10px 14px',background:'var(--bg-input)',borderRadius:'var(--radius-sm)',fontSize:11,color:'var(--text-muted)'}}>
+              <strong>Como ler:</strong> Enviado = doses entregues ao aplicador (remessas concluídas). Recolhido = doses que voltaram via rota de coleta. Em mãos = estoque atual do aplicador. Abatido = estimativa de doses aplicadas (Enviado − Recolhido − Em mãos). <strong>Divergência ≠ 0</strong> = algo não fecha: positivo = mais doses do que esperado; negativo = doses sem destino rastreado.
             </div>
           </div>
         </>
@@ -10334,6 +10953,7 @@ function MotoristaPage() {
                 <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:10}}>
                   <div style={{fontSize:17,fontWeight:700,color:'var(--accent)',fontFamily:'JetBrains Mono'}}>{r.codigo}</div>
                   <span className={`badge ${SB[r.status]||'badge-gray'}`}>{ST[r.status]||r.status}</span>
+                  {r.tipo === 'coleta' && <span className="badge badge-cyan" style={{fontSize:10,marginLeft:4}}>↩ coleta</span>}
                 </div>
                 <div style={{fontSize:13,color:'var(--text-secondary)',display:'flex',flexDirection:'column',gap:4}}>
                   <div>📅 {r.data_prevista ? new Date(r.data_prevista+'T12:00:00').toLocaleDateString('pt-BR') : '—'}</div>
@@ -12875,6 +13495,7 @@ function App() {
       case 'rotas': return <RotasPage />;
       case 'veiculos': return <VeiculosPage />;
       case 'transferencia': return <TransferenciaPage />;
+      case 'recolhimento': return <RecolhimentoPage onNavigate={(p)=>setCurrentPage(p)} />;
       case 'montagem': return <MontagemPage />;
       case 'etiquetas': return <EtiquetasPage />;
       case 'minhas-rotas': return <MotoristaPage />;
