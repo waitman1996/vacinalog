@@ -751,8 +751,7 @@ async function calcularAlertas(profile) {
     try {
         // ── 1. Estoque zerado ou negativo ──────────────────────────────────
         const { data: estoqueRows } = await sb.from('estoque')
-            .select('quantidade,vacina_id,localizacao_tipo,vacinas(nome),bases(nome),aplicadores(nome)')
-            .neq('localizacao_tipo', 'clinica');
+            .select('quantidade,vacina_id,localizacao_tipo,vacinas(nome),bases(nome),aplicadores(nome)');
         (estoqueRows || []).forEach(e => {
             var _a, _b, _c, _d;
             const qtd = Number(e.quantidade || 0);
@@ -6278,14 +6277,9 @@ function EstoquePage() {
         // Filtrar zeros após consolidação
         const consolidated = Object.values(map).filter(i => i.quantidade !== 0);
         // Debug: log how many clinica records found
-        const clinicas = consolidated.filter(i => isClinicaEstoqueGlobal(i));
-        const basesNomes = [...new Set(consolidated.filter(i=>i.localizacao_tipo==='base').map(i=>i.bases?.nome||'(sem nome)'))];
-        const basesNomesAll = [...new Set(consolidated.map(i=>i.bases?.nome||'(null)'))].sort();
-        console.log('[Estoque] Todas as bases:', basesNomesAll);
-        console.log('[Estoque] Clinicas identificadas:', clinicas.length);
-        if (clinicas.length === 0 && consolidated.length > 0) {
-            toast('Bases no banco (' + basesNomesAll.length + '): ' + basesNomesAll.join(' | '), 'info');
-        }
+
+
+
         setItems(consolidated);
     };
     useEffect(() => {
