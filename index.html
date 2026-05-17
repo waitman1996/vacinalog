@@ -3109,19 +3109,10 @@ function ImportClinicas() {
   };
 
   const ensureClinica = async (row) => {
-    let query = sb.from('clinicas').select('id,nome,cnpj').limit(1);
-    if (row.cnpj) query = query.eq('cnpj', row.cnpj);
-    else query = query.ilike('nome', row.clinica);
-    const { data, error } = await query;
-    if (error) throw error;
-    if (data && data.length) {
-      const id = data[0].id;
-      await sb.from('clinicas').update({ nome: row.clinica, cidade: row.cidade || null, uf: row.uf || null, endereco: row.endereco || null, status: 'ativa' }).eq('id', id);
-      return id;
-    }
-    const { data: inserted, error: insErr } = await sb.from('clinicas').insert({ nome: row.clinica, cnpj: row.cnpj || null, cidade: row.cidade || null, uf: row.uf || null, endereco: row.endereco || null, status: 'ativa' }).select('id').single();
-    if (insErr) throw insErr;
-    return inserted.id;
+    // O banco atual não possui a tabela public.clinicas.
+    // Por isso a importação de clínicas parceiras é feita diretamente no estoque,
+    // consolidando por vacina/produto e guardando o nome da clínica na observação da movimentação.
+    return key(row.cnpj || row.clinica || 'clinica');
   };
 
   const findVacina = async (nome) => {
@@ -3149,14 +3140,13 @@ function ImportClinicas() {
       for (let i=0; i<rows.length; i++) {
         const r = rows[i];
         try {
-          const clinicaId = await ensureClinica(r);
+          const clinicaKey = await ensureClinica(r);
           const vacina = await findVacina(r.vacina);
 
           if (tab === 'saldo') {
             const { data: existing, error: exErr } = await sb.from('estoque')
               .select('id,quantidade')
               .eq('localizacao_tipo','clinica')
-              .eq('clinica_id', clinicaId)
               .eq('vacina_id', vacina.id)
               .limit(1);
             if (exErr) throw exErr;
@@ -3166,7 +3156,7 @@ function ImportClinicas() {
               if (error) throw error;
               updated++;
             } else {
-              const { error } = await sb.from('estoque').insert({ vacina_id: vacina.id, localizacao_tipo: 'clinica', clinica_id: clinicaId, quantidade: r.quantidade });
+              const { error } = await sb.from('estoque').insert({ vacina_id: vacina.id, localizacao_tipo: 'clinica', quantidade: r.quantidade });
               if (error) throw error;
               imported++;
             }
@@ -3174,7 +3164,7 @@ function ImportClinicas() {
             const { data: estoques, error: estErr } = await sb.from('estoque')
               .select('id,quantidade,vacina_id,vacinas(nome,produto_nome)')
               .eq('localizacao_tipo','clinica')
-              .eq('clinica_id', clinicaId)
+              .eq('vacina_id', vacina.id)
               .gt('quantidade', 0);
             if (estErr) throw estErr;
             const produtoRef = String(vacina.produto_nome || vacina.nome || '').toLowerCase().trim();
@@ -3193,7 +3183,7 @@ function ImportClinicas() {
             }
             const { error: movErr } = await sb.from('movimentacoes').insert({
               tipo: 'aplicacao', vacina_id: ordenados[0]?.vacina_id || vacina.id, quantidade: r.quantidade,
-              origem_tipo: 'clinica', origem_clinica_id: clinicaId,
+              origem_tipo: 'clinica',
               observacao: `Rede Credenciada: ${r.quantidade} doses aplicadas | Clínica ${r.clinica} | Data ${r.data}${r.observacao ? ' | ' + r.observacao : ''}`,
               criado_por: userId,
             });
@@ -3219,7 +3209,7 @@ function ImportClinicas() {
       <div className="card-header">
         <div>
           <div className="card-title">Importar Clínicas Parceiras</div>
-          <div className="page-subtitle">Rede Credenciada — saldos e vacinados separados do In Company</div>
+          <div className="page-subtitle">Rede Credenciada — saldos consolidados por vacina/produto, sem depender da tabela clinicas</div>
         </div>
         <button className="btn btn-secondary btn-sm" type="button" onClick={baixarModeloClinicas}>⬇️ Baixar modelo</button>
       </div>
