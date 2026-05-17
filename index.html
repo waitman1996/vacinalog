@@ -4678,9 +4678,10 @@ function CriarRotaColeta({ onNavigate }) {
   const [motoristas, setMotoristas] = useState([]);
   const [veiculos, setVeiculos] = useState([]);
   const [aplicadores, setAplicadores] = useState([]);
-  const [estoque, setEstoque] = useState([]); // estoque por aplicador
+  const [estoque, setEstoque] = useState([]);
+  const [rotasEntrega, setRotasEntrega] = useState([]); // rotas de entrega ativas para vincular
   const [paradas, setParadas] = useState([]);
-  const [form, setForm] = useState({ base_id:'', motorista_id:'', veiculo_id:'', data:'' });
+  const [form, setForm] = useState({ base_id:'', motorista_id:'', veiculo_id:'', data:'', rota_entrega_id:'' });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const toast = useContext(ToastContext);
@@ -4689,15 +4690,17 @@ function CriarRotaColeta({ onNavigate }) {
     const load = async () => {
       const [
         { data: b }, { data: m }, { data: v },
-        { data: aplic }, { data: est },
+        { data: aplic }, { data: est }, { data: rotEnt },
       ] = await Promise.all([
         sb.from('bases').select('id,nome,cidade,uf').order('nome'),
         sb.from('profiles').select('id,nome').eq('role','motorista').order('nome'),
         sb.from('veiculos').select('id,modelo,placa').order('modelo'),
         sb.from('aplicadores').select('id,nome,cpf,cidade,uf').order('nome'),
         sb.from('estoque').select('id,quantidade,vacina_id,aplicador_id,vacinas(nome,lote)').eq('localizacao_tipo','aplicador').gt('quantidade',0),
+        sb.from('rotas').select('id,codigo,status,data_prevista,bases!rotas_base_origem_id_fkey(nome)').not('status','in','(concluida,cancelada)').eq('tipo','entrega').order('data_prevista',{ascending:false}),
       ]);
       setBases(b||[]);
+      setRotasEntrega(rotEnt||[]);
       setMotoristas(m||[]);
       setVeiculos(v||[]);
       // Agrupa estoque por aplicador
@@ -4753,6 +4756,7 @@ function CriarRotaColeta({ onNavigate }) {
         criado_por: userInfo?.user?.id,
         codigo: '',
         status: 'planejada',
+        rota_entrega_id: form.rota_entrega_id || null, // vínculo com rota de entrega
       }).select().single();
       if (re) throw new Error(re.message);
 
@@ -4899,6 +4903,20 @@ function CriarRotaColeta({ onNavigate }) {
               {veiculos.map(v=><option key={v.id} value={v.id}>{v.modelo} · {v.placa}</option>)}
             </select>
           </div>
+          <div className="form-group">
+            <label className="form-label">Vincular à rota de entrega</label>
+            <select className="form-select" value={form.rota_entrega_id} onChange={e=>setForm(f=>({...f,rota_entrega_id:e.target.value}))}>
+              <option value="">Sem vínculo (coleta avulsa)</option>
+              {rotasEntrega.map(r => (
+                <option key={r.id} value={r.id}>
+                  {r.codigo} — {r.bases?.nome||'?'} — {r.data_prevista ? new Date(r.data_prevista+'T12:00:00').toLocaleDateString('pt-BR') : '?'} [{r.status}]
+                </option>
+              ))}
+            </select>
+            <div style={{fontSize:10,color:'var(--text-muted)',marginTop:3}}>
+              Ao vincular, a coleta aparece no romaneio e recibo da rota de entrega.
+            </div>
+          </div>
         </div>
 
         {/* Resumo das paradas */}
@@ -4961,41 +4979,53 @@ function AcompanharColetas() {
 
   useEffect(() => { load(); }, []);
 
-  const confirmarColeta = async (remId, rotaId) => {
-    // Marca remessa como concluída e move estoque: aplicador → base
-    try {
-      const { data: rota } = await sb.from('rotas').select('base_origem_id,remessas(id,status,origem_aplicador_id,remessa_itens(quantidade,vacina_id))').eq('id', rotaId).single();
-      const rem = (rota?.remessas||[]).find(r => r.id === remId);
-      if (!rem) return;
+  const [conferirModal, setConferirModal] = useState(null); // { rem, rotaId, baseId }
 
-      // Mover estoque: debita aplicador, credita base
-      for (const it of rem.remessa_itens || []) {
-        const qtd = Number(it.quantidade||0);
-        if (qtd <= 0) continue;
-        // Debita estoque do aplicador
-        const { data: estAplic } = await sb.from('estoque').select('id,quantidade')
-          .eq('vacina_id', it.vacina_id).eq('aplicador_id', rem.origem_aplicador_id).eq('localizacao_tipo','aplicador').limit(1);
-        if (estAplic?.[0]) {
-          await sb.from('estoque').update({ quantidade: Math.max(0, Number(estAplic[0].quantidade) - qtd) }).eq('id', estAplic[0].id);
+  const concluirNaBase = async (remId, rotaId, baseId, itensConferidos, obsDanificados) => {
+    // Chamado pela base ao receber a caixa — transfere estoque e registra danificados
+    try {
+      for (const it of itensConferidos) {
+        if (it.qtdOk <= 0 && it.qtdDanificada <= 0) continue;
+
+        // Debita aplicador (total coletado = ok + danificadas)
+        const totalColetado = it.qtdOk + it.qtdDanificada;
+        const { data: estAp } = await sb.from('estoque').select('id,quantidade')
+          .eq('vacina_id', it.vacina_id).eq('aplicador_id', it.aplicador_id).eq('localizacao_tipo','aplicador').limit(1);
+        if (estAp?.[0]) {
+          await sb.from('estoque').update({ quantidade: Math.max(0, Number(estAp[0].quantidade) - totalColetado) }).eq('id', estAp[0].id);
         }
-        // Credita estoque da base
-        const { data: estBase } = await sb.from('estoque').select('id,quantidade')
-          .eq('vacina_id', it.vacina_id).eq('base_id', rota.base_origem_id).eq('localizacao_tipo','base').limit(1);
-        if (estBase?.[0]) {
-          await sb.from('estoque').update({ quantidade: Number(estBase[0].quantidade) + qtd }).eq('id', estBase[0].id);
-        } else {
-          await sb.from('estoque').insert({ vacina_id: it.vacina_id, base_id: rota.base_origem_id, localizacao_tipo:'base', quantidade: qtd });
+
+        // Credita base só as doses OK (danificadas não entram no estoque)
+        if (it.qtdOk > 0) {
+          const { data: estBase } = await sb.from('estoque').select('id,quantidade')
+            .eq('vacina_id', it.vacina_id).eq('base_id', baseId).eq('localizacao_tipo','base').limit(1);
+          if (estBase?.[0]) {
+            await sb.from('estoque').update({ quantidade: Number(estBase[0].quantidade) + it.qtdOk }).eq('id', estBase[0].id);
+          } else {
+            await sb.from('estoque').insert({ vacina_id: it.vacina_id, base_id: baseId, localizacao_tipo:'base', quantidade: it.qtdOk });
+          }
+          await sb.from('movimentacoes').insert({ tipo:'coleta', vacina_id: it.vacina_id, quantidade: it.qtdOk, origem_tipo:'aplicador', origem_id: it.aplicador_id, destino_tipo:'base', destino_id: baseId, remessa_id: remId, observacao: 'Conferência na base — doses OK' });
         }
-        // Movimentação
-        await sb.from('movimentacoes').insert({ tipo:'coleta', vacina_id: it.vacina_id, quantidade: qtd, origem_tipo:'aplicador', origem_id: rem.origem_aplicador_id, destino_tipo:'base', destino_id: rota.base_origem_id, remessa_id: remId, observacao: 'Recolhimento de doses' });
+
+        // Registra danificadas
+        if (it.qtdDanificada > 0) {
+          await sb.from('movimentacoes').insert({ tipo:'ajuste', vacina_id: it.vacina_id, quantidade: -it.qtdDanificada, origem_tipo:'base', origem_id: baseId, remessa_id: remId, observacao: 'Coleta — doses danificadas: ' + (obsDanificados||'sem observação') });
+        }
       }
-      await sb.from('remessas').update({ status:'concluida' }).eq('id', remId);
-      // Se todas concluídas, fechar rota
+
+      // Atualiza remessa com observação de conferência e conclui
+      const obsBase = '
+[CONFERENCIA_BASE ' + new Date().toLocaleString('pt-BR') + '] ' + (obsDanificados ? 'Danificadas: ' + obsDanificados : 'Sem danos registrados');
+      await sb.from('remessas').update({ status:'concluida', observacao: sb.rpc ? undefined : obsBase }).eq('id', remId);
+
+      // Se todas as remessas da rota de coleta estão concluídas → fecha a rota
       const { data: allRem } = await sb.from('remessas').select('status').eq('rota_id', rotaId);
       if ((allRem||[]).every(r => r.status === 'concluida')) {
         await sb.from('rotas').update({ status:'concluida' }).eq('id', rotaId);
       }
-      toast('Coleta confirmada! Estoque atualizado.', 'success');
+
+      toast('Conferência concluída! Estoque atualizado na base.', 'success');
+      setConferirModal(null);
       load();
     } catch(e) {
       toast('Erro: ' + e.message, 'error');
@@ -5004,6 +5034,118 @@ function AcompanharColetas() {
 
   const fmt = n => Number(n||0).toLocaleString('pt-BR');
   const fmtDt = d => d ? new Date(d+'T12:00:00').toLocaleDateString('pt-BR') : '—';
+
+  const imprimirReciboColeta = (rem, rota) => {
+    const ap = rem.aplicadores || {};
+    const base = rota.bases || {};
+    const esc = v => String(v??'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
+    const itens = rem.remessa_itens || [];
+    const totalDoses = itens.reduce((s,it)=>s+Number(it.quantidade||0),0);
+    const agora = new Date().toLocaleString('pt-BR');
+
+    const html = `<!DOCTYPE html><html><head><meta charset="UTF-8">
+<title>Recibo de Coleta — ${esc(rem.codigo_rastreio||'Coleta')}</title>
+<style>
+*{box-sizing:border-box}body{font-family:Arial,sans-serif;margin:0;padding:12mm;background:#fff;color:#000;font-size:11px}
+@page{size:A4;margin:10mm}@media print{body{padding:0}.no-print{display:none}}
+h1{font-size:15px;text-align:center;margin:0 0 12px;text-transform:uppercase}
+.header-box{border:2px solid #000;padding:8px;margin-bottom:10px;display:flex;justify-content:space-between;align-items:flex-start}
+.section{border:1px solid #000;padding:8px;margin-bottom:8px}
+.section-title{font-weight:700;font-size:10px;text-transform:uppercase;margin-bottom:6px;color:#555}
+table{width:100%;border-collapse:collapse;margin-top:6px}
+th,td{border:1px solid #000;padding:5px;font-size:10px}
+th{background:#e5e7eb;text-align:center;font-size:9px;text-transform:uppercase}
+.assinatura{border-top:1px solid #000;height:40px;margin-top:8px;padding-top:4px}
+.footer{font-size:8px;color:#666;text-align:center;margin-top:12px}
+.badge-coleta{background:#fef9c3;border:1px solid #ca8a04;padding:4px 10px;border-radius:4px;font-weight:700;color:#92400e;font-size:11px}
+.btn{padding:8px 14px;background:#2563eb;color:#fff;border:0;border-radius:4px;cursor:pointer;font-size:12px}
+.no-print{position:fixed;right:12px;top:12px}
+</style></head><body>
+<button class="btn no-print" onclick="window.print()">Imprimir / Salvar PDF</button>
+<div style="text-align:center;margin-bottom:8px">
+  <div style="font-size:13px;font-weight:700">S&amp;A IMUNIZAÇÕES LTDA</div>
+  <h1>Termo de Recolhimento e Devolução de Doses</h1>
+  <span class="badge-coleta">↩ COLETA DE DOSES</span>
+</div>
+
+<div class="header-box">
+  <div>
+    <div><strong>Rota de Coleta:</strong> ${esc(rota.codigo||'—')}</div>
+    <div><strong>Rota de Entrega vinculada:</strong> ${esc(rota.rota_entrega_id ? 'Sim' : 'Não')}</div>
+    <div><strong>Data:</strong> ${fmtDt(rota.data_prevista)}</div>
+    <div><strong>Motorista:</strong> ${esc(rota.profiles?.nome||'—')}</div>
+  </div>
+  <div style="text-align:right">
+    <div><strong>Base de destino:</strong> ${esc(base.nome||'—')}</div>
+    <div style="font-size:18px;font-weight:800;color:#b45309">Total: ${totalDoses} doses</div>
+  </div>
+</div>
+
+<div class="section">
+  <div class="section-title">Dados do Aplicador (origem das doses)</div>
+  <table>
+    <tr><th>Nome</th><th>CPF</th><th>Cidade/UF</th><th>Endereço</th></tr>
+    <tr>
+      <td style="font-weight:700">${esc(ap.nome||'—')}</td>
+      <td style="font-family:monospace">${esc(ap.cpf||'—')}</td>
+      <td>${esc([ap.cidade,ap.uf].filter(Boolean).join('/'))}</td>
+      <td>${esc(ap.endereco||'—')}</td>
+    </tr>
+  </table>
+</div>
+
+<div class="section">
+  <div class="section-title">Doses a recolher</div>
+  <table>
+    <tr><th style="width:40%">Vacina</th><th style="width:20%">Lote</th><th style="width:20%">Qtd. a Recolher</th><th style="width:20%">Qtd. Real Devolvida</th></tr>
+    ${itens.map(it=>`<tr>
+      <td>${esc(it.vacinas?.nome||'—')}</td>
+      <td style="font-family:monospace">${esc(it.vacinas?.lote||it.lote||'—')}</td>
+      <td style="text-align:center;font-weight:700">${it.quantidade}</td>
+      <td style="text-align:center">___________</td>
+    </tr>`).join('')}
+    <tr style="background:#fef9c3">
+      <td colspan="2" style="text-align:right;font-weight:700">TOTAL</td>
+      <td style="text-align:center;font-weight:800">${totalDoses}</td>
+      <td style="text-align:center">___________</td>
+    </tr>
+  </table>
+</div>
+
+<div class="section">
+  <div class="section-title">Declaração</div>
+  <p style="line-height:1.6">
+    Declaro que as doses acima foram <strong>devolvidas</strong> ao motorista <strong>${esc(rota.profiles?.nome||'—')}</strong>,
+    responsável pelo recolhimento em nome da <strong>S&amp;A Imunizações</strong>, para retorno à
+    <strong>${esc(base.nome||'Base')}</strong>. As doses estão em conformidade com as condições de
+    armazenamento e transporte exigidas pela cadeia de frio.
+  </p>
+</div>
+
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:12px">
+  <div>
+    <div style="font-weight:700;margin-bottom:4px;font-size:10px">APLICADOR / RESPONSÁVEL PELA ENTREGA</div>
+    <div>Nome: ___________________________________</div>
+    <div style="margin-top:6px">CPF: _______________________</div>
+    <div class="assinatura"><div style="font-size:9px;color:#666">Assinatura</div></div>
+  </div>
+  <div>
+    <div style="font-weight:700;margin-bottom:4px;font-size:10px">MOTORISTA / RESPONSÁVEL PELO RECEBIMENTO</div>
+    <div>Nome: ${esc(rota.profiles?.nome||'_______________________________')}</div>
+    <div style="margin-top:6px">Data/Hora: ___________________</div>
+    <div class="assinatura"><div style="font-size:9px;color:#666">Assinatura</div></div>
+  </div>
+</div>
+
+<div class="footer">Gerado pelo VacinaLog em ${agora} · S&amp;A Imunizações LTDA · Documento para uso interno</div>
+</body></html>`;
+
+    const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const win = window.open(url, '_blank');
+    if (win) { win.onload = () => { URL.revokeObjectURL(url); }; }
+    else { toast('Pop-up bloqueado. Permita pop-ups para imprimir.', 'error'); }
+  };
 
   if (loading) return <div className="card" style={{padding:32,textAlign:'center',color:'var(--text-muted)'}}>Carregando...</div>;
   if (rotas.length === 0) return <div className="card" style={{padding:32,textAlign:'center',color:'var(--text-muted)'}}>Nenhuma rota de coleta encontrada.</div>;
@@ -5041,6 +5183,7 @@ function AcompanharColetas() {
                 {(r.remessas||[]).sort((a,b)=>Number(a.ordem_entrega)-Number(b.ordem_entrega)).map(rem => {
                   const doses = rem.remessa_itens?.reduce((s,it)=>s+Number(it.quantidade||0),0)||0;
                   const isConcluida = rem.status === 'concluida';
+                        const isEmTransito = rem.status === 'em_transito';
                   return (
                     <div key={rem.id} style={{
                       padding:'10px 12px',marginBottom:8,borderRadius:'var(--radius-sm)',
@@ -5060,10 +5203,17 @@ function AcompanharColetas() {
                         </div>
                       </div>
                       <div style={{flexShrink:0}}>
-                        {isConcluida
-                          ? <span className="badge badge-green">✓ Coletado</span>
-                          : <button className="btn btn-success btn-sm" onClick={()=>confirmarColeta(rem.id, r.id)}>✓ Confirmar Coleta</button>
-                        }
+                        <div style={{display:'flex',gap:6,flexDirection:'column',alignItems:'flex-end'}}>
+                        {isConcluida && <span className="badge badge-green">✓ Conferido na base</span>}
+                        {rem.status === 'em_transito' && (
+                          <button className="btn btn-primary btn-sm" onClick={()=>{
+                            sb.from('rotas').select('base_origem_id').eq('id', r.id).single()
+                              .then(({data}) => setConferirModal({ rem, rotaId: r.id, baseId: data?.base_origem_id }));
+                          }}>🏢 Conferir na Base</button>
+                        )}
+                        {rem.status === 'planejada' && <span className="badge badge-gray">Aguardando coleta</span>}
+                        <button className="btn btn-secondary btn-sm" style={{fontSize:11}} onClick={()=>imprimirReciboColeta(rem, r)}>📋 Recibo</button>
+                      </div>
                       </div>
                     </div>
                   );
@@ -5073,7 +5223,164 @@ function AcompanharColetas() {
           </div>
         );
       })}
+    {conferirModal && (
+      <ConferirNaBaseModal
+        rem={conferirModal.rem}
+        rotaId={conferirModal.rotaId}
+        baseId={conferirModal.baseId}
+        onConfirm={concluirNaBase}
+        onClose={() => setConferirModal(null)}
+      />
+    )}
     </div>
+  );
+}
+
+// ── Modal de Conferência na Base ──
+function ConferirNaBaseModal({ rem, rotaId, baseId, onConfirm, onClose }) {
+  const [saving, setSaving] = React.useState(false);
+  const [obsDanificados, setObsDanificados] = React.useState('');
+  const aplicadorId = rem.origem_aplicador_id;
+  const ap = rem.aplicadores;
+
+  // Inicializa um estado por item com qtdOk e qtdDanificada
+  const [itens, setItens] = React.useState(() =>
+    (rem.remessa_itens||[]).map(it => ({
+      vacina_id: it.vacinas?.id || it.vacina_id,
+      vacina_nome: it.vacinas?.nome || '—',
+      lote: it.vacinas?.lote || '—',
+      qtdPrevista: Number(it.quantidade||0),
+      qtdColetada: Number(rem.qtd_devolvida||0) || Number(it.quantidade||0),
+      qtdOk: Number(rem.qtd_devolvida||0) || Number(it.quantidade||0),
+      qtdDanificada: 0,
+      aplicador_id: aplicadorId,
+    }))
+  );
+
+  const updateItem = (i, field, val) => {
+    setItens(prev => prev.map((it, idx) => {
+      if (idx !== i) return it;
+      const updated = { ...it, [field]: Math.max(0, Number(val)||0) };
+      // Garante que ok + danificada <= qtdColetada
+      if (field === 'qtdOk') updated.qtdOk = Math.min(updated.qtdOk, updated.qtdColetada);
+      if (field === 'qtdDanificada') updated.qtdDanificada = Math.min(updated.qtdDanificada, updated.qtdColetada);
+      return updated;
+    }));
+  };
+
+  const totalOk = itens.reduce((s,it)=>s+it.qtdOk,0);
+  const totalDanif = itens.reduce((s,it)=>s+it.qtdDanificada,0);
+  const totalColetado = itens.reduce((s,it)=>s+it.qtdColetada,0);
+  const fmt = n => Number(n||0).toLocaleString('pt-BR');
+
+  const handleConfirm = async () => {
+    setSaving(true);
+    await onConfirm(rem.id, rotaId, baseId, itens, obsDanificados);
+    setSaving(false);
+  };
+
+  return (
+    <Modal title="Conferência na Base — Recebimento de Coleta" onClose={onClose} large>
+      <div style={{display:'flex',flexDirection:'column',gap:16}}>
+
+        {/* Resumo do aplicador */}
+        <div style={{padding:'10px 14px',background:'var(--bg-input)',borderRadius:'var(--radius-sm)',border:'1px solid var(--border)'}}>
+          <div style={{fontSize:11,color:'var(--text-muted)',marginBottom:4}}>Aplicador que devolveu</div>
+          <div style={{fontWeight:700,fontSize:14}}>{ap?.nome||'—'}</div>
+          <div style={{fontSize:12,color:'var(--text-muted)'}}>{ap?.cpf} · {[ap?.cidade,ap?.uf].filter(Boolean).join('/')}</div>
+          {rem.qtd_devolvida != null && (
+            <div style={{marginTop:4,fontSize:12,color:'var(--accent)',fontWeight:600}}>
+              Motorista informou: {rem.qtd_devolvida} doses devolvidas
+            </div>
+          )}
+        </div>
+
+        {/* Tabela de conferência por vacina */}
+        <div>
+          <div style={{fontSize:12,fontWeight:700,color:'var(--text-secondary)',textTransform:'uppercase',letterSpacing:.5,marginBottom:8}}>
+            Conferir doses recebidas
+          </div>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Vacina</th>
+                  <th>Lote</th>
+                  <th style={{textAlign:'right'}}>Previstas</th>
+                  <th style={{textAlign:'right'}}>Motorista informou</th>
+                  <th style={{textAlign:'right',color:'var(--success)'}}>✓ Doses OK</th>
+                  <th style={{textAlign:'right',color:'var(--danger)'}}>⚠ Danificadas</th>
+                </tr>
+              </thead>
+              <tbody>
+                {itens.map((it,i) => (
+                  <tr key={i}>
+                    <td style={{fontWeight:600}}>{it.vacina_nome}</td>
+                    <td className="mono" style={{fontSize:11}}>{it.lote}</td>
+                    <td className="mono" style={{textAlign:'right'}}>{fmt(it.qtdPrevista)}</td>
+                    <td className="mono" style={{textAlign:'right',color:'var(--accent)',fontWeight:700}}>{fmt(it.qtdColetada)}</td>
+                    <td style={{textAlign:'right'}}>
+                      <input type="number" min="0" max={it.qtdColetada} className="form-input"
+                        style={{width:90,padding:'5px 8px',fontSize:13,textAlign:'right',borderColor:'rgba(16,185,129,0.5)'}}
+                        value={it.qtdOk}
+                        onChange={e=>updateItem(i,'qtdOk',e.target.value)} />
+                    </td>
+                    <td style={{textAlign:'right'}}>
+                      <input type="number" min="0" max={it.qtdColetada} className="form-input"
+                        style={{width:90,padding:'5px 8px',fontSize:13,textAlign:'right',borderColor:'rgba(239,68,68,0.5)'}}
+                        value={it.qtdDanificada}
+                        onChange={e=>updateItem(i,'qtdDanificada',e.target.value)} />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr style={{borderTop:'2px solid var(--border)'}}>
+                  <td colSpan={4} style={{fontWeight:700,textAlign:'right',padding:'8px 14px'}}>Total</td>
+                  <td className="mono" style={{textAlign:'right',fontWeight:800,color:'var(--success)',fontSize:16}}>{fmt(totalOk)}</td>
+                  <td className="mono" style={{textAlign:'right',fontWeight:800,color:totalDanif>0?'var(--danger)':'var(--text-muted)',fontSize:16}}>{fmt(totalDanif)}</td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+          {totalOk + totalDanif !== totalColetado && (
+            <div style={{marginTop:6,fontSize:11,color:'var(--warning)',fontWeight:600}}>
+              ⚠ OK + Danificadas ({totalOk+totalDanif}) ≠ informado pelo motorista ({totalColetado}). Verifique.
+            </div>
+          )}
+        </div>
+
+        {/* Observações sobre danificadas */}
+        {totalDanif > 0 && (
+          <div className="form-group">
+            <label className="form-label">Descrição das doses danificadas *</label>
+            <input className="form-input" value={obsDanificados} onChange={e=>setObsDanificados(e.target.value)}
+              placeholder="Ex: frascos quebrados, cadeia de frio comprometida..." />
+          </div>
+        )}
+
+        {/* Resumo */}
+        <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:8}}>
+          {[
+            {label:'Entrará no estoque da base', val:fmt(totalOk), color:'var(--success)'},
+            {label:'Será descartado (danificado)', val:fmt(totalDanif), color:totalDanif>0?'var(--danger)':'var(--text-muted)'},
+            {label:'Total conferido', val:fmt(totalOk+totalDanif), color:'var(--text-primary)'},
+          ].map(k=>(
+            <div key={k.label} style={{padding:'8px 12px',background:'var(--bg-input)',borderRadius:'var(--radius-sm)',border:'1px solid var(--border)',textAlign:'center'}}>
+              <div style={{fontSize:10,color:'var(--text-muted)',marginBottom:4}}>{k.label}</div>
+              <div style={{fontSize:20,fontWeight:800,color:k.color}}>{k.val}</div>
+            </div>
+          ))}
+        </div>
+
+        <div className="modal-actions">
+          <button className="btn btn-secondary" onClick={onClose} disabled={saving}>Cancelar</button>
+          <button className="btn btn-primary" onClick={handleConfirm} disabled={saving || (totalDanif>0 && !obsDanificados.trim())}>
+            {saving ? 'Registrando...' : '✓ Confirmar Recebimento na Base'}
+          </button>
+        </div>
+      </div>
+    </Modal>
   );
 }
 
@@ -7855,9 +8162,11 @@ function ModalDetalheRota({ rota, onClose, ROTA_ST, ROTA_BADGE }) {
   const [rotaData, setRotaData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [remessaDetalhe, setRemessaDetalhe] = useState(null);
-  const [tabDetalhe, setTabDetalhe] = useState('remessas'); // 'remessas' | 'tarefas'
+  const [tabDetalhe, setTabDetalhe] = useState('remessas'); // 'remessas' | 'tarefas' | 'coleta'
   const [tarefasRota, setTarefasRota] = useState([]);
   const [loadingTarefas, setLoadingTarefas] = useState(false);
+  const [rotaColeta, setRotaColeta] = useState(null);   // rota de coleta vinculada
+  const [loadingColeta, setLoadingColeta] = useState(false);
   const toast = useContext(ToastContext);
 
   useEffect(() => {
@@ -7872,11 +8181,27 @@ function ModalDetalheRota({ rota, onClose, ROTA_ST, ROTA_BADGE }) {
       d.remessas = (d.remessas || []).slice().sort((a, b) => Number(a.ordem_entrega||0) - Number(b.ordem_entrega||0));
       setRotaData(d);
       setLoading(false);
-      // Extrair códigos de tarefas das observações das remessas e buscar tarefas
       carregarTarefas(d.remessas || []);
+      carregarColeta(d.id);
     };
     load();
   }, [rota.id]);
+
+  const carregarColeta = async (rotaId) => {
+    setLoadingColeta(true);
+    try {
+      const { data: rc } = await sb.from('rotas')
+        .select('id,codigo,status,data_prevista,profiles!rotas_motorista_id_fkey(nome),remessas(id,codigo_rastreio,status,ordem_entrega,observacao,qtd_devolvida,origem_aplicador_id,remessa_itens(id,quantidade,vacinas(nome,lote)),aplicadores!remessas_origem_aplicador_id_fkey(nome,cpf,cidade,uf,endereco))')
+        .eq('rota_entrega_id', rotaId)
+        .eq('tipo', 'coleta')
+        .neq('status', 'cancelada')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      setRotaColeta(rc || null);
+    } catch(e) { console.warn('carregarColeta:', e.message); }
+    setLoadingColeta(false);
+  };
 
   const carregarTarefas = async (remessas) => {
     setLoadingTarefas(true);
@@ -7937,6 +8262,9 @@ function ModalDetalheRota({ rota, onClose, ROTA_ST, ROTA_BADGE }) {
             <button onClick={()=>setTabDetalhe('tarefas')} className={tabDetalhe==='tarefas'?'tab active':'tab'} style={{fontSize:13}}>
               📋 Tarefas {loadingTarefas ? '...' : `(${tarefasRota.length})`}
             </button>
+            <button onClick={()=>setTabDetalhe('coleta')} className={tabDetalhe==='coleta'?'tab active':'tab'} style={{fontSize:13}}>
+              ↩ Coleta vinculada {loadingColeta ? '...' : rotaColeta ? `(${rotaColeta.remessas?.length||0})` : '(—)'}
+            </button>
           </div>
 
           {/* Aba Remessas */}
@@ -7995,6 +8323,98 @@ function ModalDetalheRota({ rota, onClose, ROTA_ST, ROTA_BADGE }) {
               </div>
             )}
           </div>}
+
+          {/* Aba Coleta */}
+          {tabDetalhe === 'coleta' && (
+            <div>
+              {loadingColeta ? (
+                <div style={{padding:24,textAlign:'center',color:'var(--text-muted)'}}>Carregando coleta vinculada...</div>
+              ) : !rotaColeta ? (
+                <div style={{padding:24,textAlign:'center',background:'var(--bg-input)',borderRadius:'var(--radius-sm)',color:'var(--text-muted)'}}>
+                  <div style={{fontSize:24,marginBottom:8}}>↩</div>
+                  <div style={{fontSize:13,fontWeight:600}}>Nenhuma rota de coleta vinculada</div>
+                  <div style={{fontSize:11,marginTop:4}}>Crie uma rota de coleta e vincule a esta rota em Recolhimento → Criar Rota de Coleta.</div>
+                </div>
+              ) : (
+                <div>
+                  {/* Header da rota de coleta */}
+                  <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:8,marginBottom:12}}>
+                    {[
+                      ['Rota Coleta', rotaColeta.codigo||'—'],
+                      ['Status', <span key="s" className={`badge ${ROTA_BADGE[rotaColeta.status]||'badge-gray'}`}>{ROTA_ST[rotaColeta.status]||rotaColeta.status}</span>],
+                      ['Motorista', rotaColeta.profiles?.nome||'—'],
+                    ].map(([l,v])=>(
+                      <div key={l} style={{background:'var(--bg-input)',borderRadius:'var(--radius-sm)',padding:'8px 12px',border:'1px solid var(--border)'}}>
+                        <div style={{fontSize:10,color:'var(--text-muted)',fontWeight:700,textTransform:'uppercase',letterSpacing:.5,marginBottom:2}}>{l}</div>
+                        <div style={{fontSize:13,fontWeight:600}}>{v}</div>
+                      </div>
+                    ))}
+                  </div>
+                  {/* Lista de paradas de coleta */}
+                  <div style={{fontSize:12,fontWeight:700,color:'var(--text-secondary)',textTransform:'uppercase',letterSpacing:.5,marginBottom:8}}>
+                    Paradas de coleta ({rotaColeta.remessas?.length||0})
+                  </div>
+                  {(rotaColeta.remessas||[]).sort((a,b)=>Number(a.ordem_entrega)-Number(b.ordem_entrega)).map(rem => {
+                    const ap = rem.aplicadores;
+                    const isConcluida = rem.status === 'concluida';
+                    const doses = (rem.remessa_itens||[]).reduce((s,it)=>s+Number(it.quantidade||0),0);
+                    // Extrai assinatura da observação se houver
+                    const obs = rem.observacao||'';
+                    const temAssinatura = obs.includes('[ASSINATURA');
+                    const nomeAssinou = (() => {
+                      const m = obs.match(/Devolvido por: ([^([
+]+)/);
+                      return m ? m[1].trim() : (ap?.nome||'—');
+                    })();
+                    return (
+                      <div key={rem.id} style={{
+                        padding:'12px 14px',marginBottom:8,borderRadius:'var(--radius-sm)',
+                        border:`1px solid ${isConcluida?'rgba(16,185,129,0.35)':'rgba(245,158,11,0.3)'}`,
+                        background: isConcluida ? 'rgba(16,185,129,0.04)' : 'rgba(245,158,11,0.04)',
+                      }}>
+                        <div style={{display:'flex',gap:12,alignItems:'flex-start'}}>
+                          <div style={{width:28,height:28,borderRadius:'50%',background:isConcluida?'var(--success)':'var(--warning)',color:'#fff',display:'flex',alignItems:'center',justifyContent:'center',fontSize:12,fontWeight:700,flexShrink:0}}>{rem.ordem_entrega}</div>
+                          <div style={{flex:1}}>
+                            <div style={{fontWeight:700,fontSize:13}}>{ap?.nome||'—'}</div>
+                            <div style={{fontSize:11,color:'var(--text-muted)'}}>{ap?.cpf} · {[ap?.cidade,ap?.uf].filter(Boolean).join('/')}</div>
+                            {ap?.endereco && <div style={{fontSize:11,color:'var(--text-muted)'}}>📍 {ap.endereco}</div>}
+                            <div style={{display:'flex',gap:6,flexWrap:'wrap',marginTop:6}}>
+                              {(rem.remessa_itens||[]).map((it,i)=>(
+                                <span key={i} style={{fontSize:11,padding:'2px 8px',borderRadius:4,background:'rgba(245,158,11,0.1)',color:'#b45309',fontWeight:600}}>
+                                  {it.vacinas?.nome}: {it.quantidade}
+                                </span>
+                              ))}
+                            </div>
+                            {rem.qtd_devolvida != null && (
+                              <div style={{marginTop:4,fontSize:11,color:'var(--success)',fontWeight:700}}>
+                                ✓ Devolvido: {rem.qtd_devolvida} doses
+                              </div>
+                            )}
+                          </div>
+                          <div style={{flexShrink:0,display:'flex',flexDirection:'column',gap:4,alignItems:'flex-end'}}>
+                            <span className={`badge ${isConcluida?'badge-green':'badge-yellow'}`}>
+                              {isConcluida ? '✓ Coletado' : '⏳ Pendente'}
+                            </span>
+                            {isConcluida && temAssinatura && (
+                              <span style={{fontSize:10,color:'var(--success)'}}>✍ Assinado</span>
+                            )}
+                            <div style={{fontSize:10,color:'var(--text-muted)',fontWeight:600}}>
+                              {doses} doses previstas
+                            </div>
+                          </div>
+                        </div>
+                        {isConcluida && temAssinatura && (
+                          <div style={{marginTop:8,paddingTop:8,borderTop:'1px solid var(--border)',fontSize:11,color:'var(--text-muted)'}}>
+                            ✍ Assinado por: <strong>{nomeAssinou}</strong>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Aba Tarefas */}
           {tabDetalhe === 'tarefas' && (
@@ -8262,6 +8682,16 @@ function RotasListPage({ onOpenRoteirizacao }) {
 
       if (remessasError) throw remessasError;
 
+      // Buscar rota de coleta vinculada (se existir)
+      const { data: rotaColeta } = await sb.from('rotas')
+        .select('id,codigo,status,data_prevista,profiles!rotas_motorista_id_fkey(nome),remessas(id,ordem_entrega,status,observacao,origem_aplicador_id,remessa_itens(quantidade,vacinas(nome,lote)),aplicadores!remessas_origem_aplicador_id_fkey(nome,cpf,cidade,uf,endereco))')
+        .eq('rota_entrega_id', rota.id)
+        .eq('tipo', 'coleta')
+        .neq('status', 'cancelada')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
       const esc = (v) => String(v ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[ch]));
       const dataBr = (d) => d ? new Date(d + 'T12:00:00').toLocaleDateString('pt-BR') : new Date().toLocaleDateString('pt-BR');
       const parseDosesObs = (obs) => {
@@ -8338,6 +8768,45 @@ function RotasListPage({ onOpenRoteirizacao }) {
         '</tr></thead><tbody>',
         rowsHtml || '<tr><td colspan="11" style="text-align:center;padding:18px">Nenhuma parada/remessa encontrada para esta rota.</td></tr>',
         '</tbody></table>',
+        // Seção de coleta vinculada
+        ...(rotaColeta ? (() => {
+          const remColetas = (rotaColeta.remessas || []).sort((a,b)=>Number(a.ordem_entrega)-Number(b.ordem_entrega));
+          const totalColeta = remColetas.reduce((s,rem)=>{
+            return s + (rem.remessa_itens||[]).reduce((ss,it)=>ss+Number(it.quantidade||0),0);
+          },0);
+          const rowsColeta = remColetas.map((rem,idx) => {
+            const ap = rem.aplicadores;
+            const itens = rem.remessa_itens || [];
+            const doses = itens.reduce((s,it)=>s+Number(it.quantidade||0),0);
+            const labLote = itens.map(it=>`${esc(it.vacinas?.nome||'Vacina')}${it.vacinas?.lote?' / Lote '+esc(it.vacinas.lote):''}`).join('<br>') || '—';
+            const descricao = itens.map(it=>`${esc(it.quantidade||0)} doses — ${esc(it.vacinas?.nome||'Vacina')}`).join('<br>') || '—';
+            const endereco = [ap?.endereco||'',ap?.cidade||'',ap?.uf||''].filter(Boolean).join(' — ');
+            return ['<tr style="background:#fff8e1">',
+              '<td>'+ esc((ap?.nome||'Aplicador')+(ap?.cpf?' — CPF: '+ap.cpf:'')) +'</td>',
+              '<td>'+ esc(endereco) +'</td>',
+              '<td style="text-align:center">'+ esc(ap?.uf||'') +'</td>',
+              '<td style="text-align:center">Coleta '+ esc(rem.ordem_entrega||idx+1) +'</td>',
+              '<td style="text-align:center">'+ esc(itens.length||1) +'</td>',
+              '<td style="text-align:center;font-weight:700;color:#b45309">'+ esc(doses||'—') +'</td>',
+              '<td>'+ labLote +'</td>',
+              '<td style="text-align:center;font-weight:700;color:#b45309">↩ COLETA</td>',
+              '<td>'+ descricao +'</td>',
+              '<td></td><td></td></tr>'].join('');
+          }).join('');
+          return [
+            '<h2 style="font-size:13px;margin:14px 0 6px;text-transform:uppercase;border-top:2px solid #000;padding-top:8px">',
+            '↩ Recolhimento vinculado — Rota '+esc(rotaColeta.codigo||'')+'</h2>',
+            '<table class="rom"><thead><tr>',
+            '<th style="width:13%">Aplicador CPF</th><th style="width:15%">Endereço</th><th style="width:4%">UF</th>',
+            '<th style="width:6%">Coleta Nº</th><th style="width:4%">Itens</th><th style="width:5%">Doses</th>',
+            '<th style="width:16%">Vacina / Lote</th><th style="width:6%">Tipo</th>',
+            '<th style="width:16%">Descrição</th><th style="width:7%">Recebido</th><th style="width:8%">Ass.</th>',
+            '</tr></thead><tbody>',
+            rowsColeta || '<tr><td colspan="11" style="text-align:center;padding:10px">Sem paradas de coleta.</td></tr>',
+            '</tbody></table>',
+            '<div style="font-size:9px;margin:4px 0 0;color:#666">Total a recolher: <strong>'+totalColeta+' doses</strong></div>',
+          ];
+        })() : []),
         '<div class="footer"><div>Gerado automaticamente pelo VacinaLog em ' + esc(new Date().toLocaleString('pt-BR')) + '</div><div>' + esc(remessas.length) + ' paradas na ordem de entrega</div></div>',
         '</body></html>'
       ];
@@ -11205,6 +11674,174 @@ function EntregaDetalheModal({ remessa, rota, onClose }) {
 }
 
 // ── Modal de Assinatura Digital para Entrega ──
+// ── Modal de Assinatura de COLETA (aplicador assina a devolução) ──
+function AssinaturaColetaModal({ remessa, rota, onConfirm, onClose }) {
+  const canvasRef = React.useRef(null);
+  const [drawing, setDrawing] = React.useState(false);
+  const [hasSignature, setHasSignature] = React.useState(false);
+  const [nome, setNome] = React.useState('');
+  const [cpf, setCpf] = React.useState('');
+  const [saving, setSaving] = React.useState(false);
+  const totalPrevisto = (remessa.remessa_itens||[]).reduce((s,it)=>s+Number(it.quantidade||0),0);
+  const [qtdDevolvida, setQtdDevolvida] = React.useState(totalPrevisto);
+  const ap = remessa.aplicadores;
+
+  React.useEffect(() => {
+    setNome(ap?.nome || '');
+    setCpf(ap?.cpf || '');
+    setQtdDevolvida(totalPrevisto);
+  }, [remessa.id]);
+
+  React.useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    canvas.width = canvas.offsetWidth;
+    canvas.height = canvas.offsetHeight;
+    const ctx = canvas.getContext('2d');
+    ctx.strokeStyle = '#1e3a5f';
+    ctx.lineWidth = 2;
+    ctx.lineCap = 'round';
+
+    const pos = (e) => {
+      const r = canvas.getBoundingClientRect();
+      const t = e.touches?.[0] || e;
+      return { x: t.clientX - r.left, y: t.clientY - r.top };
+    };
+    const start = (e) => { e.preventDefault(); setDrawing(true); setHasSignature(true); const p = pos(e); ctx.beginPath(); ctx.moveTo(p.x, p.y); };
+    const move = (e) => { e.preventDefault(); if (!drawing) return; const p = pos(e); ctx.lineTo(p.x, p.y); ctx.stroke(); };
+    const end = (e) => { e.preventDefault(); setDrawing(false); };
+
+    canvas.addEventListener('mousedown', start);
+    canvas.addEventListener('mousemove', move);
+    canvas.addEventListener('mouseup', end);
+    canvas.addEventListener('touchstart', start, { passive: false });
+    canvas.addEventListener('touchmove', move, { passive: false });
+    canvas.addEventListener('touchend', end, { passive: false });
+    return () => {
+      canvas.removeEventListener('mousedown', start);
+      canvas.removeEventListener('mousemove', move);
+      canvas.removeEventListener('mouseup', end);
+      canvas.removeEventListener('touchstart', start);
+      canvas.removeEventListener('touchmove', move);
+      canvas.removeEventListener('touchend', end);
+    };
+  }, [drawing]);
+
+  const limpar = () => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
+    setHasSignature(false);
+  };
+
+  const confirmar = async () => {
+    if (!hasSignature) { alert('Por favor, assine no campo abaixo.'); return; }
+    if (!nome.trim()) { alert('Informe o nome do responsável.'); return; }
+    if (qtdDevolvida < 0) { alert('Quantidade deve ser 0 ou maior.'); return; }
+    setSaving(true);
+    const sigData = canvasRef.current.toDataURL('image/png');
+    const now = new Date();
+    const sigInfo = '\n[ASSINATURA ' + now.toLocaleTimeString('pt-BR') + '] Devolvido por: ' + nome.trim() +
+      (cpf.trim() ? ' (CPF: ' + cpf.trim() + ')' : '') +
+      ' Qtd: ' + qtdDevolvida +
+      ' [SIG_IMG:' + sigData + ':END_SIG]';
+
+    // GPS
+    let locStr = '';
+    try {
+      const pos = await new Promise((res, rej) => navigator.geolocation.getCurrentPosition(res, rej, { timeout: 5000 }));
+      locStr = '\n[ENTREGA_LOCAL:' + pos.coords.latitude.toFixed(6) + ',' + pos.coords.longitude.toFixed(6) + ':END_LOCAL]';
+    } catch(_) {}
+
+    await onConfirm(remessa.id, qtdDevolvida, sigInfo + locStr);
+    setSaving(false);
+  };
+
+  return (
+    <Modal title="Confirmar Coleta — Assinatura do Aplicador" onClose={onClose} large>
+      <div style={{display:'flex',flexDirection:'column',gap:14}}>
+        {/* Resumo */}
+        <div style={{background:'rgba(245,158,11,0.08)',border:'1px solid rgba(245,158,11,0.3)',borderRadius:'var(--radius-sm)',padding:'10px 14px'}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',flexWrap:'wrap',gap:8}}>
+            <div>
+              <div style={{fontSize:11,color:'var(--text-muted)'}}>Remessa coleta</div>
+              <div style={{fontFamily:'JetBrains Mono',fontSize:12,color:'var(--accent)',fontWeight:700}}>{remessa.codigo_rastreio||'—'}</div>
+            </div>
+            <div style={{textAlign:'right'}}>
+              <div style={{fontSize:11,color:'var(--text-muted)'}}>Doses previstas</div>
+              <div style={{fontSize:20,fontWeight:800,color:'#b45309'}}>{totalPrevisto}</div>
+            </div>
+          </div>
+          <div style={{marginTop:8,display:'flex',gap:6,flexWrap:'wrap'}}>
+            {(remessa.remessa_itens||[]).map((it,i)=>(
+              <span key={i} style={{fontSize:11,padding:'2px 8px',borderRadius:4,background:'rgba(245,158,11,0.15)',color:'#b45309',fontWeight:600}}>
+                {it.vacinas?.nome}: {it.quantidade}
+              </span>
+            ))}
+          </div>
+        </div>
+
+        {/* Dados do aplicador + qtd real */}
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
+          <div className="form-group">
+            <label className="form-label">Nome do Aplicador *</label>
+            <input className="form-input" value={nome} onChange={e=>setNome(e.target.value)} placeholder="Nome completo" />
+          </div>
+          <div className="form-group">
+            <label className="form-label">CPF</label>
+            <input className="form-input" value={cpf} onChange={e=>setCpf(e.target.value)} placeholder="000.000.000-00" />
+          </div>
+        </div>
+
+        {/* Qtd real devolvida — campo central do fluxo */}
+        <div style={{background:'var(--bg-input)',borderRadius:'var(--radius-sm)',padding:'12px 16px',border:'2px solid rgba(245,158,11,0.4)'}}>
+          <div style={{fontSize:12,fontWeight:700,color:'#b45309',marginBottom:8}}>Quantidade real devolvida</div>
+          <div style={{display:'flex',alignItems:'center',gap:12}}>
+            <input
+              type="number" min="0" max={totalPrevisto * 2}
+              className="form-input"
+              style={{width:120,fontSize:24,fontWeight:800,textAlign:'center',padding:'8px'}}
+              value={qtdDevolvida}
+              onChange={e=>setQtdDevolvida(Math.max(0, Number(e.target.value)||0))}
+            />
+            <div>
+              <div style={{fontSize:13,color:'var(--text-muted)'}}>doses</div>
+              {qtdDevolvida < totalPrevisto && (
+                <div style={{fontSize:11,color:'var(--warning)',fontWeight:600}}>
+                  ⚠ {totalPrevisto - qtdDevolvida} doses abaixo do previsto
+                </div>
+              )}
+              {qtdDevolvida === totalPrevisto && (
+                <div style={{fontSize:11,color:'var(--success)',fontWeight:600}}>✓ Valor esperado</div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Canvas de assinatura */}
+        <div className="form-group">
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:4}}>
+            <label className="form-label" style={{margin:0}}>Assinatura do aplicador *</label>
+            <button className="btn btn-secondary btn-sm" onClick={limpar}>Limpar</button>
+          </div>
+          <div style={{border:'2px solid var(--border)',borderRadius:'var(--radius-sm)',background:'#fff',overflow:'hidden',cursor:'crosshair'}}>
+            <canvas ref={canvasRef} style={{display:'block',width:'100%',height:130}} />
+          </div>
+          {!hasSignature && <div style={{fontSize:11,color:'var(--text-muted)',marginTop:4}}>Assine no campo acima</div>}
+        </div>
+
+        <div className="modal-actions">
+          <button className="btn btn-secondary" onClick={onClose} disabled={saving}>Cancelar</button>
+          <button className="btn btn-primary" onClick={confirmar} disabled={saving}>
+            {saving ? 'Registrando...' : '✓ Confirmar Coleta com Assinatura'}
+          </button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+
 function AssinaturaEntregaModal({ remessa, rota, onConfirm, onClose }) {
   const canvasRef = React.useRef(null);
   const [drawing, setDrawing] = React.useState(false);
@@ -11385,7 +12022,10 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
   const [checkoutModal, setCheckoutModal] = useState(false);
   const [checkinModal, setCheckinModal] = useState(false);
   const [assinaturaModal, setAssinaturaModal] = useState(null);
+  const [assinaturaColetaModal, setAssinaturaColetaModal] = useState(null); // para coleta
   const [entregaDetalhe, setEntregaDetalhe] = useState(null);
+  const [rotaColeta, setRotaColeta] = useState(null);   // rota de coleta vinculada
+  const [remessasColeta, setRemessasColeta] = useState([]);
   const [gpsAtivo, setGpsAtivo] = useState(false);
   const toast = useContext(ToastContext);
 
@@ -11404,6 +12044,15 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
     ]);
     setRemessas(remRes.data || []);
     if (rotaRes.data) setRota(rotaRes.data);
+    // Buscar rota de coleta vinculada (se existir)
+    const { data: rc } = await sb.from('rotas')
+      .select('id,codigo,status,remessas(id,codigo_rastreio,status,ordem_entrega,observacao,qtd_devolvida,origem_aplicador_id,remessa_itens(id,quantidade,vacinas(nome,lote)),aplicadores!remessas_origem_aplicador_id_fkey(nome,cpf,cidade,uf))')
+      .eq('rota_entrega_id', rota.id)
+      .eq('tipo','coleta')
+      .neq('status','cancelada')
+      .limit(1)
+      .maybeSingle();
+    if (rc) { setRotaColeta(rc); setRemessasColeta((rc.remessas||[]).sort((a,b)=>Number(a.ordem_entrega)-Number(b.ordem_entrega))); }
     setLoading(false);
   };
   useEffect(() => { load(); }, []);
@@ -11970,8 +12619,87 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
           onClose={() => setAssinaturaModal(null)}
         />
       )}
+      {assinaturaColetaModal && (
+        <AssinaturaColetaModal
+          remessa={assinaturaColetaModal}
+          rota={rotaColeta}
+          onConfirm={async (remId, qtdDevolvida, sigInfo) => {
+            setAssinaturaColetaModal(null);
+            // Motorista coletou — salva assinatura + qtd_devolvida
+            // Status fica 'em_transito' (em retorno à base) até a base confirmar o recebimento
+            const obsAtual = assinaturaColetaModal.observacao || '';
+            const { error: updErr } = await sb.from('remessas').update({
+              status: 'em_transito',
+              observacao: obsAtual + sigInfo,
+              qtd_devolvida: qtdDevolvida,
+            }).eq('id', remId);
+            if (updErr) { toast('Erro ao registrar coleta: ' + updErr.message, 'error'); return; }
+            toast('Coleta registrada! Aguardando conferência na base.', 'success');
+            load();
+          }}
+          onClose={() => setAssinaturaColetaModal(null)}
+        />
+      )}
 
       {/* Modal Check-out */}
+      {/* Seção de coleta vinculada */}
+      {remessasColeta.length > 0 && (
+        <div style={{marginTop:24}}>
+          <div style={{fontSize:12,fontWeight:700,color:'var(--text-muted)',textTransform:'uppercase',letterSpacing:1,marginBottom:8}}>
+            ↩ Coleta vinculada — {rotaColeta?.codigo}
+          </div>
+          <div style={{display:'flex',flexDirection:'column',gap:10}}>
+            {remessasColeta.map(rem => {
+              const ap = rem.aplicadores;
+              const doses = (rem.remessa_itens||[]).reduce((s,it)=>s+Number(it.quantidade||0),0);
+              const isConcluida = rem.status === 'concluida';
+              return (
+                <div key={rem.id} style={{
+                  padding:'14px 16px',borderRadius:'var(--radius)',
+                  border:`2px solid ${isConcluida?'rgba(16,185,129,0.4)':'rgba(245,158,11,0.5)'}`,
+                  background: isConcluida?'rgba(16,185,129,0.06)':'rgba(245,158,11,0.06)',
+                }}>
+                  <div style={{display:'flex',gap:10,alignItems:'flex-start'}}>
+                    <div style={{width:32,height:32,borderRadius:'50%',background:isConcluida?'var(--success)':'var(--warning)',color:'#fff',display:'flex',alignItems:'center',justifyContent:'center',fontSize:13,fontWeight:700,flexShrink:0}}>
+                      {rem.ordem_entrega}
+                    </div>
+                    <div style={{flex:1}}>
+                      <div style={{fontWeight:700,fontSize:14}}>{ap?.nome||'—'}</div>
+                      <div style={{fontSize:12,color:'var(--text-muted)'}}>{ap?.cpf} · {[ap?.cidade,ap?.uf].filter(Boolean).join('/')}</div>
+                      {ap?.endereco && <div style={{fontSize:11,color:'var(--text-muted)',marginTop:2}}>📍 {ap.endereco}</div>}
+                      <div style={{display:'flex',gap:6,flexWrap:'wrap',marginTop:6}}>
+                        {(rem.remessa_itens||[]).map((it,i)=>(
+                          <span key={i} style={{fontSize:12,padding:'3px 10px',borderRadius:4,background:'rgba(245,158,11,0.15)',color:'#b45309',fontWeight:700}}>
+                            {it.vacinas?.nome}: {it.quantidade}
+                          </span>
+                        ))}
+                      </div>
+                      {rem.qtd_devolvida != null && (
+                        <div style={{marginTop:6,fontSize:13,color:'var(--success)',fontWeight:700}}>
+                          ✓ Devolvidas: {rem.qtd_devolvida} doses
+                        </div>
+                      )}
+                    </div>
+                    <div style={{flexShrink:0,display:'flex',flexDirection:'column',gap:6,alignItems:'flex-end'}}>
+                      {isConcluida
+                        ? <span className="badge badge-green" style={{fontSize:12}}>✓ Coletado</span>
+                        : rem.status === 'em_transito'
+                          ? <span className="badge badge-blue" style={{fontSize:12}}>🚚 Em retorno à base</span>
+                          : <button className="btn btn-warning btn-sm" style={{whiteSpace:'nowrap'}}
+                              onClick={()=>setAssinaturaColetaModal(rem)}>
+                              ↩ Coletar + Assinar
+                            </button>
+                      }
+                      <div style={{fontSize:11,color:'var(--text-muted)'}}>{doses} doses previstas</div>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {checkoutModal && (
         <CheckoutModal
           rota={rota}
