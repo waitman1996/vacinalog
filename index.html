@@ -4700,7 +4700,7 @@ function CriarRotaColeta({ onNavigate }) {
         sb.from('profiles').select('id,nome').eq('role','motorista').order('nome'),
         sb.from('veiculos').select('id,modelo,placa').order('modelo'),
         sb.from('aplicadores').select('id,nome,cpf,cidade,uf,ponto_partida').order('nome'),
-        sb.from('estoque').select('id,quantidade,vacina_id,aplicador_id,vacinas(nome,lote)').eq('localizacao_tipo','aplicador').gt('quantidade',0),
+        sb.from('estoque').select('id,quantidade,vacina_id,aplicador_id,vacinas(nome,lote)').eq('localizacao_tipo','aplicador').gte('quantidade',1),
         sb.from('rotas').select('id,codigo,status,data_prevista,bases!rotas_base_origem_id_fkey(nome)').not('status','in','(concluida,cancelada)').eq('tipo','entrega').order('data_prevista',{ascending:false}),
       ]);
       setBases(b||[]);
@@ -4710,13 +4710,18 @@ function CriarRotaColeta({ onNavigate }) {
       // Agrupa estoque por aplicador
       const estMap = {};
       (est||[]).forEach(e => {
+        if (!e.aplicador_id) return; // ignora registros sem aplicador_id
         if (!estMap[e.aplicador_id]) estMap[e.aplicador_id] = [];
         estMap[e.aplicador_id].push(e);
       });
-      // Só mostra aplicadores com estoque > 0
+      // Mostra aplicadores com estoque > 0
+      // Fallback: se nenhum aplicador tiver estoque no mapa, mostra todos com estoque > 0 pelo campo quantidade
       const aplicComEstoque = (aplic||[])
         .filter(a => estMap[a.id] && estMap[a.id].length > 0)
         .map(a => ({ ...a, itens: estMap[a.id], totalDoses: estMap[a.id].reduce((s,e)=>s+Number(e.quantidade||0),0) }));
+      if (aplicComEstoque.length === 0 && (est||[]).length > 0) {
+        toast('Estoque carregado (' + (est||[]).length + ' registros) mas nenhum aplicador com id correspondente encontrado. Verifique a coluna aplicador_id na tabela estoque.', 'error');
+      }
       setAplicadores(aplicComEstoque);
       setEstoque(estMap);
       setLoading(false);
