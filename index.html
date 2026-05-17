@@ -4764,7 +4764,7 @@ function CriarRotaColeta({ onNavigate }) {
       for (let i = 0; i < paradas.length; i++) {
         const p = paradas[i];
         const totalQtd = p.itensColeta.reduce((s,it)=>s+Number(it.qtdColeta||0),0);
-        const obs = `Coleta de doses — Aplicador: ${p.nome} (CPF: ${p.cpf}) | ${p.itensColeta.filter(it=>it.qtdColeta>0).map(it=>`${it.vacinas?.nome}: ${it.qtdColeta}`).join(' | ')}`;
+        const obs = 'Coleta de doses — Aplicador: ' + p.nome + ' (CPF: ' + p.cpf + ') | ' + p.itensColeta.filter(it=>it.qtdColeta>0).map(it=>(it.vacinas?.nome||'') + ': ' + it.qtdColeta).join(' | ');
         const { data: rem, error: remErr } = await sb.from('remessas').insert({
           rota_id: rota.id,
           tipo: 'coleta',
@@ -5097,12 +5097,7 @@ th{background:#e5e7eb;text-align:center;font-size:9px;text-transform:uppercase}
   <div class="section-title">Doses a recolher</div>
   <table>
     <tr><th style="width:40%">Vacina</th><th style="width:20%">Lote</th><th style="width:20%">Qtd. a Recolher</th><th style="width:20%">Qtd. Real Devolvida</th></tr>
-    ${itens.map(it=>`<tr>
-      <td>${esc(it.vacinas?.nome||'—')}</td>
-      <td style="font-family:monospace">${esc(it.vacinas?.lote||it.lote||'—')}</td>
-      <td style="text-align:center;font-weight:700">${it.quantidade}</td>
-      <td style="text-align:center">___________</td>
-    </tr>`).join('')}
+    ${itens.map(it=>'<tr><td>'+esc(it.vacinas?.nome||'—')+'</td><td style="font-family:monospace">'+esc(it.vacinas?.lote||it.lote||'—')+'</td><td style="text-align:center;font-weight:700">'+it.quantidade+'</td><td style="text-align:center">___________</td></tr>').join('')}
     <tr style="background:#fef9c3">
       <td colspan="2" style="text-align:right;font-weight:700">TOTAL</td>
       <td style="text-align:center;font-weight:800">${totalDoses}</td>
@@ -8361,8 +8356,7 @@ function ModalDetalheRota({ rota, onClose, ROTA_ST, ROTA_BADGE }) {
                     const obs = rem.observacao||'';
                     const temAssinatura = obs.includes('[ASSINATURA');
                     const nomeAssinou = (() => {
-                      const m = obs.match(/Devolvido por: ([^([
-]+)/);
+                      const m = obs.match(/Devolvido por: ([^([\n]+)/);
                       return m ? m[1].trim() : (ap?.nome||'—');
                     })();
                     return (
@@ -10153,7 +10147,7 @@ function TransferenciaPage() {
       if (qtdDanif > 0) {
         await sb.from('movimentacoes').insert({ tipo: 'ajuste', vacina_id: form.vacina_id, quantidade: qtdDanif, origem_tipo: 'aplicador', origem_aplicador_id: form.origem_id, destino_tipo: 'base', destino_base_id: form.destino_id, observacao: `DESCARTE: ${qtdDanif} doses danificadas de ${qtdTotal} devolvidas | Lote manual: ${form.lote.trim()} | ${form.observacao||''}`, criado_por: userId });
       }
-      toast(`Devolução: ${qtdBoa} para estoque${qtdDanif>0?` + ${qtdDanif} descartadas`:''} ✓`, 'success');
+      toast('Devolução: ' + qtdBoa + ' para estoque' + (qtdDanif>0 ? ' + ' + qtdDanif + ' descartadas' : '') + ' ✓', 'success');
       setForm(f=>({...f, quantidade:'', lote:'', observacao:'', tem_danificadas:false, qtd_danificadas:''}));
       setSearchOrig('');
       carregarDescarte();
