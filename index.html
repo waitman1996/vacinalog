@@ -2441,40 +2441,56 @@ function ImportConsulta() {
     setImporting(true); setProgress(0);
 
     try {
-      const { data: bases, error: bErr } = await sb.from('bases').select('id, nome');
+      // Buscar lookup tables e códigos existentes em paralelo
+      const codigos = [...new Set(preview.data.map(r => r['Código']).filter(Boolean))];
+
+      const [
+        { data: bases, error: bErr },
+        { data: vacinas, error: vErr },
+        { data: userInfo },
+      ] = await Promise.all([
+        sb.from('bases').select('id, nome'),
+        sb.from('vacinas').select('id, nome'),
+        sb.auth.getUser(),
+      ]);
       if (bErr) throw new Error('Erro ao carregar bases: ' + bErr.message);
+      if (vErr) throw new Error('Erro ao carregar vacinas: ' + vErr.message);
+
       const baseMap = {};
       (bases || []).forEach(b => { baseMap[b.nome.toLowerCase()] = b.id; });
-
-      const { data: vacinas, error: vErr } = await sb.from('vacinas').select('id, nome');
-      if (vErr) throw new Error('Erro ao carregar vacinas: ' + vErr.message);
       const vacinaMap = {};
       (vacinas || []).forEach(v => { vacinaMap[v.nome.toLowerCase()] = v.id; });
+      const userId = userInfo?.user?.id;
 
-      // Buscar tarefas já existentes para detectar novas doses aplicadas
-      // Paginar em lotes maiores para reduzir chamadas ao Supabase
-      toast('Verificando tarefas existentes...', 'info');
-      const codigos = preview.data.map(r => r['Código']).filter(Boolean);
+      // Lookup de tarefas existentes: batches de 500 em paralelo (max 5 simultâneos)
       const existingMap = {};
       const LOOKUP_BATCH = 500;
+      const lookupBatches = [];
       for (let i = 0; i < codigos.length; i += LOOKUP_BATCH) {
-        const { data: existing, error: exErr } = await sb.from('tarefas')
-          .select('id, codigo, doses_aplicadas')
-          .in('codigo', codigos.slice(i, i + LOOKUP_BATCH));
-        if (exErr) console.warn('Erro ao buscar existentes:', exErr.message);
-        (existing || []).forEach(t => { existingMap[t.codigo] = t; });
-        setProgress(Math.round((i / codigos.length) * 10)); // 0-10% para lookup
+        lookupBatches.push(codigos.slice(i, i + LOOKUP_BATCH));
+      }
+      // Processar em grupos de 5 paralelos
+      const PARALLEL = 5;
+      for (let g = 0; g < lookupBatches.length; g += PARALLEL) {
+        const grupo = lookupBatches.slice(g, g + PARALLEL);
+        const resultados = await Promise.all(
+          grupo.map(lote => sb.from('tarefas').select('id, codigo, doses_aplicadas').in('codigo', lote))
+        );
+        resultados.forEach(({ data }) => {
+          (data || []).forEach(t => { existingMap[t.codigo] = t; });
+        });
+        setProgress(Math.round(((g + grupo.length) / lookupBatches.length) * 10));
       }
 
       // Importação rápida: não busca escalas e não debita estoque.
       // O abatimento fica exclusivamente no botão "Reprocessar abatimentos pendentes".
 
-      const userId = (await sb.auth.getUser()).data.user.id;
+      const userId2 = userId;
 
       const { data: imp, error: impErr } = await sb.from('importacoes').insert({
         tipo: 'tarefa', nome_arquivo: file.name,
         registros_total: preview.filtered,
-        usuario_id: userId
+        usuario_id: userId2
       }).select().single();
       if (impErr) throw new Error('Erro ao registrar importação: ' + impErr.message);
 
@@ -2783,21 +2799,28 @@ function ImportTutores() {
     setImporting(true); setProgress(0);
 
     try {
-      const { data: bases } = await sb.from('bases').select('id, nome');
+      // Buscar lookup tables em paralelo (bases, vacinas, aplicadores)
+      const codigosTarefaArquivo = [...new Set(preview.data.map(r => String(r['Código da tarefa'] || '').trim()).filter(Boolean))];
+      const [
+        { data: bases },
+        { data: vacinas },
+        { data: apExist },
+        { data: tarefasLookup },
+      ] = await Promise.all([
+        sb.from('bases').select('id, nome'),
+        sb.from('vacinas').select('id, nome'),
+        sb.from('aplicadores').select('id, cpf'),
+        // Busca só as tarefas cujos códigos estão no arquivo (não tudo)
+        codigosTarefaArquivo.length > 0
+          ? sb.from('tarefas').select('id, codigo').in('codigo', codigosTarefaArquivo.slice(0, 1000))
+          : Promise.resolve({ data: [] }),
+      ]);
       const baseMap = {};
       (bases || []).forEach(b => { baseMap[b.nome.toLowerCase()] = b.id; });
-
-      const { data: vacinas } = await sb.from('vacinas').select('id, nome');
       const vacinaMap = {};
       (vacinas || []).forEach(v => { vacinaMap[v.nome.toLowerCase()] = v.id; });
-
-      // Buscar tarefas para resolver tarefa_id via código
-      const { data: tarefas } = await sb.from('tarefas').select('id, codigo');
       const tarefaMap = {};
-      (tarefas || []).forEach(t => { tarefaMap[t.codigo] = t.id; });
-
-      // Buscar aplicadores existentes
-      const { data: apExist } = await sb.from('aplicadores').select('id, cpf');
+      (tarefasLookup || []).forEach(t => { tarefaMap[t.codigo] = t.id; });
       const apMap = {};
       (apExist || []).forEach(a => { apMap[a.cpf] = a.id; });
 
@@ -2844,116 +2867,83 @@ function ImportTutores() {
         }
       }
 
-      // Buscar escalas existentes para deduplicar por (codigo_tarefa + tutor_cpf)
-      toast('Verificando escalas existentes...', 'info');
-      const codigosTarefa = [...new Set(rows.map(r => String(r['Código da tarefa'] || '').trim()).filter(Boolean))];
-      const escalaExistMap = {}; // chave: `${codigo_tarefa}||${tutor_cpf}` → { id, status, ... }
-      const LOOKUP_BATCH_E = 100;
-      for (let i = 0; i < codigosTarefa.length; i += LOOKUP_BATCH_E) {
-        const { data: escExist } = await sb.from('escalas')
-          .select('id, codigo_tarefa, tutor_cpf, status, doses_necessarias')
-          .in('codigo_tarefa', codigosTarefa.slice(i, i + LOOKUP_BATCH_E));
-        (escExist || []).forEach(e => {
-          const key = `${e.codigo_tarefa}||${e.tutor_cpf}`;
-          // Se existir mais de uma (duplicata antiga), guarda a mais recente (maior id)
-          if (!escalaExistMap[key] || e.id > escalaExistMap[key].id) {
-            escalaExistMap[key] = e;
-          }
-        });
-      }
-
-      // Segundo pass: upsert escalas (update se existir, insert se nova)
+      // Upsert em lote — elimina N round trips individuais
+      // Requer constraint UNIQUE (codigo_tarefa, tutor_cpf) no banco.
+      // Se não existir, cai no fallback de insert+update.
       let atualizados = 0;
-      for (let i = 0; i < rows.length; i += batchSize) {
-        const batch = rows.slice(i, i + batchSize).map(r => {
-          const cpf = String(r['CPF'] || '').trim();
-          const statusRaw = String(r['status'] || '').trim();
-          const baseNome = String(r['Base'] || '').trim();
-          const vacinaNome = String(r['Tipo de vacina'] || 'Gripe').trim();
-          const codigoTarefa = String(r['Código da tarefa'] || '');
+      setProgress(5);
 
-          const dataInicio = excelDateToString(r['Início da tarefa']);
-          const dataTermino = excelDateToString(r['Término da tarefa']);
-          const horaInicio = excelTimeToString(r['Horas - Início']);
-          const horaTermino = excelTimeToString(r['Horas  - Término']);
+      // Montar todos os payloads de uma vez (sem lookup prévio)
+      const allPayloads = rows.map(r => {
+        const cpf = String(r['CPF'] || '').trim();
+        const statusRaw = String(r['status'] || '').trim();
+        const baseNome = String(r['Base'] || '').trim();
+        const vacinaNome = String(r['Tipo de vacina'] || 'Gripe').trim();
+        const codigoTarefa = String(r['Código da tarefa'] || '');
+        return {
+          codigo_tarefa: codigoTarefa,
+          tarefa_id: tarefaMap[codigoTarefa] || null,
+          aplicador_id: apMap[cpf] || null,
+          tutor_nome: r['Tutor'] || '',
+          tutor_cpf: cpf,
+          base_nome: baseNome,
+          base_id: baseMap[baseNome.toLowerCase()] || null,
+          ponto_partida: (r['Ponto de partida'] || '').trim(),
+          doses_necessarias: Math.round(parseFloat(r['Qntd. de doses'])) || 0,
+          tipo_vacina: vacinaNome,
+          vacina_id: vacinaMap[vacinaNome.toLowerCase()] || vacinaMap['gripe'] || null,
+          data_inicio: excelDateToString(r['Início da tarefa']),
+          hora_inicio: excelTimeToString(r['Horas - Início']),
+          data_termino: excelDateToString(r['Término da tarefa']),
+          hora_termino: excelTimeToString(r['Horas  - Término']),
+          endereco_tarefa: r['Endereço da tarefa'] || '',
+          terceirizada: parseFloat(r['terceirizada']) > 0,
+          profissionais: parseInt(r['Qntd de enfermeiros']) || 0,
+          administrativo: parseInt(r["Qntd de ADM's"]) || 0,
+          semanas: extractWeekNumber(r['Semanas']),
+          particularidade: r['particularidade'] || '',
+          status: STATUS_MAP[statusRaw] || 'aprovada',
+          status_original: statusRaw,
+          importacao_id: imp.id,
+        };
+      }).filter(p => p.codigo_tarefa && p.tutor_cpf);
 
-          const payload = {
-            codigo_tarefa: codigoTarefa,
-            tarefa_id: tarefaMap[codigoTarefa] || null,
-            aplicador_id: apMap[cpf] || null,
-            tutor_nome: r['Tutor'] || '',
-            tutor_cpf: cpf,
-            base_nome: baseNome,
-            base_id: baseMap[baseNome.toLowerCase()] || null,
-            ponto_partida: (r['Ponto de partida'] || '').trim(),
-            doses_necessarias: Math.round(parseFloat(r['Qntd. de doses'])) || 0,
-            tipo_vacina: vacinaNome,
-            vacina_id: vacinaMap[vacinaNome.toLowerCase()] || vacinaMap['gripe'] || null,
-            data_inicio: dataInicio,
-            hora_inicio: horaInicio,
-            data_termino: dataTermino,
-            hora_termino: horaTermino,
-            endereco_tarefa: r['Endereço da tarefa'] || '',
-            terceirizada: parseFloat(r['terceirizada']) > 0,
-            profissionais: parseInt(r['Qntd de enfermeiros']) || 0,
-            administrativo: parseInt(r["Qntd de ADM's"]) || 0,
-            semanas: extractWeekNumber(r['Semanas']),
-            particularidade: r['particularidade'] || '',
-            status: STATUS_MAP[statusRaw] || 'aprovada',
-            status_original: statusRaw,
-            importacao_id: imp.id,
-          };
+      // Upsert em batches — 1 round trip por batch (vs 1 por linha)
+      for (let i = 0; i < allPayloads.length; i += batchSize) {
+        const batch = allPayloads.slice(i, i + batchSize);
+        const { error: upsertErr, data: upserted } = await sb.from('escalas')
+          .upsert(batch, {
+            onConflict: 'codigo_tarefa,tutor_cpf',
+            ignoreDuplicates: false,
+          })
+          .select('id');
 
-          const key = `${codigoTarefa}||${cpf}`;
-          const existente = escalaExistMap[key];
-          return existente ? { ...payload, _existenteId: existente.id } : payload;
-        });
-
-        const novos = batch.filter(r => !r._existenteId);
-        const paraAtualizar = batch.filter(r => r._existenteId);
-
-        // INSERT novas escalas
-        if (novos.length > 0) {
-          const { data: inserted, error } = await sb.from('escalas').insert(novos).select('id');
-          if (error) {
-            console.error('Batch error escalas insert:', error.message);
-            ignored += novos.length;
-          } else {
-            imported += (inserted?.length || novos.length);
+        if (upsertErr) {
+          // Fallback: se não tiver constraint unique no banco, faz lookup + split
+          console.warn('Upsert falhou (sem constraint?), usando fallback:', upsertErr.message);
+          const codsLote = [...new Set(batch.map(p => p.codigo_tarefa))];
+          const { data: exist } = await sb.from('escalas')
+            .select('id, codigo_tarefa, tutor_cpf')
+            .in('codigo_tarefa', codsLote);
+          const existSet = new Set((exist || []).map(e => `${e.codigo_tarefa}||${e.tutor_cpf}`));
+          const novos = batch.filter(p => !existSet.has(`${p.codigo_tarefa}||${p.tutor_cpf}`));
+          const atuais = batch.filter(p => existSet.has(`${p.codigo_tarefa}||${p.tutor_cpf}`));
+          if (novos.length > 0) {
+            const { data: ins, error: insErr } = await sb.from('escalas').insert(novos).select('id');
+            if (insErr) { ignored += novos.length; } else { imported += ins?.length || novos.length; }
           }
+          // Updates em lote via upsert forçado por id
+          for (const p of atuais) {
+            const ex = (exist || []).find(e => e.codigo_tarefa === p.codigo_tarefa && e.tutor_cpf === p.tutor_cpf);
+            if (!ex) continue;
+            const { error: updErr } = await sb.from('escalas').update(p).eq('id', ex.id);
+            if (updErr) ignored++; else atualizados++;
+          }
+        } else {
+          imported += upserted?.length || batch.length;
         }
 
-        // UPDATE escalas existentes (status, doses_necessarias e demais campos)
-        for (const e of paraAtualizar) {
-          const { _existenteId, importacao_id, ...campos } = e;
-          const { error } = await sb.from('escalas')
-            .update({
-              status: campos.status,
-              status_original: campos.status_original,
-              doses_necessarias: campos.doses_necessarias,
-              tutor_nome: campos.tutor_nome,
-              aplicador_id: campos.aplicador_id,
-              tarefa_id: campos.tarefa_id,
-              base_id: campos.base_id,
-              base_nome: campos.base_nome,
-              vacina_id: campos.vacina_id,
-              tipo_vacina: campos.tipo_vacina,
-              data_inicio: campos.data_inicio,
-              data_termino: campos.data_termino,
-              hora_inicio: campos.hora_inicio,
-              hora_termino: campos.hora_termino,
-              ponto_partida: campos.ponto_partida,
-            })
-            .eq('id', _existenteId);
-          if (error) {
-            console.error('Erro ao atualizar escala:', error.message);
-            ignored++;
-          } else {
-            atualizados++;
-          }
-        }
-
-        setProgress(Math.round(((i + batch.length) / rows.length) * 100));
+        setProgress(5 + Math.round(((i + batch.length) / allPayloads.length) * 90));
       }
 
       await sb.from('importacoes').update({
