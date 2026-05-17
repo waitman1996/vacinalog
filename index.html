@@ -2085,8 +2085,6 @@ function BasesPage() {
         </div>
         <button className="btn btn-primary" onClick={() => setModal(emptyForm)}>+ Nova Base</button>
       </div>
-      <EstoqueLocalidadeMap items={itemsFiltrados} />
-
       <div className="card">
         <div className="table-wrap">
           <table>
@@ -6400,9 +6398,10 @@ function EstoqueLocalidadeMap({ items }) {
 
   useEffect(() => {
     if (!boxRef.current || !window.L) return;
+    const Leaflet = window.L;
     if (!mapRef.current) {
-      mapRef.current = L.map(boxRef.current, { scrollWheelZoom:false }).setView([-14.235, -51.925], 4);
-      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '&copy; OpenStreetMap' }).addTo(mapRef.current);
+      mapRef.current = Leaflet.map(boxRef.current, { scrollWheelZoom:false }).setView([-14.235, -51.925], 4);
+      Leaflet.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '&copy; OpenStreetMap' }).addTo(mapRef.current);
     }
     const map = mapRef.current;
     markersRef.current.forEach(m => map.removeLayer(m));
@@ -6420,7 +6419,7 @@ function EstoqueLocalidadeMap({ items }) {
     const addMarker = (r, lat, lon) => {
       const radius = Math.max(8, Math.min(34, Math.sqrt(Math.abs(r.total)) * 1.3));
       const popup = `<strong>${r.cidade}/${r.uf || ''}</strong><br/>Total: ${r.total.toLocaleString('pt-BR')} doses<br/>Bases: ${r.base.toLocaleString('pt-BR')} · Aplicadores: ${r.aplicador.toLocaleString('pt-BR')} · Clínicas: ${r.clinica.toLocaleString('pt-BR')}<br/><br/>` + Object.entries(r.vacinas).slice(0,8).map(([v,q]) => `${v}: ${Number(q).toLocaleString('pt-BR')}`).join('<br/>');
-      const mk = L.circleMarker([lat, lon], { radius, weight:2, fillOpacity:.35 }).bindPopup(popup).addTo(map);
+      const mk = Leaflet.circleMarker([lat, lon], { radius, weight:2, fillOpacity:.35 }).bindPopup(popup).addTo(map);
       markersRef.current.push(mk);
     };
     resumo.forEach((r, idx) => {
@@ -6449,7 +6448,12 @@ function EstoqueLocalidadeMap({ items }) {
   return (
     <div className="card" style={{marginBottom:16}}>
       <div className="card-header"><div className="card-title">🗺️ Mapa de estoque por localidade</div><div style={{fontSize:12,color:'var(--text-muted)'}}>{resumo.length} localidades</div></div>
-      <div ref={boxRef} style={{height:360,borderRadius:'var(--radius-sm)',overflow:'hidden',border:'1px solid var(--border)',background:'var(--bg-input)'}} />
+      {!window.L && (
+        <div style={{height:120,borderRadius:'var(--radius-sm)',border:'1px solid var(--border)',background:'var(--bg-input)',display:'flex',alignItems:'center',justifyContent:'center',color:'var(--text-muted)',fontSize:13}}>
+          Mapa não carregado. Verifique a conexão com a internet.
+        </div>
+      )}
+      <div ref={boxRef} style={{height:window.L ? 360 : 0,borderRadius:'var(--radius-sm)',overflow:'hidden',border:window.L ? '1px solid var(--border)' : 'none',background:'var(--bg-input)'}} />
       <div style={{fontSize:11,color:'var(--text-muted)',marginTop:8}}>O mapa usa cidade/UF das bases, clínicas parceiras e aplicadores. Quando a cidade ainda não tem coordenada salva, ela é localizada automaticamente e fica em cache no navegador.</div>
     </div>
   );
@@ -6687,7 +6691,7 @@ function EstoquePage() {
         </div>
         <div className="stat-card">
           <div className="stat-icon" style={{background:'var(--success-bg)',color:'var(--success)'}}>📦</div>
-          <div className="stat-value">{(totalBases + totalAp).toLocaleString('pt-BR')}</div>
+          <div className="stat-value">{(totalBases + totalClinicas + totalAp).toLocaleString('pt-BR')}</div>
           <div className="stat-label">Total Geral</div>
         </div>
       </div>
@@ -6697,6 +6701,8 @@ function EstoquePage() {
           ✏️ <strong>Modo Admin:</strong> Clique no valor de quantidade para editar diretamente. O ajuste será registrado em Movimentações.
         </div>
       )}
+
+      <EstoqueLocalidadeMap items={itemsFiltrados} />
 
       {/* Filtros */}
       <div style={{display:'flex',gap:10,marginBottom:12,flexWrap:'wrap',alignItems:'flex-end'}}>
