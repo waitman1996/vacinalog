@@ -4701,7 +4701,7 @@ function CriarRotaColeta({ onNavigate }) {
           sb.from('bases').select('id,nome,cidade,uf').order('nome'),
           sb.from('profiles').select('id,nome').eq('role','motorista').order('nome'),
           sb.from('veiculos').select('id,modelo,placa').order('modelo'),
-          sb.from('aplicadores').select('id,nome,cpf,cidade,uf,ponto_partida,endereco').order('nome'),
+          sb.from('aplicadores').select('*').order('nome'),
           sb.from('rotas').select('id,codigo,status,data_prevista,bases!rotas_base_origem_id_fkey(nome)').not('status','in','(concluida,cancelada)').eq('tipo','entrega').order('data_prevista',{ascending:false}),
         ]);
 
@@ -4717,7 +4717,13 @@ function CriarRotaColeta({ onNavigate }) {
 
         const aplicadoresCadastro = aplicRes.data || [];
         const aplicById = {};
-        aplicadoresCadastro.forEach(a => { aplicById[String(a.id)] = a; });
+        aplicadoresCadastro.forEach(a => {
+          // Usa todas as chaves possíveis para cruzar o estoque com o cadastro.
+          // Algumas versões do banco usam id, outras podem trazer aplicador_id/codigo/cpf.
+          [a.id, a.aplicador_id, a.localizacao_id, a.codigo, a.cpf].filter(Boolean).forEach(k => {
+            aplicById[String(k)] = a;
+          });
+        });
 
         // Busca estoque positivo sem depender de FK/relacionamento.
         const { data: estoqueBruto, error: estoqueErr } = await sb
@@ -4772,11 +4778,11 @@ function CriarRotaColeta({ onNavigate }) {
           if (!aplicMap[key]) {
             aplicMap[key] = {
               id: aplicId,
-              nome: ap.nome || e.aplicador_nome || e.nome_aplicador || 'Aplicador sem nome',
-              cpf: ap.cpf || e.aplicador_cpf || e.cpf || '',
-              cidade: ap.cidade || e.cidade || '',
-              uf: ap.uf || e.uf || '',
-              ponto_partida: ap.ponto_partida || e.ponto_partida || e.endereco || '',
+              nome: ap.nome || ap.name || ap.profissional || ap.tutor_nome || e.aplicador_nome || e.nome_aplicador || e.nome_profissional || 'Aplicador sem nome',
+              cpf: ap.cpf || ap.documento || e.aplicador_cpf || e.cpf || '',
+              cidade: ap.cidade || ap.municipio || e.cidade || '',
+              uf: ap.uf || ap.estado || e.uf || '',
+              ponto_partida: ap.ponto_partida || ap.endereco || ap.local || e.ponto_partida || e.endereco || '',
             };
           }
         });
