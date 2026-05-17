@@ -6259,20 +6259,24 @@ function EstoquePage() {
     const [conciliacaoVal, setConciliacaoVal] = useState('');
     const toast = useContext(ToastContext);
     const load = async () => {
-        const { data, error } = await sb.from('estoque')
-            .select('*, vacinas(nome, lote), bases(nome, cidade, uf), aplicadores(nome, cpf, cidade, uf)')
-            .order('localizacao_tipo');
+        // Load estoque and bases separately to avoid RLS join issues on bases
+        const [estoqueRes, basesRes] = await Promise.all([
+            sb.from('estoque').select('*, vacinas(nome, lote), aplicadores(nome, cpf, cidade, uf)').order('localizacao_tipo'),
+            sb.from('bases').select('id, nome, cidade, uf')
+        ]);
+        const { data, error } = estoqueRes;
+        const basesLookup = {};
+        (basesRes.data || []).forEach(b => { basesLookup[b.id] = b; });
 
         if (error) {
-    
             toast(error.message, 'error');
             return;
         }
         // Consolidar registros duplicados: agrupar por tipo + local + vacina
         const map = {};
         (data || []).forEach(row => {
-            // Merge bases from separate lookup (avoids RLS join issues)
-            if (row.base_id && !row.bases && basesLookup[row.base_id]) {
+            // Merge base via lookup (bypasses RLS join issue)
+            if (row.base_id && basesLookup[row.base_id]) {
                 row.bases = basesLookup[row.base_id];
             }
             const localId = row.base_id || row.aplicador_id || '';
