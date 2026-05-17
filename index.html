@@ -6260,6 +6260,7 @@ function EstoquePage() {
     const [conciliacaoVal, setConciliacaoVal] = useState('');
     const toast = useContext(ToastContext);
     const load = async () => {
+      try {
         // Load estoque and bases separately to avoid RLS join issues on bases
         const [estoqueRes, basesRes] = await Promise.all([
             sb.from('estoque').select('*, vacinas(nome, lote), aplicadores(nome, cpf, cidade, uf)').order('localizacao_tipo'),
@@ -6294,6 +6295,11 @@ function EstoquePage() {
         const consolidated = Object.values(map).filter(i => i.quantidade !== 0);
 
         setItems(consolidated);
+        console.log('[LOAD DONE] items set:', consolidated.length);
+      } catch(err) {
+        console.error('[LOAD ERROR]', err.message, err.stack);
+        alert('Erro no load: ' + err.message);
+      }
     };
     useEffect(() => {
         load();
