@@ -10984,9 +10984,12 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
           errosTransferencia.push(item.vacinas?.nome || 'Vacina');
         }
       }
-      // Avisar sobre falhas de estoque mas NÃO bloquear a entrega
+      // Segurança: se o estoque não transferiu, NÃO concluir a entrega.
+      // Antes a entrega era marcada como concluída mesmo quando a RPC falhava,
+      // o que deixava remessa concluída sem debitar a base nem creditar o aplicador.
       if (errosTransferencia.length > 0) {
-        toast('⚠️ Saldo insuficiente na base para: ' + errosTransferencia.join(', ') + '. Entrega confirmada — ajuste o estoque manualmente.', 'warning');
+        toast('❌ Entrega NÃO concluída. Falha ao transferir estoque para: ' + errosTransferencia.join(', ') + '. Verifique saldo/base/RPC e tente novamente.', 'error');
+        return;
       } else {
         toast('Estoque transferido para o aplicador ✓', 'success');
       }
