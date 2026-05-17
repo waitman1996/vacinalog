@@ -6276,10 +6276,9 @@ function EstoquePage() {
         });
         // Filtrar zeros após consolidação
         const consolidated = Object.values(map).filter(i => i.quantidade !== 0);
-        // Debug: log how many clinica records found
-
-
-
+        const _dbg = [...new Set(consolidated.map(i => i.localizacao_tipo + '|' + (i.bases ? i.bases.nome : 'NO-JOIN') + '|bid:' + (i.base_id||'null')))].sort();
+        console.log('[ESTOQUE DEBUG] total=' + consolidated.length);
+        _dbg.slice(0,30).forEach(r => console.log('  ' + r));
         setItems(consolidated);
     };
     useEffect(() => {
