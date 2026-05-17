@@ -4707,21 +4707,79 @@ function CriarRotaColeta({ onNavigate }) {
       setRotasEntrega(rotEnt||[]);
       setMotoristas(m||[]);
       setVeiculos(v||[]);
-      // Agrupa estoque por aplicador
-      const estMap = {};
+      // Agrupa estoque por aplicador.
+      // Correção: em alguns bancos o saldo em estoque foi gravado sem aplicador_id.
+      // Quando isso acontecer, reconstruímos o saldo pelos envios/retornos concluídos
+      // (remessas de entrega - remessas de coleta), usando destino_aplicador_id/origem_aplicador_id.
+      let estMap = {};
       (est||[]).forEach(e => {
-        if (!e.aplicador_id) return; // ignora registros sem aplicador_id
+        if (!e.aplicador_id) return;
         if (!estMap[e.aplicador_id]) estMap[e.aplicador_id] = [];
         estMap[e.aplicador_id].push(e);
       });
-      // Mostra aplicadores com estoque > 0
-      // Fallback: se nenhum aplicador tiver estoque no mapa, mostra todos com estoque > 0 pelo campo quantidade
-      const aplicComEstoque = (aplic||[])
+
+      let aplicComEstoque = (aplic||[])
         .filter(a => estMap[a.id] && estMap[a.id].length > 0)
         .map(a => ({ ...a, itens: estMap[a.id], totalDoses: estMap[a.id].reduce((s,e)=>s+Number(e.quantidade||0),0) }));
+
       if (aplicComEstoque.length === 0 && (est||[]).length > 0) {
-        toast('Estoque carregado (' + (est||[]).length + ' registros) mas nenhum aplicador com id correspondente encontrado. Verifique a coluna aplicador_id na tabela estoque.', 'error');
+        try {
+          const [{ data: entregues }, { data: coletadas }] = await Promise.all([
+            sb.from('remessas')
+              .select('id,destino_aplicador_id,remessa_itens(quantidade,vacina_id,vacinas(nome,lote))')
+              .eq('tipo','entrega')
+              .eq('status','concluida')
+              .not('destino_aplicador_id','is',null),
+            sb.from('remessas')
+              .select('id,origem_aplicador_id,remessa_itens(quantidade,vacina_id,vacinas(nome,lote))')
+              .eq('tipo','coleta')
+              .eq('status','concluida')
+              .not('origem_aplicador_id','is',null),
+          ]);
+
+          const calc = {};
+          const addSaldo = (apId, item, sinal) => {
+            if (!apId || !item?.vacina_id) return;
+            const qtd = Number(item.quantidade || 0) * sinal;
+            const key = apId + '|' + item.vacina_id;
+            if (!calc[key]) {
+              calc[key] = {
+                id: 'calc-' + key,
+                aplicador_id: apId,
+                vacina_id: item.vacina_id,
+                quantidade: 0,
+                vacinas: item.vacinas || { nome: 'Vacina', lote: '' },
+                _saldo_calculado: true,
+              };
+            }
+            calc[key].quantidade += qtd;
+          };
+
+          (entregues||[]).forEach(rem => (rem.remessa_itens||[]).forEach(it => addSaldo(rem.destino_aplicador_id, it, +1)));
+          (coletadas||[]).forEach(rem => (rem.remessa_itens||[]).forEach(it => addSaldo(rem.origem_aplicador_id, it, -1)));
+
+          estMap = {};
+          Object.values(calc).forEach(e => {
+            e.quantidade = Math.max(0, Number(e.quantidade || 0));
+            if (e.quantidade <= 0) return;
+            if (!estMap[e.aplicador_id]) estMap[e.aplicador_id] = [];
+            estMap[e.aplicador_id].push(e);
+          });
+
+          aplicComEstoque = (aplic||[])
+            .filter(a => estMap[a.id] && estMap[a.id].length > 0)
+            .map(a => ({ ...a, itens: estMap[a.id], totalDoses: estMap[a.id].reduce((s,e)=>s+Number(e.quantidade||0),0) }));
+
+          if (aplicComEstoque.length > 0) {
+            toast('Estoque dos aplicadores calculado pelas remessas concluídas, pois a tabela estoque está sem aplicador_id.', 'info');
+          } else {
+            toast('Não encontrei estoque vinculado a aplicadores nem remessas concluídas para reconstruir o saldo.', 'error');
+          }
+        } catch (fallbackErr) {
+          toast('Erro ao reconstruir estoque dos aplicadores: ' + fallbackErr.message, 'error');
+        }
       }
+
       setAplicadores(aplicComEstoque);
       setEstoque(estMap);
       setLoading(false);
