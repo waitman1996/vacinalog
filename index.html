@@ -3122,6 +3122,23 @@ function ImportClinicas() {
     return data[0];
   };
 
+  const ensureBaseClinicasParceiras = async () => {
+    const nomeBase = 'Rede Credenciada - Clínicas Parceiras';
+    const { data: existentes, error: selErr } = await sb.from('bases')
+      .select('id,nome')
+      .ilike('nome', nomeBase)
+      .limit(1);
+    if (selErr) throw selErr;
+    if (existentes && existentes.length) return existentes[0].id;
+
+    const { data: nova, error: insErr } = await sb.from('bases')
+      .insert({ nome: nomeBase, cidade: 'Rede Credenciada', uf: 'BR', ativa: true })
+      .select('id')
+      .single();
+    if (insErr) throw insErr;
+    return nova.id;
+  };
+
   const doImport = async () => {
     if (!preview) return;
     setImporting(true); setProgress(0);
@@ -3137,6 +3154,7 @@ function ImportClinicas() {
       }).select().single();
 
       const rows = preview.data.filter(r => r.valido);
+      const baseClinicasId = await ensureBaseClinicasParceiras();
       for (let i=0; i<rows.length; i++) {
         const r = rows[i];
         try {
@@ -3146,7 +3164,8 @@ function ImportClinicas() {
           if (tab === 'saldo') {
             const { data: existing, error: exErr } = await sb.from('estoque')
               .select('id,quantidade')
-              .eq('localizacao_tipo','clinica')
+              .eq('localizacao_tipo','base')
+              .eq('base_id', baseClinicasId)
               .eq('vacina_id', vacina.id)
               .limit(1);
             if (exErr) throw exErr;
@@ -3156,14 +3175,15 @@ function ImportClinicas() {
               if (error) throw error;
               updated++;
             } else {
-              const { error } = await sb.from('estoque').insert({ vacina_id: vacina.id, localizacao_tipo: 'clinica', quantidade: r.quantidade });
+              const { error } = await sb.from('estoque').insert({ vacina_id: vacina.id, localizacao_tipo: 'base', base_id: baseClinicasId, quantidade: r.quantidade });
               if (error) throw error;
               imported++;
             }
           } else {
             const { data: estoques, error: estErr } = await sb.from('estoque')
               .select('id,quantidade,vacina_id,vacinas(nome,produto_nome)')
-              .eq('localizacao_tipo','clinica')
+              .eq('localizacao_tipo','base')
+              .eq('base_id', baseClinicasId)
               .eq('vacina_id', vacina.id)
               .gt('quantidade', 0);
             if (estErr) throw estErr;
@@ -3183,7 +3203,8 @@ function ImportClinicas() {
             }
             const { error: movErr } = await sb.from('movimentacoes').insert({
               tipo: 'aplicacao', vacina_id: ordenados[0]?.vacina_id || vacina.id, quantidade: r.quantidade,
-              origem_tipo: 'clinica',
+              origem_tipo: 'base',
+              origem_id: baseClinicasId,
               observacao: `Rede Credenciada: ${r.quantidade} doses aplicadas | Clínica ${r.clinica} | Data ${r.data}${r.observacao ? ' | ' + r.observacao : ''}`,
               criado_por: userId,
             });
@@ -3209,7 +3230,7 @@ function ImportClinicas() {
       <div className="card-header">
         <div>
           <div className="card-title">Importar Clínicas Parceiras</div>
-          <div className="page-subtitle">Rede Credenciada — saldos consolidados por vacina/produto, sem depender da tabela clinicas</div>
+          <div className="page-subtitle">Rede Credenciada — saldos consolidados em base técnica de Rede Credenciada, sem usar enum clínicа</div>
         </div>
         <button className="btn btn-secondary btn-sm" type="button" onClick={baixarModeloClinicas}>⬇️ Baixar modelo</button>
       </div>
