@@ -10768,23 +10768,12 @@ function MontagemPage() {
             selecionarRota(rotaSel);
     };
     const marcarPronta = async (rem) => {
-        // Remessa zerada (tutor já tem as doses): concluir diretamente, sem passar pelo motorista
-        // Permitir remessas com itens de quantidade 0 — tutor já possui as doses
-        const totalDoses = (rem.remessa_itens || []).reduce((s, i) => s + Number(i.quantidade || 0), 0);
-        const isZerada = totalDoses === 0;
-        const novoStatus = isZerada ? 'concluida' : 'pronta';
-        const { error } = await sb.from('remessas').update({ status: novoStatus }).eq('id', rem.id);
+        const { error } = await sb.from('remessas').update({ status: 'pronta' }).eq('id', rem.id);
         if (error) {
             toast(error.message, 'error');
             return;
         }
-        if (isZerada) {
-            // Atualizar status_logistica da tarefa vinculada para concluido
-            await atualizarTarefasDaRota(rotaSel.id, 'concluido');
-            toast('Remessa zerada — concluiía automaticamente (tutor já possui as doses). ✓', 'success');
-        } else {
-            toast('Remessa pronta para envio!', 'success');
-        }
+        toast('Remessa pronta!', 'success');
         selecionarRota(rotaSel);
     };
     const marcarMontagem = async (remId) => {
@@ -10800,28 +10789,52 @@ function MontagemPage() {
             toast('Todas as remessas precisam estar prontas antes de liberar a rota', 'error');
             return;
         }
-        // Se todas as remessas já estão concluídas (todas zeradas), concluir a rota diretamente
-        const todasConcluidas = remessas.length > 0 && remessas.every(r => ['concluida', 'cancelada'].includes(r.status));
-        if (todasConcluidas) {
+        const reloadRotas = () => sb.from('rotas')
+            .select('id, codigo, data_prevista, status, tipo, bases!rotas_base_origem_id_fkey(nome), profiles!rotas_motorista_id_fkey(nome), veiculo')
+            .in('status', ['montagem', 'planejada']).order('data_prevista')
+            .then(r => setRotas(r.data || []));
+
+        // Separar remessas zeradas (tutor já tem doses) das que têm doses para enviar
+        const remessasComDoses = remessas.filter(r => {
+            const total = (r.remessa_itens || []).reduce((s, i) => s + Number(i.quantidade || 0), 0);
+            return total > 0 && !['concluida', 'cancelada'].includes(r.status);
+        });
+        const remessasZeradas = remessas.filter(r => {
+            const total = (r.remessa_itens || []).reduce((s, i) => s + Number(i.quantidade || 0), 0);
+            return total === 0 && !['concluida', 'cancelada'].includes(r.status);
+        });
+
+        // Concluir remessas zeradas direto (tutor já tem as doses)
+        for (const r of remessasZeradas) {
+            await sb.from('remessas').update({ status: 'concluida' }).eq('id', r.id);
+        }
+
+        // Se não sobrou nenhuma com doses — rota inteira conclui
+        if (remessasComDoses.length === 0) {
             const { error } = await sb.from('rotas').update({ status: 'concluida' }).eq('id', rotaSel.id);
             if (error) { toast(error.message, 'error'); return; }
             await atualizarTarefasDaRota(rotaSel.id, 'concluido');
-            toast('Rota concluída automaticamente — todas as remessas eram zeradas. ✓', 'success');
+            const nZeradas = remessasZeradas.length;
+            toast(`Rota concluída! ${nZeradas} remessa${nZeradas !== 1 ? 's' : ''} zerada${nZeradas !== 1 ? 's' : ''} — tutores já possuem as doses. ✓`, 'success');
             setRotaSel(null);
             setRemessas([]);
-            sb.from('rotas').select('id, codigo, data_prevista, status, tipo, bases!rotas_base_origem_id_fkey(nome), profiles!rotas_motorista_id_fkey(nome), veiculo').in('status', ['montagem', 'planejada']).order('data_prevista').then(r => setRotas(r.data || []));
+            reloadRotas();
             return;
         }
+
+        // Tem remessas com doses — liberar rota para o motorista
         const { error } = await sb.from('rotas').update({ status: 'pronta' }).eq('id', rotaSel.id);
-        if (error)
-            toast(error.message, 'error');
-        else {
-            await atualizarTarefasDaRota(rotaSel.id, 'pronta');
-            toast('Rota liberada para o motorista!', 'success');
-            setRotaSel(null);
-            setRemessas([]);
-            sb.from('rotas').select('id, codigo, data_prevista, status, tipo, bases!rotas_base_origem_id_fkey(nome), profiles!rotas_motorista_id_fkey(nome), veiculo').in('status', ['montagem', 'planejada']).order('data_prevista').then(r => setRotas(r.data || []));
-        }
+        if (error) { toast(error.message, 'error'); return; }
+        await atualizarTarefasDaRota(rotaSel.id, 'pronta');
+        const nZeradas = remessasZeradas.length;
+        const nDoses = remessasComDoses.length;
+        const msg = nZeradas > 0
+            ? `Rota liberada para o motorista! ${nDoses} entrega${nDoses !== 1 ? 's' : ''} + ${nZeradas} zerada${nZeradas !== 1 ? 's' : ''} concluída${nZeradas !== 1 ? 's' : ''} automaticamente.`
+            : 'Rota liberada para o motorista!';
+        toast(msg, 'success');
+        setRotaSel(null);
+        setRemessas([]);
+        reloadRotas();
     };
     // Imprimir Recibo / Termo de Entrega e Responsabilidade
     const imprimirRecibo = (rem) => {
@@ -12411,14 +12424,21 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
                 }
             }
         }
+        // ── Remessa de COLETA (aplicador → base) ──
+        // O motorista apenas registra que recolheu — estoque só é movimentado
+        // quando a base confere e confirma o recebimento físico da caixa.
+        if (rem.tipo === 'coleta') {
+            await sb.from('remessas').update({ status: 'em_transito' }).eq('id', remId);
+            toast('Coleta registrada! Aguardando conferência na base. ✓', 'success');
+            load();
+            return;
+        }
+
+        // ── Remessa de ENTREGA (base → aplicador) ──
         if (!destId || destTipo !== 'aplicador') {
             toast('Não foi possível identificar o aplicador de destino. Entrega não concluída para evitar estoque errado.', 'error');
             return;
         }
-        // A validação de saldo agora é feita dentro da função SQL transferir_estoque_produto,
-        // de forma atômica e por produto consolidado, sem prender no lote.
-        // Transferir estoque base → aplicador para cada item.
-        // Usa a rotina direta robusta para garantir: debita base, credita aplicador e registra movimentação.
         if (itens.length > 0) {
             let errosTransferencia = [];
             for (const item of itens) {
