@@ -530,10 +530,15 @@ function getEstoqueCidadeUf(i) {
 function isClinicaEstoqueGlobal(i) {
     if (!i) return false;
     if (i.localizacao_tipo === 'clinica') return true;
+    // Usa o set de IDs de clínicas populado pelo EstoquePage.load() se disponível
+    if (window.__clinicaBaseIds && window.__clinicaBaseIds.size > 0) {
+        return i.localizacao_tipo === 'base' && window.__clinicaBaseIds.has(i.base_id);
+    }
+    // Fallback: base_id fixo da Rede Credenciada
+    if (i.base_id === '795b9bb9-a0ec-4d4c-8d20-c905772c8f13') return true;
+    // Fallback: por nome da base (quando join disponível)
     var _a;
     const nomeBase = String(((_a = i.bases) === null || _a === void 0 ? void 0 : _a.nome) || '');
-    // Clínica se base_id conhecido OU nome começa com "Clínica" ou "Rede Credenciada"
-    if (i.base_id === '795b9bb9-a0ec-4d4c-8d20-c905772c8f13') return true;
     return i.localizacao_tipo === 'base' && /^cl[ií]nica|rede credenciada/i.test(nomeBase);
 }
 function tipoEstoqueLabelGlobal(i) {
@@ -2043,107 +2048,129 @@ function ArvoreDistribuicaoPage() {
 // ═══════════════════════════════════════════════
 function ClinicasPage() {
     const [estoque, setEstoque] = useState([]);
-    const [basesClinicaMap, setBasesClinicaMap] = useState({});
+    const [basesMap, setBasesMap] = useState({});
     const [loading, setLoading] = useState(true);
+    const [search, setSearch] = useState('');
     const toast = useContext(ToastContext);
 
     const load = async () => {
         setLoading(true);
-        const { data: basesClinicaArr } = await sb.from('bases')
+        // Busca bases de clínicas (nome começa com Clínica ou Rede Credenciada)
+        const { data: basesClinica } = await sb.from('bases')
             .select('id, nome, cidade, uf')
-            .or('nome.ilike.Clínica%,nome.ilike.Rede Credenciada%');
-        const idsClinica = (basesClinicaArr || []).map(b => b.id);
+            .or('nome.ilike.Clínica%,nome.ilike.Rede Credenciada%')
+            .order('nome');
         const bMap = {};
-        (basesClinicaArr || []).forEach(b => { bMap[b.id] = b; });
-        setBasesClinicaMap(bMap);
-        if (idsClinica.length === 0) { setEstoque([]); setLoading(false); return; }
+        (basesClinica || []).forEach(b => { bMap[b.id] = b; });
+        setBasesMap(bMap);
+        const ids = Object.keys(bMap);
+        if (ids.length === 0) { setEstoque([]); setLoading(false); return; }
         const { data, error } = await sb.from('estoque')
-            .select('*, vacinas(nome, lote)')
-            .in('base_id', idsClinica)
-            .gt('quantidade', 0);
+            .select('id, base_id, vacina_id, quantidade, vacinas(nome, lote)')
+            .in('base_id', ids);
         if (error) toast(error.message, 'error');
-        else setEstoque(data || []);
+        else setEstoque((data || []).filter(e => e.quantidade !== 0));
         setLoading(false);
     };
 
-    useEffect(() => { load(); }, []);
-
+    const React_createElement = React.createElement;
     const fmt = n => Number(n || 0).toLocaleString('pt-BR');
     const totalDoses = estoque.reduce((s, e) => s + Number(e.quantidade || 0), 0);
 
-    return (
-        React.createElement("div", null,
-            React.createElement("div", { className: "page-header" },
-                React.createElement("div", null,
-                    React.createElement("div", { className: "page-title" }, "🏥 Clínicas Parceiras"),
-                    React.createElement("div", { className: "page-subtitle" }, "Rede Credenciada — saldo de doses por vacina")
-                ),
-                React.createElement("div", { style: { display:'flex', alignItems:'center', gap:12 } },
-                    React.createElement("div", { style: { fontSize:13, color:'var(--text-muted)' } },
-                        "Total: ", React.createElement("strong", { style: { color:'var(--success)' } }, fmt(totalDoses)), " doses"
-                    ),
-                    React.createElement("button", { className: "btn btn-secondary btn-sm", onClick: load }, "↻ Atualizar")
-                )
+    useEffect(() => { load(); }, []);
+
+    const filtered = search
+        ? estoque.filter(e => {
+            const b = basesMap[e.base_id];
+            const nome = (b?.nome || '').toLowerCase();
+            const cidade = (b?.cidade || '').toLowerCase();
+            const vacina = (e.vacinas?.nome || '').toLowerCase();
+            const q = search.toLowerCase();
+            return nome.includes(q) || cidade.includes(q) || vacina.includes(q);
+          })
+        : estoque;
+
+    return React_createElement("div", null,
+        React_createElement("div", { className: "page-header" },
+            React_createElement("div", null,
+                React_createElement("div", { className: "page-title" }, "🏥 Clínicas Parceiras"),
+                React_createElement("div", { className: "page-subtitle" }, "Rede Credenciada — saldo de doses por clínica")
             ),
-            loading
-                ? React.createElement("div", { className: "card", style: { padding:32, textAlign:'center', color:'var(--text-muted)' } }, "Carregando...")
-                : React.createElement("div", { className: "card" },
-                    React.createElement("div", { className: "table-wrap" },
-                        React.createElement("table", null,
-                            React.createElement("thead", null,
-                                React.createElement("tr", null,
-                                    React.createElement("th", null, "Clínica"),
-                                    React.createElement("th", null, "Cidade/UF"),
-                                    React.createElement("th", null, "Vacina"),
-                                    React.createElement("th", null, "Lote"),
-                                    React.createElement("th", { style: { textAlign:'right' } }, "Quantidade"),
-                                    React.createElement("th", null, "Status")
-                                )
-                            ),
-                            React.createElement("tbody", null,
-                                estoque.length === 0
-                                    ? React.createElement("tr", null,
-                                        React.createElement("td", { colSpan: 4 },
-                                            React.createElement("div", { className: "empty-state" },
-                                                React.createElement("div", { className: "empty-icon" }, "🏥"),
-                                                React.createElement("div", { className: "empty-text" }, "Nenhum saldo de clínica encontrado. Importe a planilha de Clínicas Parceiras.")
-                                            )
-                                        )
-                                    )
-                                    : estoque.map(e =>
-                                        React.createElement("tr", { key: e.id },
-                                            React.createElement("td", { style: { fontWeight: 600, color: 'var(--accent)' } },
-                                                e.vacinas?.nome || '—'
-                                            ),
-                                            React.createElement("td", { className: "mono", style: { fontSize: 11 } },
-                                                e.vacinas?.lote || '—'
-                                            ),
-                                            React.createElement("td", { className: "mono", style: { textAlign:'right', fontSize:16, fontWeight:800,
-                                                color: e.quantidade > 0 ? 'var(--success)' : e.quantidade < 0 ? 'var(--danger)' : 'var(--text-muted)'
-                                            } },
-                                                fmt(e.quantidade)
-                                            ),
-                                            React.createElement("td", null,
-                                                React.createElement("span", {
-                                                    className: `badge ${e.quantidade > 0 ? 'badge-green' : e.quantidade < 0 ? 'badge-red' : 'badge-gray'}`
-                                                },
-                                                    e.quantidade > 0 ? 'Com saldo' : e.quantidade < 0 ? 'Negativo' : 'Zerado'
-                                                )
-                                            )
-                                        )
-                                    )
+            React_createElement("div", { style: { display:'flex', alignItems:'center', gap:12 } },
+                React_createElement("div", { style: { fontSize:13, color:'var(--text-muted)' } },
+                    "Total: ", React_createElement("strong", { style: { color:'var(--success)' } }, fmt(totalDoses)), " doses"
+                ),
+                React_createElement("button", { className: "btn btn-secondary btn-sm", onClick: load }, "↻ Atualizar")
+            )
+        ),
+        React_createElement("div", { style: { marginBottom:12 } },
+            React_createElement("input", {
+                className: "form-input",
+                placeholder: "Buscar por clínica, cidade ou vacina...",
+                value: search,
+                onChange: e => setSearch(e.target.value),
+                style: { maxWidth:360 }
+            })
+        ),
+        loading
+            ? React_createElement("div", { className: "card", style: { padding:32, textAlign:'center', color:'var(--text-muted)' } }, "Carregando...")
+            : React_createElement("div", { className: "card" },
+                React_createElement("div", { className: "table-wrap" },
+                    React_createElement("table", null,
+                        React_createElement("thead", null,
+                            React_createElement("tr", null,
+                                React_createElement("th", null, "Clínica"),
+                                React_createElement("th", null, "Cidade/UF"),
+                                React_createElement("th", null, "Vacina"),
+                                React_createElement("th", null, "Lote"),
+                                React_createElement("th", { style: { textAlign:'right' } }, "Quantidade"),
+                                React_createElement("th", null, "Status")
                             )
+                        ),
+                        React_createElement("tbody", null,
+                            filtered.length === 0
+                                ? React_createElement("tr", null,
+                                    React_createElement("td", { colSpan: 6 },
+                                        React_createElement("div", { className: "empty-state" },
+                                            React_createElement("div", { className: "empty-icon" }, "🏥"),
+                                            React_createElement("div", { className: "empty-text" },
+                                                search ? "Nenhuma clínica encontrada para essa busca." : "Nenhum saldo de clínica encontrado. Importe a planilha de Clínicas Parceiras."
+                                            )
+                                        )
+                                    )
+                                )
+                                : filtered.map(e => {
+                                    const b = basesMap[e.base_id] || {};
+                                    const nomeClin = (b.nome || '—').replace(/^Clínica - /i, '').replace(/^Rede Credenciada - /i, '');
+                                    return React_createElement("tr", { key: e.id },
+                                        React_createElement("td", { style: { fontWeight: 600, maxWidth:220, overflow:'hidden', textOverflow:'ellipsis' } }, nomeClin),
+                                        React_createElement("td", { style: { fontSize: 11, color:'var(--text-muted)' } },
+                                            [b.cidade, b.uf].filter(Boolean).join(' / ') || '—'
+                                        ),
+                                        React_createElement("td", { style: { color:'var(--accent)', fontWeight:600 } }, e.vacinas?.nome || '—'),
+                                        React_createElement("td", { className: "mono", style: { fontSize:11 } }, e.vacinas?.lote || '—'),
+                                        React_createElement("td", { className: "mono", style: {
+                                            textAlign:'right', fontSize:15, fontWeight:800,
+                                            color: e.quantidade > 0 ? 'var(--success)' : e.quantidade < 0 ? 'var(--danger)' : 'var(--text-muted)'
+                                        } }, fmt(e.quantidade)),
+                                        React_createElement("td", null,
+                                            React_createElement("span", {
+                                                className: `badge ${e.quantidade > 0 ? 'badge-green' : e.quantidade < 0 ? 'badge-red' : 'badge-gray'}`
+                                            }, e.quantidade > 0 ? 'Com saldo' : e.quantidade < 0 ? 'Negativo' : 'Zerado')
+                                        )
+                                    );
+                                })
                         )
-                    ),
-                    estoque.length > 0 && React.createElement("div", {
-                        style: { marginTop:12, padding:'10px 14px', background:'var(--bg-input)', borderRadius:'var(--radius-sm)',
-                            fontSize:11, color:'var(--text-muted)', display:'flex', justifyContent:'space-between' }
-                    },
-                        React.createElement("span", null, estoque.length, " vacina(s) cadastrada(s)"),
-                        React.createElement("span", null, "Base: Rede Credenciada - Clínicas Parceiras")
                     )
+                ),
+                filtered.length > 0 && React_createElement("div", {
+                    style: { marginTop:12, padding:'10px 14px', background:'var(--bg-input)', borderRadius:'var(--radius-sm)',
+                        fontSize:11, color:'var(--text-muted)', display:'flex', justifyContent:'space-between' }
+                },
+                    React_createElement("span", null, filtered.length, " registro(s)  · ", Object.keys(basesMap).length, " clínica(s)"),
+                    React_createElement("span", null, "Total: ", fmt(totalDoses), " doses")
                 )
-        )
+            )
     );
 }
 
@@ -2155,7 +2182,7 @@ function BasesPage() {
     const toast = useContext(ToastContext);
     const load = async () => {
         setLoading(true);
-        const { data, error } = await sb.from('bases').select('*').not('nome', 'ilike', 'Clínica%').order('nome');
+        const { data, error } = await sb.from('bases').select('*').not('nome', 'ilike', 'Clínica%').not('nome', 'ilike', 'Rede Credenciada%').order('nome');
         if (error)
             toast(error.message, 'error');
         else
@@ -6378,29 +6405,36 @@ function EstoquePage() {
     const [conciliacaoVal, setConciliacaoVal] = useState('');
     const toast = useContext(ToastContext);
     const load = async () => {
-        // Fetch estoque + bases em paralelo (join embedded falha por RLS)
-        const [{ data, error }, { data: basesData }] = await Promise.all([
+        // Fetch estoque e bases em paralelo — bases separado evita problema de RLS no join
+        const [estoqueRes, basesRes] = await Promise.all([
             sb.from('estoque')
                 .select('*, vacinas(nome, lote), aplicadores(nome, cpf, cidade, uf)')
                 .order('localizacao_tipo'),
             sb.from('bases').select('id, nome, cidade, uf, ponto_partida')
         ]);
-        if (error) { toast(error.message, 'error'); return; }
-        // Mapa de bases por id
+        if (estoqueRes.error) { toast(estoqueRes.error.message, 'error'); return; }
+        const data = estoqueRes.data || [];
+        // Mapa de bases por id (inclui clínicas)
         const basesMap = {};
-        (basesData || []).forEach(b => { basesMap[b.id] = b; });
+        (basesRes.data || []).forEach(b => { basesMap[b.id] = b; });
+        // Set de base_ids que são clínicas (nome começa com Clínica ou Rede Credenciada)
+        const clinicaBaseIds = new Set(
+            (basesRes.data || [])
+                .filter(b => /^cl[ií]nica|rede credenciada/i.test(b.nome))
+                .map(b => b.id)
+        );
+        // Expõe globalmente para isClinicaEstoqueGlobal usar
+        window.__clinicaBaseIds = clinicaBaseIds;
         const map = {};
-        (data || []).forEach(row => {
-            // Injeta objeto bases via lookup se join retornou null
-            if (row.base_id && !row.bases && basesMap[row.base_id]) {
+        data.forEach(row => {
+            if (row.base_id && basesMap[row.base_id]) {
                 row.bases = basesMap[row.base_id];
             }
             const localId = row.base_id || row.aplicador_id || '';
             const key = `${row.localizacao_tipo}|${localId}|${row.vacina_id}`;
             if (!map[key]) {
                 map[key] = { ...row, _ids: [row.id] };
-            }
-            else {
+            } else {
                 map[key].quantidade += Number(row.quantidade || 0);
                 map[key]._ids.push(row.id);
             }
