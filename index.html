@@ -12946,6 +12946,7 @@ function PlaceholderPage({ title, icon, description }) {
 function MovimentacoesPage() {
     const [bases, setBases] = useState([]);
     const [aplicadores, setAplicadores] = useState([]);
+    const [tipoFiltro, setTipoFiltro] = useState(''); // 'base' | 'aplicador' | ''
     const [localSel, setLocalSel] = useState(null); // { tipo: 'base'|'aplicador', id, nome }
     const [vacinas, setVacinas] = useState([]);
     const [filtroVacina, setFiltroVacina] = useState('');
@@ -13192,27 +13193,32 @@ function MovimentacoesPage() {
                 localSel && extrato.length > 0 && (React.createElement("button", { className: "btn btn-primary", onClick: () => imprimirExtrato(localSel, extrato, saldoAtual, filtroVacina, vacinas) }, "\uD83D\uDDA8\uFE0F Imprimir PDF")))),
         React.createElement("div", { className: "card", style: { marginBottom: 16, padding: 14 } },
             React.createElement("div", { style: { display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end' } },
-                React.createElement("div", { className: "form-group", style: { marginBottom: 0, minWidth: 220 } },
-                    React.createElement("label", { className: "form-label" }, "Base ou Aplicador"),
-                    React.createElement("select", { className: "form-select", style: { padding: '6px 10px' }, value: localSel ? `${localSel.tipo}|${localSel.id}` : '', onChange: e => {
+                React.createElement("div", { className: "form-group", style: { marginBottom: 0, minWidth: 160 } },
+                    React.createElement("label", { className: "form-label" }, "Tipo de estoque"),
+                    React.createElement("select", { className: "form-select", style: { padding: '6px 10px' }, value: tipoFiltro, onChange: e => {
+                            setTipoFiltro(e.target.value);
+                            setLocalSel(null);
+                            setExtrato([]);
+                        } },
+                        React.createElement("option", { value: "" }, "Selecione..."),
+                        React.createElement("option", { value: "base" }, "\uD83C\uDFE2 Base"),
+                        React.createElement("option", { value: "aplicador" }, "\uD83D\uDC64 Aplicador"))),
+                tipoFiltro && React.createElement("div", { className: "form-group", style: { marginBottom: 0, minWidth: 240 } },
+                    React.createElement("label", { className: "form-label" }, tipoFiltro === 'base' ? 'Base' : 'Aplicador'),
+                    React.createElement("select", { className: "form-select", style: { padding: '6px 10px' }, value: localSel ? localSel.id : '', onChange: e => {
                             if (!e.target.value) {
                                 setLocalSel(null);
                                 setExtrato([]);
                                 return;
                             }
-                            const [tipo, id] = e.target.value.split('|');
-                            const lista = tipo === 'base' ? bases : aplicadores;
-                            const item = lista.find(x => x.id === id);
-                            setLocalSel({ tipo, id, nome: (item === null || item === void 0 ? void 0 : item.nome) || '' });
+                            const lista = tipoFiltro === 'base' ? bases : aplicadores;
+                            const item = lista.find(x => x.id === e.target.value);
+                            setLocalSel({ tipo: tipoFiltro, id: e.target.value, nome: (item === null || item === void 0 ? void 0 : item.nome) || '' });
                         } },
-                        React.createElement("option", { value: "" }, "Selecione..."),
-                        React.createElement("optgroup", { label: "\uD83C\uDFE2 Bases" }, bases.map(b => React.createElement("option", { key: b.id, value: `base|${b.id}` },
-                            b.nome,
-                            " \u2014 ",
-                            b.cidade,
-                            "/",
-                            b.uf))),
-                        React.createElement("optgroup", { label: "\uD83D\uDC64 Aplicadores" }, aplicadores.map(a => React.createElement("option", { key: a.id, value: `aplicador|${a.id}` }, a.nome))))),
+                        React.createElement("option", { value: "" }, tipoFiltro === 'base' ? 'Selecione a base...' : 'Selecione o aplicador...'),
+                        tipoFiltro === 'base'
+                            ? bases.map(b => React.createElement("option", { key: b.id, value: b.id }, b.nome + (b.cidade ? ' \u2014 ' + b.cidade + '/' + b.uf : '')))
+                            : aplicadores.map(a => React.createElement("option", { key: a.id, value: a.id }, a.nome)))),
                 React.createElement("div", { className: "form-group", style: { marginBottom: 0, minWidth: 180 } },
                     React.createElement("label", { className: "form-label" }, "Vacina"),
                     React.createElement("select", { className: "form-select", style: { padding: '6px 10px' }, value: filtroVacina, onChange: e => setFiltroVacina(e.target.value) },
