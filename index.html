@@ -11941,7 +11941,7 @@ function RotaTransferenciaPage() {
         // ── ACOMPANHAR ──
         abaAtiva === 'acompanhar' && React.createElement('div', null,
             loadingRotas
-                ? React.createElement(LoadingSpinner, null)
+                ? React.createElement('div', { style: { padding: 40, textAlign: 'center', color: 'var(--text-muted)' } }, 'Carregando...')
                 : rotas.length === 0
                     ? React.createElement('div', { className: 'empty-state' },
                         React.createElement('div', { style: { fontSize: 40 } }, '🔄'),
