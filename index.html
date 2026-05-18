@@ -940,6 +940,7 @@ function DashboardPage({ onNavigate }) {
     const [modalData, setModalData] = useState([]);
     const [modalLoading, setModalLoading] = useState(false);
     const [filtroVacinaModal, setFiltroVacinaModal] = useState('');
+    const [filtroTipoModal, setFiltroTipoModal] = useState('');
     const [weekData, setWeekData] = useState([]);
     const [weekModal, setWeekModal] = useState(null);
     const [apFilters, setApFilters] = useState({ ponto: '', uf: '', cidade: '', nome: '' });
@@ -1002,7 +1003,7 @@ function DashboardPage({ onNavigate }) {
         const pageSize = 1000;
         for (let from = 0;; from += pageSize) {
             const { data, error } = await sb.from('estoque')
-                .select('quantidade, localizacao_tipo')
+                .select('quantidade, localizacao_tipo, base_id')
                 .range(from, from + pageSize - 1);
             if (error)
                 throw error;
@@ -1030,14 +1031,13 @@ function DashboardPage({ onNavigate }) {
     const calcularResumoDoses = (estoqueRows, remessaItensRows) => {
         const resumo = { base: 0, clinica: 0, aplicador: 0, transito: 0, total: 0 };
         (estoqueRows || []).forEach(r => {
-            const tipo = String(r.localizacao_tipo || '').toLowerCase();
             const qtd = Number(r.quantidade || 0);
-            if (tipo === 'base')
-                resumo.base += qtd;
-            else if (tipo === 'aplicador')
+            if (r.localizacao_tipo === 'aplicador') {
                 resumo.aplicador += qtd;
-            else if (['clinica', 'clínica', 'clinicas', 'clínicas'].includes(tipo))
-                resumo.clinica += qtd;
+            } else if (r.localizacao_tipo === 'base') {
+                if (isClinicaEstoqueGlobal(r)) resumo.clinica += qtd;
+                else resumo.base += qtd;
+            }
         });
         const statusTransito = ['montagem', 'pronta', 'carregada', 'em_transito', 'em trânsito', 'em rota', 'roteirizada', 'roteirizado'];
         (remessaItensRows || []).forEach(r => {
@@ -1053,9 +1053,10 @@ function DashboardPage({ onNavigate }) {
         setModal('estoque_total');
         setModalLoading(true);
         setFiltroVacinaModal('');
+        setFiltroTipoModal('');
         try {
             const { data } = await sb.from('estoque')
-                .select('quantidade, localizacao_tipo, bases(nome, cidade, uf), vacinas(nome, lote), aplicadores(nome, cidade, uf)')
+                .select('quantidade, localizacao_tipo, base_id, bases(nome, cidade, uf), vacinas(nome, lote), aplicadores(nome, cidade, uf)')
                 .neq('quantidade', 0)
                 .order('localizacao_tipo');
             // Agrupar por tipo
@@ -1063,7 +1064,8 @@ function DashboardPage({ onNavigate }) {
             const totais = { base: 0, aplicador: 0, clinica: 0 };
             (data || []).forEach(r => {
                 var _a, _b, _c, _d, _e, _f, _g, _h;
-                const tipo = r.localizacao_tipo || 'base';
+                const isClinica = isClinicaEstoqueGlobal(r);
+                const tipo = r.localizacao_tipo === 'aplicador' ? 'aplicador' : isClinica ? 'clinica' : 'base';
                 const entry = {
                     local: tipo === 'base' ? (((_a = r.bases) === null || _a === void 0 ? void 0 : _a.nome) || '—') : (((_b = r.aplicadores) === null || _b === void 0 ? void 0 : _b.nome) || '—'),
                     cidade: tipo === 'base' ? (((_c = r.bases) === null || _c === void 0 ? void 0 : _c.cidade) || '') : (((_d = r.aplicadores) === null || _d === void 0 ? void 0 : _d.cidade) || ''),
@@ -1537,10 +1539,10 @@ function DashboardPage({ onNavigate }) {
                         React.createElement("div", { style: { fontSize: 12, color: 'var(--text-muted)', fontWeight: 600 } }, "Filtrar por vacina:"),
                         todasVacinas.map(v => (React.createElement("button", { key: v, onClick: () => setFiltroVacinaModal(filtroVacinaModal === v ? '' : v), className: `btn btn-sm ${filtroVacinaModal === v ? 'btn-primary' : 'btn-secondary'}`, style: { fontSize: 11 } }, v))),
                         filtroVacinaModal && React.createElement("button", { className: "btn btn-secondary btn-sm", style: { fontSize: 11 }, onClick: () => setFiltroVacinaModal('') }, "\u2715 Todos")),
-                    React.createElement("div", { style: { display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 10, marginBottom: 16 } }, tabs.map(t => (React.createElement("div", { key: t.key, className: "stat-card", style: { borderColor: t.cor } },
-                        React.createElement("div", { className: "stat-label" }, t.label),
+                    React.createElement("div", { style: { display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 10, marginBottom: 16 } }, tabs.map(t => (React.createElement("div", { key: t.key, className: "stat-card", onClick: () => setFiltroTipoModal(filtroTipoModal === t.key ? '' : t.key), style: { borderColor: filtroTipoModal === t.key ? t.cor : 'var(--border)', cursor: 'pointer', boxShadow: filtroTipoModal === t.key ? `0 0 0 2px ${t.cor}40` : 'none', transform: filtroTipoModal === t.key ? 'scale(1.02)' : 'none', transition: 'all .15s' } },
+                        React.createElement("div", { className: "stat-label" }, t.label, filtroTipoModal === t.key ? ' ✓' : ''),
                         React.createElement("div", { className: "stat-value", style: { color: t.cor } }, totalFiltrado(t.key).toLocaleString('pt-BR')))))),
-                    tabs.map(t => filtrar(grupos[t.key]).length > 0 && (React.createElement("div", { key: t.key, style: { marginBottom: 16 } },
+                    tabs.filter(t => !filtroTipoModal || t.key === filtroTipoModal).map(t => filtrar(grupos[t.key]).length > 0 && (React.createElement("div", { key: t.key, style: { marginBottom: 16 } },
                         React.createElement("div", { style: { fontSize: 13, fontWeight: 600, color: t.cor, marginBottom: 6 } },
                             t.label,
                             " \u2014 ",
@@ -6519,10 +6521,9 @@ function EstoquePage() {
         var _a;
         if (filterVacina && ((_a = i.vacinas) === null || _a === void 0 ? void 0 : _a.nome) !== filterVacina)
             return false;
-        if (filterTipo === 'clinica' && !isClinicaEstoque(i))
-            return false;
-        if (filterTipo && filterTipo !== 'clinica' && i.localizacao_tipo !== filterTipo)
-            return false;
+        if (filterTipo === 'clinica' && !isClinicaEstoque(i)) return false;
+        if (filterTipo === 'base' && (i.localizacao_tipo !== 'base' || isClinicaEstoque(i))) return false;
+        if (filterTipo === 'aplicador' && i.localizacao_tipo !== 'aplicador') return false;
         if (filterPonto) {
             const loc = getEstoqueCidadeUf(i);
             if (getPontoPartidaByCidade(loc.cidade, loc.uf) !== filterPonto)
