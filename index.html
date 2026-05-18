@@ -12247,6 +12247,7 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
     const [checkinModal, setCheckinModal] = useState(false);
     const [assinaturaModal, setAssinaturaModal] = useState(null);
     const [problemaModal, setProblemaModal] = useState(null); // rem ou null
+    const [rotaColetaAberta, setRotaColetaAberta] = useState(false);
     const [assinaturaColetaModal, setAssinaturaColetaModal] = useState(null); // para coleta
     const [entregaDetalhe, setEntregaDetalhe] = useState(null);
     const [rotaColeta, setRotaColeta] = useState(null); // rota de coleta vinculada
@@ -12572,8 +12573,8 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
         return doses > 0 || r.status === 'concluida' || r.status === 'cancelada';
     });
     const totalDoses = remessas.reduce((s, r) => s + (r.remessa_itens || []).reduce((ss, i) => ss + i.quantidade, 0), 0);
-    const entregues = remessas.filter(r => r.status === 'concluida').length;
-    const pendentes = remessas.filter(r => !['concluida', 'cancelada'].includes(r.status)).length;
+    const entregues = remessas.filter(r => r.status === 'concluida' || (r.tipo === 'coleta' && r.status === 'em_transito')).length;
+    const pendentes = remessas.filter(r => !['concluida', 'cancelada'].includes(r.status) && !(r.tipo === 'coleta' && r.status === 'em_transito')).length;
     const progresso = remessas.length > 0 ? (entregues / remessas.length * 100) : 0;
     const todasEntregues = remessas.length > 0 && pendentes === 0;
     // Formatação de data/hora
@@ -12789,9 +12790,10 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
                 load();
             }, onClose: () => setAssinaturaColetaModal(null) })),
         remessasColeta.length > 0 && (React.createElement("div", { style: { marginTop: 24 } },
-            React.createElement("div", { style: { fontSize: 12, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 } },
+            React.createElement("div", { style: { fontSize: 12, fontWeight: 700, color: 'var(--accent)', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8 }, onClick: () => setRotaColetaAberta(true) },
                 "\u21A9 Coleta vinculada \u2014 ", rotaColeta === null || rotaColeta === void 0 ? void 0 :
-                rotaColeta.codigo),
+                rotaColeta.codigo,
+                React.createElement("span", { style: { fontSize: 11, padding: '2px 8px', background: 'var(--accent)', color: '#fff', borderRadius: 4 } }, "Abrir \u2192")),
             React.createElement("div", { style: { display: 'flex', flexDirection: 'column', gap: 10 } }, remessasColeta.map(rem => {
                 const ap = rem.aplicadores;
                 const doses = (rem.remessa_itens || []).reduce((s, it) => s + Number(it.quantidade || 0), 0);
