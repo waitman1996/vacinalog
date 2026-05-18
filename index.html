@@ -12945,9 +12945,10 @@ function PlaceholderPage({ title, icon, description }) {
 // ═══════════════════════════════════════════════
 function MovimentacoesPage() {
     const [bases, setBases] = useState([]);
+    const [clinicas, setClinicas] = useState([]);
     const [aplicadores, setAplicadores] = useState([]);
-    const [tipoFiltro, setTipoFiltro] = useState(''); // 'base' | 'aplicador' | ''
-    const [localSel, setLocalSel] = useState(null); // { tipo: 'base'|'aplicador', id, nome }
+    const [tipoFiltro, setTipoFiltro] = useState(''); // 'base' | 'clinica' | 'aplicador' | ''
+    const [localSel, setLocalSel] = useState(null); // { tipo: 'base'|'clinica'|'aplicador', id, nome }
     const [vacinas, setVacinas] = useState([]);
     const [filtroVacina, setFiltroVacina] = useState('');
     const [extrato, setExtrato] = useState([]);
@@ -12968,15 +12969,16 @@ function MovimentacoesPage() {
             const destinoTipo = tiposValidos.includes(mov.destino_tipo) ? mov.destino_tipo : null;
             // Para estorno: se era entrada (local = destino) → estorno é saída (local = origem)
             //               se era saída (local = origem) → estorno é entrada (local = destino)
+            const localTipoDB = (localSel.tipo === 'clinica') ? 'base' : localSel.tipo; // clinica usa base_id no banco
             let estornoOrigemTipo, estornoOrigemBaseId, estornoOrigemApId;
             let estornoDestinoTipo, estornoDestinoBaseId, estornoDestinoApId;
             if (mov.direcao === 'entrada') {
                 // Estorno de entrada = saída do local para lugar nenhum (ajuste)
                 estornoOrigemTipo = localSel.tipo;
-                estornoOrigemBaseId = localSel.tipo === 'base' ? localSel.id : null;
+                estornoOrigemBaseId = (localSel.tipo === 'base' || localSel.tipo === 'clinica') ? localSel.id : null;
                 estornoOrigemApId = localSel.tipo === 'aplicador' ? localSel.id : null;
                 estornoDestinoTipo = localSel.tipo;
-                estornoDestinoBaseId = localSel.tipo === 'base' ? localSel.id : null;
+                estornoDestinoBaseId = (localSel.tipo === 'base' || localSel.tipo === 'clinica') ? localSel.id : null;
                 estornoDestinoApId = localSel.tipo === 'aplicador' ? localSel.id : null;
             }
             else {
@@ -12985,7 +12987,7 @@ function MovimentacoesPage() {
                 estornoOrigemBaseId = mov.destino_base_id || null;
                 estornoOrigemApId = mov.destino_aplicador_id || null;
                 estornoDestinoTipo = localSel.tipo;
-                estornoDestinoBaseId = localSel.tipo === 'base' ? localSel.id : null;
+                estornoDestinoBaseId = (localSel.tipo === 'base' || localSel.tipo === 'clinica') ? localSel.id : null;
                 estornoDestinoApId = localSel.tipo === 'aplicador' ? localSel.id : null;
             }
             const { error } = await sb.from('movimentacoes').insert({
@@ -13010,17 +13012,7 @@ function MovimentacoesPage() {
             // Lógica simples: se era entrada no local selecionado → debitar; se era saída → creditar
             const ajustarEstoque = async (delta) => {
                 // delta = -N para debitar, +N para creditar
-                if (localSel.tipo === 'base') {
-                    const { data: rows } = await sb.from('estoque').select('id,quantidade')
-                        .eq('vacina_id', mov.vacina_id).eq('base_id', localSel.id).eq('localizacao_tipo', 'base');
-                    if (rows === null || rows === void 0 ? void 0 : rows.length) {
-                        await sb.from('estoque').update({ quantidade: rows[0].quantidade + delta }).eq('id', rows[0].id);
-                    }
-                    else if (delta > 0) {
-                        await sb.from('estoque').insert({ vacina_id: mov.vacina_id, base_id: localSel.id, localizacao_tipo: 'base', quantidade: delta });
-                    }
-                }
-                else {
+                if (localSel.tipo === 'aplicador') {
                     const { data: rows } = await sb.from('estoque').select('id,quantidade')
                         .eq('vacina_id', mov.vacina_id).eq('aplicador_id', localSel.id).eq('localizacao_tipo', 'aplicador');
                     if (rows === null || rows === void 0 ? void 0 : rows.length) {
@@ -13028,6 +13020,18 @@ function MovimentacoesPage() {
                     }
                     else if (delta > 0) {
                         await sb.from('estoque').insert({ vacina_id: mov.vacina_id, aplicador_id: localSel.id, localizacao_tipo: 'aplicador', quantidade: delta });
+                    }
+                }
+                else {
+                    // base ou clinica — ambas usam base_id, localizacao_tipo diferente
+                    const locTipo = localSel.tipo === 'clinica' ? 'clinica' : 'base';
+                    const { data: rows } = await sb.from('estoque').select('id,quantidade')
+                        .eq('vacina_id', mov.vacina_id).eq('base_id', localSel.id).eq('localizacao_tipo', locTipo);
+                    if (rows === null || rows === void 0 ? void 0 : rows.length) {
+                        await sb.from('estoque').update({ quantidade: rows[0].quantidade + delta }).eq('id', rows[0].id);
+                    }
+                    else if (delta > 0) {
+                        await sb.from('estoque').insert({ vacina_id: mov.vacina_id, base_id: localSel.id, localizacao_tipo: locTipo, quantidade: delta });
                     }
                 }
             };
@@ -13047,11 +13051,13 @@ function MovimentacoesPage() {
     };
     useEffect(() => {
         Promise.all([
-            sb.from('bases').select('id, nome, cidade, uf').order('nome'),
+            sb.from('bases').select('id, nome, cidade, uf').not('nome','ilike','Cl%nica%').not('nome','ilike','Rede Credenciada%').order('nome'),
+            sb.from('bases').select('id, nome, cidade, uf').or("nome.ilike.Cl%nica%,nome.ilike.Rede Credenciada%").order('nome'),
             sb.from('aplicadores').select('id, nome, cpf, cidade, uf').order('nome'),
             sb.from('vacinas').select('id, nome').order('nome'),
-        ]).then(([b, a, v]) => {
+        ]).then(([b, c, a, v]) => {
             setBases(b.data || []);
+            setClinicas(c.data || []);
             setAplicadores(a.data || []);
             setVacinas(v.data || []);
         });
@@ -13061,12 +13067,14 @@ function MovimentacoesPage() {
             return;
         setLoading(true);
         setExtrato([]);
-        const campo_origem = local.tipo === 'base' ? 'origem_base_id' : 'origem_aplicador_id';
-        const campo_destino = local.tipo === 'base' ? 'destino_base_id' : 'destino_aplicador_id';
+        const campo_origem = (local.tipo === 'base' || local.tipo === 'clinica') ? 'origem_base_id' : 'origem_aplicador_id';
+        const campo_destino = (local.tipo === 'base' || local.tipo === 'clinica') ? 'destino_base_id' : 'destino_aplicador_id';
         // Buscar saldo real do banco (fonte da verdade)
-        let estoqueQ = local.tipo === 'base'
-            ? sb.from('estoque').select('quantidade, vacinas(nome)').eq('base_id', local.id).eq('localizacao_tipo', 'base')
-            : sb.from('estoque').select('quantidade, vacinas(nome)').eq('aplicador_id', local.id).eq('localizacao_tipo', 'aplicador');
+        let estoqueQ = local.tipo === 'aplicador'
+            ? sb.from('estoque').select('quantidade, vacinas(nome)').eq('aplicador_id', local.id).eq('localizacao_tipo', 'aplicador')
+            : local.tipo === 'clinica'
+                ? sb.from('estoque').select('quantidade, vacinas(nome)').eq('base_id', local.id).eq('localizacao_tipo', 'clinica')
+                : sb.from('estoque').select('quantidade, vacinas(nome)').eq('base_id', local.id).eq('localizacao_tipo', 'base');
         if (vacinaId)
             estoqueQ = estoqueQ.eq('vacina_id', vacinaId);
         const { data: estoqueRows } = await estoqueQ;
@@ -13202,23 +13210,26 @@ function MovimentacoesPage() {
                         } },
                         React.createElement("option", { value: "" }, "Selecione..."),
                         React.createElement("option", { value: "base" }, "\uD83C\uDFE2 Base"),
+                        React.createElement("option", { value: "clinica" }, "\uD83C\uDFE5 Cl\u00EDnica"),
                         React.createElement("option", { value: "aplicador" }, "\uD83D\uDC64 Aplicador"))),
                 tipoFiltro && React.createElement("div", { className: "form-group", style: { marginBottom: 0, minWidth: 240 } },
-                    React.createElement("label", { className: "form-label" }, tipoFiltro === 'base' ? 'Base' : 'Aplicador'),
+                    React.createElement("label", { className: "form-label" }, tipoFiltro === 'base' ? 'Base' : tipoFiltro === 'clinica' ? 'Clínica' : 'Aplicador'),
                     React.createElement("select", { className: "form-select", style: { padding: '6px 10px' }, value: localSel ? localSel.id : '', onChange: e => {
                             if (!e.target.value) {
                                 setLocalSel(null);
                                 setExtrato([]);
                                 return;
                             }
-                            const lista = tipoFiltro === 'base' ? bases : aplicadores;
+                            const lista = tipoFiltro === 'base' ? bases : tipoFiltro === 'clinica' ? clinicas : aplicadores;
                             const item = lista.find(x => x.id === e.target.value);
                             setLocalSel({ tipo: tipoFiltro, id: e.target.value, nome: (item === null || item === void 0 ? void 0 : item.nome) || '' });
                         } },
-                        React.createElement("option", { value: "" }, tipoFiltro === 'base' ? 'Selecione a base...' : 'Selecione o aplicador...'),
+                        React.createElement("option", { value: "" }, tipoFiltro === 'base' ? 'Selecione a base...' : tipoFiltro === 'clinica' ? 'Selecione a clínica...' : 'Selecione o aplicador...'),
                         tipoFiltro === 'base'
                             ? bases.map(b => React.createElement("option", { key: b.id, value: b.id }, b.nome + (b.cidade ? ' \u2014 ' + b.cidade + '/' + b.uf : '')))
-                            : aplicadores.map(a => React.createElement("option", { key: a.id, value: a.id }, a.nome)))),
+                            : tipoFiltro === 'clinica'
+                                ? clinicas.map(c => React.createElement("option", { key: c.id, value: c.id }, c.nome + (c.cidade ? ' \u2014 ' + c.cidade + '/' + c.uf : '')))
+                                : aplicadores.map(a => React.createElement("option", { key: a.id, value: a.id }, a.nome)))),
                 React.createElement("div", { className: "form-group", style: { marginBottom: 0, minWidth: 180 } },
                     React.createElement("label", { className: "form-label" }, "Vacina"),
                     React.createElement("select", { className: "form-select", style: { padding: '6px 10px' }, value: filtroVacina, onChange: e => setFiltroVacina(e.target.value) },
