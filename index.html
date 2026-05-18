@@ -6271,15 +6271,23 @@ function EstoquePage() {
     const [conciliacaoVal, setConciliacaoVal] = useState('');
     const toast = useContext(ToastContext);
     const load = async () => {
-        const { data, error } = await sb.from('estoque')
-            .select('*, vacinas(nome, lote), bases(nome, cidade, uf), aplicadores(nome, cpf, cidade, uf)')
-            .order('localizacao_tipo');
-        if (error) {
-            toast(error.message, 'error');
-            return;
-        }
+        // Fetch estoque + bases em paralelo (join embedded falha por RLS)
+        const [{ data, error }, { data: basesData }] = await Promise.all([
+            sb.from('estoque')
+                .select('*, vacinas(nome, lote), aplicadores(nome, cpf, cidade, uf)')
+                .order('localizacao_tipo'),
+            sb.from('bases').select('id, nome, cidade, uf, ponto_partida')
+        ]);
+        if (error) { toast(error.message, 'error'); return; }
+        // Mapa de bases por id
+        const basesMap = {};
+        (basesData || []).forEach(b => { basesMap[b.id] = b; });
         const map = {};
         (data || []).forEach(row => {
+            // Injeta objeto bases via lookup se join retornou null
+            if (row.base_id && !row.bases && basesMap[row.base_id]) {
+                row.bases = basesMap[row.base_id];
+            }
             const localId = row.base_id || row.aplicador_id || '';
             const key = `${row.localizacao_tipo}|${localId}|${row.vacina_id}`;
             if (!map[key]) {
