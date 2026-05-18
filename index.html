@@ -11705,6 +11705,57 @@ async function transferirEstoqueDireto({ vacina_id, quantidade, origem_base_id, 
         return false;
     }
 }
+// ── Modal de Problema na Entrega ──
+function ProblemaEntregaModal({ rem, onConfirm, onClose }) {
+    const [motivo, setMotivo] = React.useState('recusa');
+    const [obs, setObs] = React.useState('');
+    const [loading, setLoading] = React.useState(false);
+    const motivos = [
+        { value: 'recusa', label: '🚫 Destinatário recusou o recebimento' },
+        { value: 'ausente', label: '🔔 Destinatário ausente' },
+        { value: 'endereco', label: '📍 Endereço não encontrado' },
+        { value: 'reagendamento', label: '📅 Solicitou reagendamento' },
+        { value: 'outro', label: '✏️ Outro motivo' },
+    ];
+    const nomeExibir = rem.destino_tipo === 'aplicador'
+        ? rem.aplicadores?.nome
+        : rem.bases?.nome;
+    const handleConfirm = async () => {
+        if (motivo === 'outro' && !obs.trim()) return;
+        setLoading(true);
+        await onConfirm(rem, motivo, obs.trim());
+        setLoading(false);
+    };
+    return React.createElement('div', { style: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 } },
+        React.createElement('div', { style: { background: 'var(--bg-card)', borderRadius: 'var(--radius)', padding: 24, width: '100%', maxWidth: 440, border: '1px solid rgba(239,68,68,0.3)' } },
+            React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 } },
+                React.createElement('div', { style: { fontSize: 16, fontWeight: 700, color: 'var(--danger)' } }, '⚠️ Registrar Problema na Entrega'),
+                React.createElement('button', { className: 'btn btn-secondary btn-sm', onClick: onClose }, '✕')),
+            React.createElement('div', { style: { padding: '10px 14px', background: 'var(--bg-input)', borderRadius: 'var(--radius-sm)', marginBottom: 16, fontSize: 13 } },
+                React.createElement('div', { style: { color: 'var(--text-muted)', fontSize: 11, marginBottom: 2 } }, 'DESTINATÁRIO'),
+                React.createElement('div', { style: { fontWeight: 600 } }, nomeExibir || rem.codigo_rastreio)),
+            React.createElement('div', { style: { marginBottom: 14 } },
+                React.createElement('div', { style: { fontSize: 12, fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: 8 } }, 'Motivo da não entrega'),
+                motivos.map(m =>
+                    React.createElement('label', { key: m.value, style: { display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px', borderRadius: 'var(--radius-sm)', marginBottom: 6, cursor: 'pointer', background: motivo === m.value ? 'rgba(239,68,68,0.1)' : 'var(--bg-input)', border: `1px solid ${motivo === m.value ? 'rgba(239,68,68,0.4)' : 'var(--border)'}`, fontSize: 13, transition: 'all 0.15s' } },
+                        React.createElement('input', { type: 'radio', name: 'motivo', value: m.value, checked: motivo === m.value, onChange: () => setMotivo(m.value), style: { accentColor: 'var(--danger)' } }),
+                        m.label))),
+            (motivo === 'outro' || motivo === 'ausente' || motivo === 'reagendamento') &&
+                React.createElement('div', { style: { marginBottom: 14 } },
+                    React.createElement('label', { style: { fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 6 } }, motivo === 'outro' ? 'Descreva o problema *' : 'Observação adicional (opcional)'),
+                    React.createElement('textarea', { className: 'form-input', rows: 3, style: { resize: 'vertical', fontFamily: 'inherit' }, placeholder: motivo === 'outro' ? 'Descreva o que aconteceu...' : 'Detalhes adicionais...', value: obs, onChange: e => setObs(e.target.value) })),
+            React.createElement('div', { style: { padding: '10px 14px', background: 'rgba(239,68,68,0.08)', borderRadius: 'var(--radius-sm)', marginBottom: 16, fontSize: 12, color: 'var(--danger)' } },
+                '⚠️ A entrega será marcada como ',
+                React.createElement('strong', null, 'Não Realizada'),
+                ' e a rota poderá ser finalizada normalmente. O estoque ',
+                React.createElement('strong', null, 'não será debitado'),
+                ' desta remessa.'),
+            React.createElement('div', { style: { display: 'flex', gap: 10 } },
+                React.createElement('button', { className: 'btn btn-secondary', style: { flex: 1 }, onClick: onClose }, 'Cancelar'),
+                React.createElement('button', { className: 'btn btn-danger', style: { flex: 2 }, onClick: handleConfirm, disabled: loading || (motivo === 'outro' && !obs.trim()) },
+                    loading ? 'Registrando...' : '✓ Confirmar Não Entrega'))));
+}
+
 // ── Modal de Detalhes da Entrega (assinatura, local, nome, cpf) ──
 function EntregaDetalheModal({ remessa, rota, onClose }) {
     var _a, _b, _c, _d, _e, _f, _g, _h;
@@ -12163,6 +12214,7 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
     const [checkoutModal, setCheckoutModal] = useState(false);
     const [checkinModal, setCheckinModal] = useState(false);
     const [assinaturaModal, setAssinaturaModal] = useState(null);
+    const [problemaModal, setProblemaModal] = useState(null); // rem ou null
     const [assinaturaColetaModal, setAssinaturaColetaModal] = useState(null); // para coleta
     const [entregaDetalhe, setEntregaDetalhe] = useState(null);
     const [rotaColeta, setRotaColeta] = useState(null); // rota de coleta vinculada
@@ -12423,6 +12475,30 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
         }
     };
     const fazerCheckout = fazerCheckoutComTracking;
+    const confirmarProblema = async (rem, motivo, obs) => {
+        const motivoLabel = {
+            'recusa': 'Destinatário recusou o recebimento',
+            'ausente': 'Destinatário ausente',
+            'endereco': 'Endereço não encontrado',
+            'reagendamento': 'Solicitou reagendamento',
+            'outro': obs || 'Outro motivo'
+        }[motivo] || motivo;
+        const obsFinal = (rem.observacao || '') + '\n[NÃO ENTREGUE ' + new Date().toLocaleTimeString('pt-BR') + '] ' + motivoLabel + (obs && motivo !== 'outro' ? ' — ' + obs : '');
+        const { error } = await sb.from('remessas').update({ status: 'cancelada', observacao: obsFinal }).eq('id', rem.id);
+        if (error) { toast(error.message, 'error'); return; }
+        // Atualizar status_logistica da tarefa para 'nao_entregue' (se existir, senão fica como está)
+        try {
+            const { data: escalas } = await sb.from('escalas').select('tarefa_id').eq('aplicador_id', rem.destino_aplicador_id).not('tarefa_id', 'is', null);
+            const ids = [...new Set((escalas || []).map(e => e.tarefa_id).filter(Boolean))];
+            if (ids.length > 0) await sb.from('tarefas').update({ status_logistica: 'nao_roteirizado' }).in('id', ids);
+        } catch(e) { console.warn(e); }
+        toast('Entrega marcada como não realizada. A remessa foi cancelada.', 'success');
+        setProblemaModal(null);
+        load();
+        const { data } = await sb.from('remessas').select('status').eq('rota_id', rota.id);
+        const allDone = (data || []).every(r => ['concluida', 'cancelada'].includes(r.status));
+        if (allDone) toast('Todas as paradas finalizadas! Faça o check-out quando chegar na empresa.', 'success');
+    };
     const reportarProblema = async (remId, problema) => {
         var _a;
         const obs = (((_a = remessas.find(r => r.id === remId)) === null || _a === void 0 ? void 0 : _a.observacao) || '') + '\n[PROBLEMA ' + new Date().toLocaleTimeString('pt-BR') + '] ' + problema;
@@ -12602,10 +12678,10 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
                 React.createElement("div", { style: { display: 'flex', gap: 12, alignItems: 'flex-start' } },
                     React.createElement("div", { style: {
                             width: 36, height: 36, borderRadius: '50%', flexShrink: 0,
-                            background: isConcluida ? 'var(--success)' : 'var(--accent)',
+                            background: isConcluida ? 'var(--success)' : isCancelada ? 'var(--danger)' : 'var(--accent)',
                             color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center',
                             fontWeight: 700, fontSize: 16
-                        } }, isConcluida ? '✓' : rem.ordem_entrega),
+                        } }, isConcluida ? '✓' : isCancelada ? '✕' : rem.ordem_entrega),
                     React.createElement("div", { style: { flex: 1, minWidth: 0 } },
                         React.createElement("div", { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 6, marginBottom: 6 } },
                             React.createElement("div", null,
@@ -12636,18 +12712,18 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
                         }))),
                         !isConcluida && !isCancelada && rota.status === 'em_transito' && (React.createElement("div", { style: { display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 4 } },
                             React.createElement("button", { className: "btn btn-success btn-sm", onClick: () => setAssinaturaModal(rem) }, "\u2713 Confirmar Entrega"),
-                            React.createElement("button", { className: "btn btn-secondary btn-sm", onClick: () => {
-                                    const p = prompt('Descreva o problema:');
-                                    if (p)
-                                        reportarProblema(rem.id, p);
-                                } }, "\u26A0 Problema"),
+                            React.createElement("button", { className: "btn btn-warning btn-sm", onClick: () => setProblemaModal(rem) }, "\u26A0\uFE0F Problema"),
                             React.createElement("button", { className: "btn btn-secondary btn-sm", onClick: () => abrirMaps(endExibir, destCidade) }, "\uD83D\uDDFA Abrir Maps"))),
                         (isConcluida || rota.status !== 'em_transito') && (endExibir || destCidade) && (React.createElement("button", { className: "btn btn-secondary btn-sm", style: { marginTop: 4 }, onClick: () => abrirMaps(endExibir, destCidade) }, "\uD83D\uDDFA Abrir Maps")),
                         isConcluida && (React.createElement("button", { className: "btn btn-secondary btn-sm", style: { marginTop: 4 }, onClick: () => setEntregaDetalhe(rem) }, "\uD83D\uDCCB Ver Entrega")),
+                        isCancelada && (React.createElement("div", { style: { marginTop: 8, padding: '10px 14px', background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 'var(--radius-sm)', fontSize: 12 } },
+                            React.createElement("div", { style: { fontWeight: 700, color: 'var(--danger)', marginBottom: 4 } }, "\u274C N\u00E3o entregue"),
+                            React.createElement("div", { style: { color: 'var(--text-secondary)', fontSize: 11 } }, (rem.observacao || '').split('\n').filter(l => l.includes('[N\u00C3O ENTREGUE')).map(l => l.replace(/\[N\u00C3O ENTREGUE [^\]]*\]\s*/, '')).join(' | ') || 'Motivo registrado'))),
                         rem.observacao && rem.observacao.includes('[PROBLEMA') && (React.createElement("div", { style: { marginTop: 8, padding: '6px 10px', background: 'var(--danger-bg)', borderRadius: 'var(--radius-sm)', fontSize: 11, color: 'var(--danger)' } }, rem.observacao.split('\n').filter(l => l.includes('[PROBLEMA')).join(' | ')))))));
         })),
         entregaDetalhe && (React.createElement(EntregaDetalheModal, { remessa: entregaDetalhe, rota: rota, onClose: () => setEntregaDetalhe(null) })),
         assinaturaModal && (React.createElement(AssinaturaEntregaModal, { remessa: assinaturaModal, rota: rota, onConfirm: async (remId) => { setAssinaturaModal(null); await confirmarEntrega(remId); }, onClose: () => setAssinaturaModal(null) })),
+        problemaModal && React.createElement(ProblemaEntregaModal, { rem: problemaModal, onConfirm: confirmarProblema, onClose: () => setProblemaModal(null) }),
         assinaturaColetaModal && (React.createElement(AssinaturaColetaModal, { remessa: assinaturaColetaModal, rota: rotaColeta, onConfirm: async (remId, qtdDevolvida, sigInfo) => {
                 setAssinaturaColetaModal(null);
                 // Motorista coletou — salva assinatura + qtd_devolvida
