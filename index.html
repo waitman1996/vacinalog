@@ -6271,26 +6271,15 @@ function EstoquePage() {
     const [conciliacaoVal, setConciliacaoVal] = useState('');
     const toast = useContext(ToastContext);
     const load = async () => {
-      // Load estoque and bases separately to avoid RLS join issues on bases
-        const [estoqueRes, basesRes] = await Promise.all([
-            sb.from('estoque').select('*, vacinas(nome, lote), aplicadores(nome, cpf, cidade, uf)').order('localizacao_tipo'),
-            sb.from('bases').select('id, nome, cidade, uf').or('nome.ilike.*Rede Credenciada*,nome.ilike.*línica*,nome.ilike.*linica*')
-        ]);
-        const { data, error } = estoqueRes;
-        const basesLookup = {};
-        (basesRes.data || []).forEach(b => { basesLookup[b.id] = b; });
-
+        const { data, error } = await sb.from('estoque')
+            .select('*, vacinas(nome, lote), bases(nome, cidade, uf), aplicadores(nome, cpf, cidade, uf)')
+            .order('localizacao_tipo');
         if (error) {
             toast(error.message, 'error');
             return;
         }
-        // Consolidar registros duplicados: agrupar por tipo + local + vacina
         const map = {};
         (data || []).forEach(row => {
-            // Merge base via lookup (bypasses RLS join issue)
-            if (row.base_id && basesLookup[row.base_id]) {
-                row.bases = basesLookup[row.base_id];
-            }
             const localId = row.base_id || row.aplicador_id || '';
             const key = `${row.localizacao_tipo}|${localId}|${row.vacina_id}`;
             if (!map[key]) {
@@ -6301,11 +6290,8 @@ function EstoquePage() {
                 map[key]._ids.push(row.id);
             }
         });
-        // Filtrar zeros após consolidação
         const consolidated = Object.values(map).filter(i => i.quantidade !== 0);
-
         setItems(consolidated);
-
     };
     useEffect(() => {
         load();
