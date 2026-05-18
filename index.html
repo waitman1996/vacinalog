@@ -12428,6 +12428,13 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
                     'Aplicador: ' + (((_a = rem.aplicadores) === null || _a === void 0 ? void 0 : _a.nome) || destId),
                     ((_b = item.vacinas) === null || _b === void 0 ? void 0 : _b.nome) ? 'Vacina: ' + item.vacinas.nome : null
                 ].filter(Boolean).join(' | ');
+                console.log('Tentando transferência:', {
+                    vacina_nome: item.vacinas?.nome,
+                    vacina_id: item.vacina_id,
+                    quantidade: qtd,
+                    origem_base_id: rota.base_origem_id,
+                    destino_aplicador_id: destId,
+                });
                 const transferOk = await transferirEstoqueDireto({
                     vacina_id: item.vacina_id,
                     quantidade: qtd,
@@ -12437,7 +12444,7 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
                     observacao: obs
                 });
                 if (!transferOk) {
-                    errosTransferencia.push(((_c = item.vacinas) === null || _c === void 0 ? void 0 : _c.nome) || 'Vacina');
+                    errosTransferencia.push((((_c = item.vacinas) === null || _c === void 0 ? void 0 : _c.nome) || 'Vacina') + ' (id:' + item.vacina_id + ')');
                 }
             }
             // Segurança: se o estoque não transferiu, NÃO concluir a entrega.
