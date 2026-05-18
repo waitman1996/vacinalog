@@ -530,11 +530,10 @@ function getEstoqueCidadeUf(i) {
 function isClinicaEstoqueGlobal(i) {
     if (!i) return false;
     if (i.localizacao_tipo === 'clinica') return true;
-    // Identificação direta pelo base_id da Rede Credenciada - Clínicas Parceiras
-    if (i.base_id === '795b9bb9-a0ec-4d4c-8d20-c905772c8f13') return true;
-    // Fallback por nome da base (quando join disponível)
     var _a;
     const nomeBase = String(((_a = i.bases) === null || _a === void 0 ? void 0 : _a.nome) || '');
+    // Clínica se base_id conhecido OU nome começa com "Clínica" ou "Rede Credenciada"
+    if (i.base_id === '795b9bb9-a0ec-4d4c-8d20-c905772c8f13') return true;
     return i.localizacao_tipo === 'base' && /^cl[ií]nica|rede credenciada/i.test(nomeBase);
 }
 function tipoEstoqueLabelGlobal(i) {
@@ -2044,15 +2043,24 @@ function ArvoreDistribuicaoPage() {
 // ═══════════════════════════════════════════════
 function ClinicasPage() {
     const [estoque, setEstoque] = useState([]);
+    const [basesClinicaMap, setBasesClinicaMap] = useState({});
     const [loading, setLoading] = useState(true);
     const toast = useContext(ToastContext);
 
     const load = async () => {
         setLoading(true);
+        const { data: basesClinicaArr } = await sb.from('bases')
+            .select('id, nome, cidade, uf')
+            .or('nome.ilike.Clínica%,nome.ilike.Rede Credenciada%');
+        const idsClinica = (basesClinicaArr || []).map(b => b.id);
+        const bMap = {};
+        (basesClinicaArr || []).forEach(b => { bMap[b.id] = b; });
+        setBasesClinicaMap(bMap);
+        if (idsClinica.length === 0) { setEstoque([]); setLoading(false); return; }
         const { data, error } = await sb.from('estoque')
             .select('*, vacinas(nome, lote)')
-            .eq('base_id', '795b9bb9-a0ec-4d4c-8d20-c905772c8f13')
-            .order('vacinas(nome)');
+            .in('base_id', idsClinica)
+            .gt('quantidade', 0);
         if (error) toast(error.message, 'error');
         else setEstoque(data || []);
         setLoading(false);
@@ -2084,6 +2092,8 @@ function ClinicasPage() {
                         React.createElement("table", null,
                             React.createElement("thead", null,
                                 React.createElement("tr", null,
+                                    React.createElement("th", null, "Clínica"),
+                                    React.createElement("th", null, "Cidade/UF"),
                                     React.createElement("th", null, "Vacina"),
                                     React.createElement("th", null, "Lote"),
                                     React.createElement("th", { style: { textAlign:'right' } }, "Quantidade"),
@@ -2145,7 +2155,7 @@ function BasesPage() {
     const toast = useContext(ToastContext);
     const load = async () => {
         setLoading(true);
-        const { data, error } = await sb.from('bases').select('*').neq('id', '795b9bb9-a0ec-4d4c-8d20-c905772c8f13').order('nome');
+        const { data, error } = await sb.from('bases').select('*').not('nome', 'ilike', 'Clínica%').order('nome');
         if (error)
             toast(error.message, 'error');
         else
@@ -10289,10 +10299,10 @@ function TransferenciaPage() {
                             React.createElement("option", { value: "" }, "Selecione..."),
                             [
                             React.createElement("optgroup", { label: "🏢 Bases" },
-                                bases.filter(b => b.id !== '795b9bb9-a0ec-4d4c-8d20-c905772c8f13').map(b => React.createElement("option", { key: b.id, value: b.id }, b.nome))
+                                bases.filter(b => !/^cl[ií]nica|rede credenciada/i.test(b.nome)).map(b => React.createElement("option", { key: b.id, value: b.id }, b.nome))
                             ),
                             React.createElement("optgroup", { label: "🏥 Clínicas Parceiras" },
-                                bases.filter(b => b.id === '795b9bb9-a0ec-4d4c-8d20-c905772c8f13').map(b => React.createElement("option", { key: b.id, value: b.id }, b.nome))
+                                bases.filter(b => /^cl[ií]nica|rede credenciada/i.test(b.nome)).map(b => React.createElement("option", { key: b.id, value: b.id }, b.nome.replace(/^Clínica - /i, '')))
                             )
                         ])
                         : React.createElement(AplicadorBuscaCampo, { value: searchOrig, onChange: e => { setSearchOrig(e.target.value); setForm(f => ({ ...f, origem_id: '' })); searchAp(e.target.value, setOrigResults); }, result: form.origem_id ? [] : origResults, onSelect: a => { setForm(f => ({ ...f, origem_id: a.id })); setSearchOrig(a.nome); setOrigResults([]); } })),
@@ -10308,10 +10318,10 @@ function TransferenciaPage() {
                             React.createElement("option", { value: "" }, "Selecione..."),
                             [
                             React.createElement("optgroup", { label: "🏢 Bases" },
-                                bases.filter(b => b.id !== '795b9bb9-a0ec-4d4c-8d20-c905772c8f13').map(b => React.createElement("option", { key: b.id, value: b.id }, b.nome))
+                                bases.filter(b => !/^cl[ií]nica|rede credenciada/i.test(b.nome)).map(b => React.createElement("option", { key: b.id, value: b.id }, b.nome))
                             ),
                             React.createElement("optgroup", { label: "🏥 Clínicas Parceiras" },
-                                bases.filter(b => b.id === '795b9bb9-a0ec-4d4c-8d20-c905772c8f13').map(b => React.createElement("option", { key: b.id, value: b.id }, b.nome))
+                                bases.filter(b => /^cl[ií]nica|rede credenciada/i.test(b.nome)).map(b => React.createElement("option", { key: b.id, value: b.id }, b.nome.replace(/^Clínica - /i, '')))
                             )
                         ])
                         : React.createElement(AplicadorBuscaCampo, { value: searchDest, onChange: e => { setSearchDest(e.target.value); setForm(f => ({ ...f, destino_id: '' })); searchAp(e.target.value, setDestResults); }, result: form.destino_id ? [] : destResults, onSelect: a => { setForm(f => ({ ...f, destino_id: a.id })); setSearchDest(a.nome); setDestResults([]); } })),
@@ -10347,10 +10357,10 @@ function TransferenciaPage() {
                             React.createElement("option", { value: "" }, "Selecione a base..."),
                             [
                             React.createElement("optgroup", { label: "🏢 Bases" },
-                                bases.filter(b => b.id !== '795b9bb9-a0ec-4d4c-8d20-c905772c8f13').map(b => React.createElement("option", { key: b.id, value: b.id }, b.nome))
+                                bases.filter(b => !/^cl[ií]nica|rede credenciada/i.test(b.nome)).map(b => React.createElement("option", { key: b.id, value: b.id }, b.nome))
                             ),
                             React.createElement("optgroup", { label: "🏥 Clínicas Parceiras" },
-                                bases.filter(b => b.id === '795b9bb9-a0ec-4d4c-8d20-c905772c8f13').map(b => React.createElement("option", { key: b.id, value: b.id }, b.nome))
+                                bases.filter(b => /^cl[ií]nica|rede credenciada/i.test(b.nome)).map(b => React.createElement("option", { key: b.id, value: b.id }, b.nome.replace(/^Clínica - /i, '')))
                             )
                         ])
                         : React.createElement("div", { style: { marginTop: 6 } },
@@ -10406,10 +10416,10 @@ function TransferenciaPage() {
                         React.createElement("option", { value: "" }, "Selecione..."),
                         [
                             React.createElement("optgroup", { label: "🏢 Bases" },
-                                bases.filter(b => b.id !== '795b9bb9-a0ec-4d4c-8d20-c905772c8f13').map(b => React.createElement("option", { key: b.id, value: b.id }, b.nome))
+                                bases.filter(b => !/^cl[ií]nica|rede credenciada/i.test(b.nome)).map(b => React.createElement("option", { key: b.id, value: b.id }, b.nome))
                             ),
                             React.createElement("optgroup", { label: "🏥 Clínicas Parceiras" },
-                                bases.filter(b => b.id === '795b9bb9-a0ec-4d4c-8d20-c905772c8f13').map(b => React.createElement("option", { key: b.id, value: b.id }, b.nome))
+                                bases.filter(b => /^cl[ií]nica|rede credenciada/i.test(b.nome)).map(b => React.createElement("option", { key: b.id, value: b.id }, b.nome.replace(/^Clínica - /i, '')))
                             )
                         ])),
                 React.createElement("div", { className: "form-group", style: { gridColumn: '1/-1' } },
