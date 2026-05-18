@@ -689,7 +689,8 @@ function Sidebar({ profile, currentPage, onNavigate, open, onClose, collapsed, o
     const role = (profile === null || profile === void 0 ? void 0 : profile.role) || 'aplicador';
     const menuItems = [];
     if (role === 'admin') {
-        menuItems.push({ section: 'Geral' }, { id: 'dashboard', icon: '📊', label: 'Dashboard' }, { section: 'Cadastros' }, { id: 'bases', icon: '🏢', label: 'Bases' }, { id: 'vacinas', icon: '💉', label: 'Vacinas' }, { id: 'aplicadores', icon: '👤', label: 'Aplicadores' }, { id: 'usuarios', icon: '👥', label: 'Usuários' }, { section: 'Operação' }, { id: 'estoque', icon: '📦', label: 'Estoque' }, { id: 'mapa-estoque', icon: '🗺️', label: 'Mapa Estoque' }, { id: 'importacao', icon: '📥', label: 'Importação' }, { id: 'tarefas', icon: '📋', label: 'Tarefas' }, { id: 'escalas', icon: '👩‍⚕️', label: 'Escalas' }, { id: 'tarefas-escalas', icon: '🔗', label: 'Tarefas × Escalas' }, { id: 'demanda', icon: '⚖️', label: 'Demanda vs Oferta' }, { id: 'previsao', icon: '🔮', label: 'Previsão de Demanda' }, { id: 'relatorio', icon: '📊', label: 'Relatório Executivo' }, { section: 'Logística' }, { id: 'rotas', icon: '🚚', label: 'Rotas' }, { id: 'veiculos', icon: '🚗', label: 'Veículos' }, { id: 'montagem', icon: '📦', label: 'Fila de Montagem' }, { id: 'etiquetas', icon: '🏷️', label: 'Etiquetas/Recibos' }, { id: 'transferencia', icon: '↔️', label: 'Transferência' }, { id: 'recolhimento', icon: '↩️', label: 'Recolhimento' }, { id: 'movimentacoes', icon: '📜', label: 'Movimentações' }, { id: 'aumentos-doses', icon: '➕', label: 'Aumento de Doses' });
+        menuItems.push({ section: 'Geral' }, { id: 'dashboard', icon: '📊', label: 'Dashboard' }, { section: 'Cadastros' }, { id: 'bases', icon: '🏢', label: 'Bases' },
+      { id: 'clinicas', icon: '🏥', label: 'Clínicas Parceiras' }, { id: 'vacinas', icon: '💉', label: 'Vacinas' }, { id: 'aplicadores', icon: '👤', label: 'Aplicadores' }, { id: 'usuarios', icon: '👥', label: 'Usuários' }, { section: 'Operação' }, { id: 'estoque', icon: '📦', label: 'Estoque' }, { id: 'mapa-estoque', icon: '🗺️', label: 'Mapa Estoque' }, { id: 'importacao', icon: '📥', label: 'Importação' }, { id: 'tarefas', icon: '📋', label: 'Tarefas' }, { id: 'escalas', icon: '👩‍⚕️', label: 'Escalas' }, { id: 'tarefas-escalas', icon: '🔗', label: 'Tarefas × Escalas' }, { id: 'demanda', icon: '⚖️', label: 'Demanda vs Oferta' }, { id: 'previsao', icon: '🔮', label: 'Previsão de Demanda' }, { id: 'relatorio', icon: '📊', label: 'Relatório Executivo' }, { section: 'Logística' }, { id: 'rotas', icon: '🚚', label: 'Rotas' }, { id: 'veiculos', icon: '🚗', label: 'Veículos' }, { id: 'montagem', icon: '📦', label: 'Fila de Montagem' }, { id: 'etiquetas', icon: '🏷️', label: 'Etiquetas/Recibos' }, { id: 'transferencia', icon: '↔️', label: 'Transferência' }, { id: 'recolhimento', icon: '↩️', label: 'Recolhimento' }, { id: 'movimentacoes', icon: '📜', label: 'Movimentações' }, { id: 'aumentos-doses', icon: '➕', label: 'Aumento de Doses' });
     }
     else if (role === 'planejador') {
         menuItems.push({ section: 'Planejamento' }, { id: 'dashboard', icon: '📊', label: 'Dashboard' }, { id: 'estoque', icon: '📦', label: 'Estoque' }, { id: 'mapa-estoque', icon: '🗺️', label: 'Mapa Estoque' }, { id: 'demanda', icon: '⚖️', label: 'Demanda vs Oferta' }, { id: 'tarefas', icon: '📋', label: 'Tarefas' }, { id: 'escalas', icon: '👩‍⚕️', label: 'Escalas' }, { id: 'tarefas-escalas', icon: '🔗', label: 'Tarefas × Escalas' }, { id: 'demanda', icon: '⚖️', label: 'Demanda vs Oferta' }, { id: 'previsao', icon: '🔮', label: 'Previsão de Demanda' }, { id: 'relatorio', icon: '📊', label: 'Relatório Executivo' }, { id: 'rotas', icon: '🚚', label: 'Rotas' }, { id: 'transferencia', icon: '↔️', label: 'Transferência' }, { id: 'aumentos-doses', icon: '➕', label: 'Aumento de Doses' }, { id: 'importacao', icon: '📥', label: 'Importação' });
@@ -2041,6 +2042,102 @@ function ArvoreDistribuicaoPage() {
 // ═══════════════════════════════════════════════
 // CRUD GENÉRICO — BASES
 // ═══════════════════════════════════════════════
+function ClinicasPage() {
+    const [estoque, setEstoque] = useState([]);
+    const [loading, setLoading] = useState(true);
+    const toast = useContext(ToastContext);
+
+    const load = async () => {
+        setLoading(true);
+        const { data, error } = await sb.from('estoque')
+            .select('*, vacinas(nome, lote)')
+            .eq('base_id', '795b9bb9-a0ec-4d4c-8d20-c905772c8f13')
+            .order('vacinas(nome)');
+        if (error) toast(error.message, 'error');
+        else setEstoque(data || []);
+        setLoading(false);
+    };
+
+    useEffect(() => { load(); }, []);
+
+    const fmt = n => Number(n || 0).toLocaleString('pt-BR');
+    const totalDoses = estoque.reduce((s, e) => s + Number(e.quantidade || 0), 0);
+
+    return (
+        React.createElement("div", null,
+            React.createElement("div", { className: "page-header" },
+                React.createElement("div", null,
+                    React.createElement("div", { className: "page-title" }, "🏥 Clínicas Parceiras"),
+                    React.createElement("div", { className: "page-subtitle" }, "Rede Credenciada — saldo de doses por vacina")
+                ),
+                React.createElement("div", { style: { display:'flex', alignItems:'center', gap:12 } },
+                    React.createElement("div", { style: { fontSize:13, color:'var(--text-muted)' } },
+                        "Total: ", React.createElement("strong", { style: { color:'var(--success)' } }, fmt(totalDoses)), " doses"
+                    ),
+                    React.createElement("button", { className: "btn btn-secondary btn-sm", onClick: load }, "↻ Atualizar")
+                )
+            ),
+            loading
+                ? React.createElement("div", { className: "card", style: { padding:32, textAlign:'center', color:'var(--text-muted)' } }, "Carregando...")
+                : React.createElement("div", { className: "card" },
+                    React.createElement("div", { className: "table-wrap" },
+                        React.createElement("table", null,
+                            React.createElement("thead", null,
+                                React.createElement("tr", null,
+                                    React.createElement("th", null, "Vacina"),
+                                    React.createElement("th", null, "Lote"),
+                                    React.createElement("th", { style: { textAlign:'right' } }, "Quantidade"),
+                                    React.createElement("th", null, "Status")
+                                )
+                            ),
+                            React.createElement("tbody", null,
+                                estoque.length === 0
+                                    ? React.createElement("tr", null,
+                                        React.createElement("td", { colSpan: 4 },
+                                            React.createElement("div", { className: "empty-state" },
+                                                React.createElement("div", { className: "empty-icon" }, "🏥"),
+                                                React.createElement("div", { className: "empty-text" }, "Nenhum saldo de clínica encontrado. Importe a planilha de Clínicas Parceiras.")
+                                            )
+                                        )
+                                    )
+                                    : estoque.map(e =>
+                                        React.createElement("tr", { key: e.id },
+                                            React.createElement("td", { style: { fontWeight: 600, color: 'var(--accent)' } },
+                                                e.vacinas?.nome || '—'
+                                            ),
+                                            React.createElement("td", { className: "mono", style: { fontSize: 11 } },
+                                                e.vacinas?.lote || '—'
+                                            ),
+                                            React.createElement("td", { className: "mono", style: { textAlign:'right', fontSize:16, fontWeight:800,
+                                                color: e.quantidade > 0 ? 'var(--success)' : e.quantidade < 0 ? 'var(--danger)' : 'var(--text-muted)'
+                                            } },
+                                                fmt(e.quantidade)
+                                            ),
+                                            React.createElement("td", null,
+                                                React.createElement("span", {
+                                                    className: `badge ${e.quantidade > 0 ? 'badge-green' : e.quantidade < 0 ? 'badge-red' : 'badge-gray'}`
+                                                },
+                                                    e.quantidade > 0 ? 'Com saldo' : e.quantidade < 0 ? 'Negativo' : 'Zerado'
+                                                )
+                                            )
+                                        )
+                                    )
+                            )
+                        )
+                    ),
+                    estoque.length > 0 && React.createElement("div", {
+                        style: { marginTop:12, padding:'10px 14px', background:'var(--bg-input)', borderRadius:'var(--radius-sm)',
+                            fontSize:11, color:'var(--text-muted)', display:'flex', justifyContent:'space-between' }
+                    },
+                        React.createElement("span", null, estoque.length, " vacina(s) cadastrada(s)"),
+                        React.createElement("span", null, "Base: Rede Credenciada - Clínicas Parceiras")
+                    )
+                )
+        )
+    );
+}
+
+
 function BasesPage() {
     const [items, setItems] = useState([]);
     const [loading, setLoading] = useState(true);
@@ -2048,7 +2145,7 @@ function BasesPage() {
     const toast = useContext(ToastContext);
     const load = async () => {
         setLoading(true);
-        const { data, error } = await sb.from('bases').select('*').order('nome');
+        const { data, error } = await sb.from('bases').select('*').neq('id', '795b9bb9-a0ec-4d4c-8d20-c905772c8f13').order('nome');
         if (error)
             toast(error.message, 'error');
         else
@@ -10190,7 +10287,14 @@ function TransferenciaPage() {
                     form.origem_tipo === 'base'
                         ? React.createElement("select", { className: "form-select", value: form.origem_id, onChange: e => setForm(f => ({ ...f, origem_id: e.target.value })) },
                             React.createElement("option", { value: "" }, "Selecione..."),
-                            bases.map(b => React.createElement("option", { key: b.id, value: b.id }, b.nome)))
+                            [
+                            React.createElement("optgroup", { label: "🏢 Bases" },
+                                bases.filter(b => b.id !== '795b9bb9-a0ec-4d4c-8d20-c905772c8f13').map(b => React.createElement("option", { key: b.id, value: b.id }, b.nome))
+                            ),
+                            React.createElement("optgroup", { label: "🏥 Clínicas Parceiras" },
+                                bases.filter(b => b.id === '795b9bb9-a0ec-4d4c-8d20-c905772c8f13').map(b => React.createElement("option", { key: b.id, value: b.id }, b.nome))
+                            )
+                        ])
                         : React.createElement(AplicadorBuscaCampo, { value: searchOrig, onChange: e => { setSearchOrig(e.target.value); setForm(f => ({ ...f, origem_id: '' })); searchAp(e.target.value, setOrigResults); }, result: form.origem_id ? [] : origResults, onSelect: a => { setForm(f => ({ ...f, origem_id: a.id })); setSearchOrig(a.nome); setOrigResults([]); } })),
                 React.createElement("div", { className: "form-group" },
                     React.createElement("label", { className: "form-label" }, "Tipo Destino"),
@@ -10202,7 +10306,14 @@ function TransferenciaPage() {
                     form.destino_tipo === 'base'
                         ? React.createElement("select", { className: "form-select", value: form.destino_id, onChange: e => setForm(f => ({ ...f, destino_id: e.target.value })) },
                             React.createElement("option", { value: "" }, "Selecione..."),
-                            bases.map(b => React.createElement("option", { key: b.id, value: b.id }, b.nome)))
+                            [
+                            React.createElement("optgroup", { label: "🏢 Bases" },
+                                bases.filter(b => b.id !== '795b9bb9-a0ec-4d4c-8d20-c905772c8f13').map(b => React.createElement("option", { key: b.id, value: b.id }, b.nome))
+                            ),
+                            React.createElement("optgroup", { label: "🏥 Clínicas Parceiras" },
+                                bases.filter(b => b.id === '795b9bb9-a0ec-4d4c-8d20-c905772c8f13').map(b => React.createElement("option", { key: b.id, value: b.id }, b.nome))
+                            )
+                        ])
                         : React.createElement(AplicadorBuscaCampo, { value: searchDest, onChange: e => { setSearchDest(e.target.value); setForm(f => ({ ...f, destino_id: '' })); searchAp(e.target.value, setDestResults); }, result: form.destino_id ? [] : destResults, onSelect: a => { setForm(f => ({ ...f, destino_id: a.id })); setSearchDest(a.nome); setDestResults([]); } })),
                 React.createElement("div", { className: "form-group", style: { gridColumn: '1/-1' } },
                     React.createElement("label", { className: "form-label" }, "Observa\u00E7\u00E3o"),
@@ -10234,7 +10345,14 @@ function TransferenciaPage() {
                     form.origem_tipo === 'base'
                         ? React.createElement("select", { className: "form-select", style: { marginTop: 6 }, value: form.origem_id, onChange: e => setForm(f => ({ ...f, origem_id: e.target.value })) },
                             React.createElement("option", { value: "" }, "Selecione a base..."),
-                            bases.map(b => React.createElement("option", { key: b.id, value: b.id }, b.nome)))
+                            [
+                            React.createElement("optgroup", { label: "🏢 Bases" },
+                                bases.filter(b => b.id !== '795b9bb9-a0ec-4d4c-8d20-c905772c8f13').map(b => React.createElement("option", { key: b.id, value: b.id }, b.nome))
+                            ),
+                            React.createElement("optgroup", { label: "🏥 Clínicas Parceiras" },
+                                bases.filter(b => b.id === '795b9bb9-a0ec-4d4c-8d20-c905772c8f13').map(b => React.createElement("option", { key: b.id, value: b.id }, b.nome))
+                            )
+                        ])
                         : React.createElement("div", { style: { marginTop: 6 } },
                             React.createElement(AplicadorBuscaCampo, { value: searchOrig, onChange: e => { setSearchOrig(e.target.value); setForm(f => ({ ...f, origem_id: '' })); searchAp(e.target.value, setOrigResults); }, result: form.origem_id ? [] : origResults, onSelect: a => { setForm(f => ({ ...f, origem_id: a.id })); setSearchOrig(a.nome); setOrigResults([]); } }))),
                 React.createElement("div", { className: "form-group" },
@@ -10286,7 +10404,14 @@ function TransferenciaPage() {
                     React.createElement("label", { className: "form-label" }, "Base destino (doses boas) *"),
                     React.createElement("select", { className: "form-select", value: form.destino_id, onChange: e => setForm(f => ({ ...f, destino_id: e.target.value })) },
                         React.createElement("option", { value: "" }, "Selecione..."),
-                        bases.map(b => React.createElement("option", { key: b.id, value: b.id }, b.nome)))),
+                        [
+                            React.createElement("optgroup", { label: "🏢 Bases" },
+                                bases.filter(b => b.id !== '795b9bb9-a0ec-4d4c-8d20-c905772c8f13').map(b => React.createElement("option", { key: b.id, value: b.id }, b.nome))
+                            ),
+                            React.createElement("optgroup", { label: "🏥 Clínicas Parceiras" },
+                                bases.filter(b => b.id === '795b9bb9-a0ec-4d4c-8d20-c905772c8f13').map(b => React.createElement("option", { key: b.id, value: b.id }, b.nome))
+                            )
+                        ])),
                 React.createElement("div", { className: "form-group", style: { gridColumn: '1/-1' } },
                     React.createElement("label", { style: { display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 13, fontWeight: 600 } },
                         React.createElement("input", { type: "checkbox", checked: form.tem_danificadas, onChange: e => setForm(f => ({ ...f, tem_danificadas: e.target.checked, qtd_danificadas: '' })), style: { width: 16, height: 16 } }),
@@ -13832,6 +13957,7 @@ function App() {
         switch (currentPage) {
             case 'dashboard': return React.createElement(DashboardPage, { onNavigate: setCurrentPage });
             case 'bases': return React.createElement(BasesPage, null);
+      case 'clinicas': return React.createElement(ClinicasPage, null);
             case 'vacinas': return React.createElement(VacinasPage, null);
             case 'aplicadores': return React.createElement(AplicadoresPage, null);
             case 'importacao': return React.createElement(ImportacaoPage, null);
