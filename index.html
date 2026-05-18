@@ -5101,6 +5101,8 @@ function CriarRotaColeta({ onNavigate }) {
 }
 // ── ABA 2: Acompanhar Coletas ───────────────────────────────────────────────
 function AcompanharColetas() {
+    const ROTA_ST = { planejada: 'Planejada', montagem: 'Montagem', pronta: 'Pronta', em_transito: 'Em Trânsito', concluida: 'Concluída', cancelada: 'Cancelada' };
+    const ROTA_BADGE = { planejada: 'badge-blue', montagem: 'badge-yellow', pronta: 'badge-cyan', em_transito: 'badge-green', concluida: 'badge-gray', cancelada: 'badge-red' };
     const [rotas, setRotas] = useState([]);
     const [loading, setLoading] = useState(true);
     const [detalhe, setDetalhe] = useState(null);
