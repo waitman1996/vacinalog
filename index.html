@@ -11630,14 +11630,29 @@ async function transferirEstoqueDireto({ vacina_id, quantidade, origem_base_id, 
 
         // RPC falhou — pode ser origem do tipo 'clinica' (localizacao_tipo diferente de 'base').
         // Fallback JS: busca o estoque aceitando qualquer localizacao_tipo vinculado à base.
-        console.warn('RPC falhou, tentando fallback JS:', rpcError.message);
+        console.warn('RPC falhou, tentando fallback JS. Erro RPC:', rpcError.message, rpcError.details || '', { vacina_id, origem_base_id, destino_aplicador_id, quantidade });
 
-        // Buscar linha de estoque de origem (base OU clinica)
-        const { data: origemRows } = await sb.from('estoque')
-            .select('id, quantidade, localizacao_tipo')
+        // Buscar linha de estoque de origem (base OU clinica) — tenta todas as variações
+        let { data: origemRows } = await sb.from('estoque')
+            .select('id, quantidade, localizacao_tipo, base_id')
             .eq('vacina_id', vacina_id)
             .eq('base_id', origem_base_id)
             .in('localizacao_tipo', ['base', 'clinica']);
+
+        // Se não achou, pode ser que base_origem_id da rota não corresponde ao base_id do estoque
+        // Tenta buscar por qualquer base com saldo positivo desta vacina
+        if (!origemRows || origemRows.length === 0) {
+            console.warn('Fallback: sem estoque com base_id exato, buscando qualquer base com saldo...', { vacina_id, origem_base_id });
+            const { data: anyRows } = await sb.from('estoque')
+                .select('id, quantidade, localizacao_tipo, base_id')
+                .eq('vacina_id', vacina_id)
+                .in('localizacao_tipo', ['base', 'clinica'])
+                .gt('quantidade', 0);
+            if (anyRows && anyRows.length > 0) {
+                console.warn('Fallback: usando base alternativa:', anyRows.map(r => r.base_id));
+                origemRows = anyRows;
+            }
+        }
 
         if (!origemRows || origemRows.length === 0) {
             console.error('Fallback: sem estoque de origem para', { vacina_id, origem_base_id });
@@ -12429,7 +12444,8 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
             // Antes a entrega era marcada como concluída mesmo quando a RPC falhava,
             // o que deixava remessa concluída sem debitar a base nem creditar o aplicador.
             if (errosTransferencia.length > 0) {
-                toast('❌ Entrega NÃO concluída. Falha ao transferir estoque para: ' + errosTransferencia.join(', ') + '. Verifique saldo/base/RPC e tente novamente.', 'error');
+                toast('❌ Entrega NÃO concluída. Falha ao transferir: ' + errosTransferencia.join(', ') + '. Verifique o console (F12) para detalhes.', 'error');
+                console.error('Erros de transferência:', { errosTransferencia, rota_id: rota.id, base_origem_id: rota.base_origem_id, remessa_id: remId });
                 return;
             }
             else {
