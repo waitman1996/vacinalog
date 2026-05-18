@@ -694,7 +694,7 @@ function Sidebar({ profile, currentPage, onNavigate, open, onClose, collapsed, o
     const menuItems = [];
     if (role === 'admin') {
         menuItems.push({ section: 'Geral' }, { id: 'dashboard', icon: '📊', label: 'Dashboard' }, { section: 'Cadastros' }, { id: 'bases', icon: '🏢', label: 'Bases' },
-      { id: 'clinicas', icon: '🏥', label: 'Clínicas Parceiras' }, { id: 'vacinas', icon: '💉', label: 'Vacinas' }, { id: 'aplicadores', icon: '👤', label: 'Aplicadores' }, { id: 'usuarios', icon: '👥', label: 'Usuários' }, { section: 'Operação' }, { id: 'estoque', icon: '📦', label: 'Estoque' }, { id: 'mapa-estoque', icon: '🗺️', label: 'Mapa Estoque' }, { id: 'importacao', icon: '📥', label: 'Importação' }, { id: 'tarefas', icon: '📋', label: 'Tarefas' }, { id: 'escalas', icon: '👩‍⚕️', label: 'Escalas' }, { id: 'tarefas-escalas', icon: '🔗', label: 'Tarefas × Escalas' }, { id: 'demanda', icon: '⚖️', label: 'Demanda vs Oferta' }, { id: 'previsao', icon: '🔮', label: 'Previsão de Demanda' }, { id: 'relatorio', icon: '📊', label: 'Relatório Executivo' }, { section: 'Logística' }, { id: 'rotas', icon: '🚚', label: 'Rotas' }, { id: 'veiculos', icon: '🚗', label: 'Veículos' }, { id: 'montagem', icon: '📦', label: 'Fila de Montagem' }, { id: 'etiquetas', icon: '🏷️', label: 'Etiquetas/Recibos' }, { id: 'transferencia', icon: '↔️', label: 'Transferência' }, { id: 'recolhimento', icon: '↩️', label: 'Recolhimento' }, { id: 'movimentacoes', icon: '📜', label: 'Movimentações' }, { id: 'aumentos-doses', icon: '➕', label: 'Aumento de Doses' });
+      { id: 'clinicas', icon: '🏥', label: 'Clínicas Parceiras' }, { id: 'vacinas', icon: '💉', label: 'Vacinas' }, { id: 'aplicadores', icon: '👤', label: 'Aplicadores' }, { id: 'usuarios', icon: '👥', label: 'Usuários' }, { section: 'Operação' }, { id: 'estoque', icon: '📦', label: 'Estoque' }, { id: 'mapa-estoque', icon: '🗺️', label: 'Mapa Estoque' }, { id: 'importacao', icon: '📥', label: 'Importação' }, { id: 'tarefas', icon: '📋', label: 'Tarefas' }, { id: 'escalas', icon: '👩‍⚕️', label: 'Escalas' }, { id: 'tarefas-escalas', icon: '🔗', label: 'Tarefas × Escalas' }, { id: 'demanda', icon: '⚖️', label: 'Demanda vs Oferta' }, { id: 'previsao', icon: '🔮', label: 'Previsão de Demanda' }, { id: 'relatorio', icon: '📊', label: 'Relatório Executivo' }, { section: 'Logística' }, { id: 'rotas', icon: '🚚', label: 'Rotas' }, { id: 'rota-transferencia', icon: '🔄', label: 'Rota de Transferência' }, { id: 'veiculos', icon: '🚗', label: 'Veículos' }, { id: 'montagem', icon: '📦', label: 'Fila de Montagem' }, { id: 'etiquetas', icon: '🏷️', label: 'Etiquetas/Recibos' }, { id: 'transferencia', icon: '↔️', label: 'Transferência' }, { id: 'recolhimento', icon: '↩️', label: 'Recolhimento' }, { id: 'movimentacoes', icon: '📜', label: 'Movimentações' }, { id: 'aumentos-doses', icon: '➕', label: 'Aumento de Doses' });
     }
     else if (role === 'planejador') {
         menuItems.push({ section: 'Planejamento' }, { id: 'dashboard', icon: '📊', label: 'Dashboard' }, { id: 'estoque', icon: '📦', label: 'Estoque' }, { id: 'mapa-estoque', icon: '🗺️', label: 'Mapa Estoque' }, { id: 'demanda', icon: '⚖️', label: 'Demanda vs Oferta' }, { id: 'tarefas', icon: '📋', label: 'Tarefas' }, { id: 'escalas', icon: '👩‍⚕️', label: 'Escalas' }, { id: 'tarefas-escalas', icon: '🔗', label: 'Tarefas × Escalas' }, { id: 'demanda', icon: '⚖️', label: 'Demanda vs Oferta' }, { id: 'previsao', icon: '🔮', label: 'Previsão de Demanda' }, { id: 'relatorio', icon: '📊', label: 'Relatório Executivo' }, { id: 'rotas', icon: '🚚', label: 'Rotas' }, { id: 'transferencia', icon: '↔️', label: 'Transferência' }, { id: 'aumentos-doses', icon: '➕', label: 'Aumento de Doses' }, { id: 'importacao', icon: '📥', label: 'Importação' });
@@ -11737,6 +11737,242 @@ async function transferirEstoqueDireto({ vacina_id, quantidade, origem_base_id, 
         return false;
     }
 }
+// ── Rota de Transferência Base → Base ──
+function RotaTransferenciaPage() {
+    const [bases, setBases] = React.useState([]);
+    const [vacinas, setVacinas] = React.useState([]);
+    const [motoristas, setMotoristas] = React.useState([]);
+    const [veiculos, setVeiculos] = React.useState([]);
+    const [rotas, setRotas] = React.useState([]);
+    const [loadingRotas, setLoadingRotas] = React.useState(true);
+    // Form nova rota
+    const [baseOrigem, setBaseOrigem] = React.useState('');
+    const [baseDestino, setBaseDestino] = React.useState('');
+    const [motoristaId, setMotoristaId] = React.useState('');
+    const [veiculoId, setVeiculoId] = React.useState('');
+    const [dataPrevista, setDataPrevista] = React.useState(new Date().toISOString().split('T')[0]);
+    const [itens, setItens] = React.useState([]); // [{vacina_id, vacina_nome, quantidade}]
+    const [novaVacina, setNovaVacina] = React.useState('');
+    const [novaQtd, setNovaQtd] = React.useState('');
+    const [obs, setObs] = React.useState('');
+    const [saving, setSaving] = React.useState(false);
+    const [abaAtiva, setAbaAtiva] = React.useState('nova'); // 'nova' | 'acompanhar'
+    const toast = React.useContext(ToastContext);
+
+    const loadRotas = async () => {
+        setLoadingRotas(true);
+        const { data } = await sb.from('rotas')
+            .select('id,codigo,status,data_prevista,veiculo,bases!rotas_base_origem_id_fkey(nome),profiles!rotas_motorista_id_fkey(nome),remessas(id,status,destino_tipo,bases(nome),remessa_itens(quantidade,vacinas(nome)))')
+            .eq('tipo', 'transferencia_base')
+            .order('data_prevista', { ascending: false })
+            .limit(30);
+        setRotas(data || []);
+        setLoadingRotas(false);
+    };
+
+    React.useEffect(() => {
+        sb.from('bases').select('id,nome,cidade,uf').eq('ativa', true).not('nome','ilike','Cl%nica%').not('nome','ilike','Rede Credenciada%').order('nome').then(r => setBases(r.data || []));
+        sb.from('vacinas').select('id,nome').eq('ativa', true).order('nome').then(r => setVacinas(r.data || []));
+        sb.from('profiles').select('id,nome').eq('role','motorista').eq('ativo', true).order('nome').then(r => setMotoristas(r.data || []));
+        sb.from('veiculos').select('id,placa,modelo').eq('ativo', true).order('modelo').then(r => setVeiculos(r.data || []));
+        loadRotas();
+    }, []);
+
+    const addItem = () => {
+        if (!novaVacina || !novaQtd || Number(novaQtd) <= 0) { toast('Selecione a vacina e informe a quantidade', 'error'); return; }
+        if (itens.find(i => i.vacina_id === novaVacina)) { toast('Vacina já adicionada', 'error'); return; }
+        const v = vacinas.find(v => v.id === novaVacina);
+        setItens([...itens, { vacina_id: novaVacina, vacina_nome: v?.nome || '', quantidade: Number(novaQtd) }]);
+        setNovaVacina(''); setNovaQtd('');
+    };
+
+    const salvar = async () => {
+        if (!baseOrigem) { toast('Selecione a base de origem', 'error'); return; }
+        if (!baseDestino) { toast('Selecione a base de destino', 'error'); return; }
+        if (baseOrigem === baseDestino) { toast('Origem e destino não podem ser iguais', 'error'); return; }
+        if (!motoristaId) { toast('Selecione o motorista', 'error'); return; }
+        if (itens.length === 0) { toast('Adicione pelo menos uma vacina', 'error'); return; }
+        setSaving(true);
+        try {
+            const { data: { user } } = await sb.auth.getUser();
+            const baseOrig = bases.find(b => b.id === baseOrigem);
+            const baseDest = bases.find(b => b.id === baseDestino);
+            const veiculo = veiculos.find(v => v.id === veiculoId);
+            // Criar rota
+            const { data: rota, error: re } = await sb.from('rotas').insert({
+                base_origem_id: baseOrigem,
+                data_prevista: dataPrevista,
+                tipo: 'transferencia_base',
+                motorista_id: motoristaId,
+                veiculo: veiculo ? veiculo.modelo + ' - ' + veiculo.placa : null,
+                veiculo_id: veiculoId || null,
+                criado_por: user.id,
+                codigo: '',
+                status: 'planejada'
+            }).select().single();
+            if (re) throw re;
+            // Criar remessa única base→base
+            const obsRemessa = [
+                'Transferência de estoque',
+                'Origem: ' + (baseOrig?.nome || ''),
+                'Destino: ' + (baseDest?.nome || ''),
+                obs || ''
+            ].filter(Boolean).join(' | ');
+            const { data: remessa, error: remErr } = await sb.from('remessas').insert({
+                rota_id: rota.id,
+                tipo: 'transferencia_base',
+                destino_tipo: 'base',
+                destino_base_id: baseDestino,
+                ordem_entrega: 1,
+                observacao: obsRemessa,
+                codigo_rastreio: '',
+                status: 'planejada'
+            }).select().single();
+            if (remErr) throw remErr;
+            // Inserir itens da remessa
+            for (const item of itens) {
+                await sb.from('remessa_itens').insert({
+                    remessa_id: remessa.id,
+                    vacina_id: item.vacina_id,
+                    quantidade: item.quantidade
+                });
+            }
+            toast('Rota de transferência criada! ✓', 'success');
+            setBaseOrigem(''); setBaseDestino(''); setMotoristaId(''); setVeiculoId('');
+            setItens([]); setObs(''); setAbaAtiva('acompanhar');
+            loadRotas();
+        } catch(e) {
+            toast(e.message || 'Erro ao salvar', 'error');
+        }
+        setSaving(false);
+    };
+
+    const cancelarRota = async (rotaId) => {
+        if (!confirm('Cancelar esta rota de transferência?')) return;
+        await sb.from('rotas').update({ status: 'cancelada' }).eq('id', rotaId);
+        toast('Rota cancelada', 'success');
+        loadRotas();
+    };
+
+    const ST = { planejada: 'Planejada', montagem: 'Montagem', pronta: 'Pronta', em_transito: 'Em Trânsito', concluida: 'Concluída', cancelada: 'Cancelada' };
+    const SB = { planejada: 'badge-blue', montagem: 'badge-yellow', pronta: 'badge-cyan', em_transito: 'badge-green', concluida: 'badge-gray', cancelada: 'badge-red' };
+
+    return React.createElement('div', { className: 'page-container' },
+        React.createElement('div', { className: 'page-header' },
+            React.createElement('div', null,
+                React.createElement('h1', { className: 'page-title' }, '🔄 Rota de Transferência'),
+                React.createElement('div', { className: 'page-subtitle' }, 'Transferência de estoque entre bases com motorista escalado'))),
+        // Abas
+        React.createElement('div', { style: { display: 'flex', gap: 8, marginBottom: 20 } },
+            ['nova', 'acompanhar'].map(aba =>
+                React.createElement('button', { key: aba, className: `btn ${abaAtiva === aba ? 'btn-primary' : 'btn-secondary'}`, onClick: () => setAbaAtiva(aba) },
+                    aba === 'nova' ? '➕ Nova Transferência' : '📋 Acompanhar'))),
+
+        // ── NOVA TRANSFERÊNCIA ──
+        abaAtiva === 'nova' && React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 16 } },
+            React.createElement('div', { className: 'card' },
+                React.createElement('div', { style: { fontWeight: 700, fontSize: 14, marginBottom: 14, color: 'var(--accent)' } }, '📍 Origem e Destino'),
+                React.createElement('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(220px,1fr))', gap: 12 } },
+                    React.createElement('div', { className: 'form-group' },
+                        React.createElement('label', { className: 'form-label' }, '🏢 Base de Origem'),
+                        React.createElement('select', { className: 'form-select', value: baseOrigem, onChange: e => setBaseOrigem(e.target.value) },
+                            React.createElement('option', { value: '' }, 'Selecione...'),
+                            bases.map(b => React.createElement('option', { key: b.id, value: b.id }, b.nome + (b.cidade ? ' — ' + b.cidade + '/' + b.uf : ''))))),
+                    React.createElement('div', { className: 'form-group' },
+                        React.createElement('label', { className: 'form-label' }, '🏢 Base de Destino'),
+                        React.createElement('select', { className: 'form-select', value: baseDestino, onChange: e => setBaseDestino(e.target.value) },
+                            React.createElement('option', { value: '' }, 'Selecione...'),
+                            bases.filter(b => b.id !== baseOrigem).map(b => React.createElement('option', { key: b.id, value: b.id }, b.nome + (b.cidade ? ' — ' + b.cidade + '/' + b.uf : ''))))),
+                    React.createElement('div', { className: 'form-group' },
+                        React.createElement('label', { className: 'form-label' }, '📅 Data Prevista'),
+                        React.createElement('input', { type: 'date', className: 'form-input', value: dataPrevista, onChange: e => setDataPrevista(e.target.value) })))),
+
+            React.createElement('div', { className: 'card' },
+                React.createElement('div', { style: { fontWeight: 700, fontSize: 14, marginBottom: 14, color: 'var(--accent)' } }, '🚚 Motorista e Veículo'),
+                React.createElement('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(220px,1fr))', gap: 12 } },
+                    React.createElement('div', { className: 'form-group' },
+                        React.createElement('label', { className: 'form-label' }, '👤 Motorista *'),
+                        React.createElement('select', { className: 'form-select', value: motoristaId, onChange: e => setMotoristaId(e.target.value) },
+                            React.createElement('option', { value: '' }, 'Selecione...'),
+                            motoristas.map(m => React.createElement('option', { key: m.id, value: m.id }, m.nome)))),
+                    React.createElement('div', { className: 'form-group' },
+                        React.createElement('label', { className: 'form-label' }, '🚗 Veículo'),
+                        React.createElement('select', { className: 'form-select', value: veiculoId, onChange: e => setVeiculoId(e.target.value) },
+                            React.createElement('option', { value: '' }, 'Selecione...'),
+                            veiculos.map(v => React.createElement('option', { key: v.id, value: v.id }, v.modelo + ' - ' + v.placa)))))),
+
+            React.createElement('div', { className: 'card' },
+                React.createElement('div', { style: { fontWeight: 700, fontSize: 14, marginBottom: 14, color: 'var(--accent)' } }, '💉 Vacinas a Transferir'),
+                React.createElement('div', { style: { display: 'flex', gap: 10, marginBottom: 12, flexWrap: 'wrap', alignItems: 'flex-end' } },
+                    React.createElement('div', { className: 'form-group', style: { flex: 2, minWidth: 180, marginBottom: 0 } },
+                        React.createElement('label', { className: 'form-label' }, 'Vacina'),
+                        React.createElement('select', { className: 'form-select', value: novaVacina, onChange: e => setNovaVacina(e.target.value) },
+                            React.createElement('option', { value: '' }, 'Selecione...'),
+                            vacinas.filter(v => !itens.find(i => i.vacina_id === v.id)).map(v => React.createElement('option', { key: v.id, value: v.id }, v.nome)))),
+                    React.createElement('div', { className: 'form-group', style: { width: 120, marginBottom: 0 } },
+                        React.createElement('label', { className: 'form-label' }, 'Quantidade'),
+                        React.createElement('input', { type: 'number', className: 'form-input', min: 1, value: novaQtd, onChange: e => setNovaQtd(e.target.value), placeholder: '0' })),
+                    React.createElement('button', { className: 'btn btn-primary', style: { whiteSpace: 'nowrap' }, onClick: addItem }, '+ Adicionar')),
+                itens.length === 0
+                    ? React.createElement('div', { style: { color: 'var(--text-muted)', fontSize: 13, padding: '12px 0' } }, 'Nenhuma vacina adicionada')
+                    : React.createElement('table', { style: { width: '100%', borderCollapse: 'collapse' } },
+                        React.createElement('thead', null,
+                            React.createElement('tr', null,
+                                ['Vacina', 'Quantidade', ''].map(h => React.createElement('th', { key: h, style: { textAlign: 'left', padding: '6px 8px', fontSize: 11, color: 'var(--text-muted)', borderBottom: '1px solid var(--border)', textTransform: 'uppercase' } }, h)))),
+                        React.createElement('tbody', null,
+                            itens.map((item, i) =>
+                                React.createElement('tr', { key: i },
+                                    React.createElement('td', { style: { padding: '8px', fontSize: 13 } }, '💉 ' + item.vacina_nome),
+                                    React.createElement('td', { style: { padding: '8px', fontSize: 13, fontWeight: 700 } }, item.quantidade.toLocaleString('pt-BR') + ' doses'),
+                                    React.createElement('td', { style: { padding: '8px', textAlign: 'right' } },
+                                        React.createElement('button', { className: 'btn btn-secondary btn-sm', onClick: () => setItens(itens.filter((_, j) => j !== i)) }, '✕')))))),
+                itens.length > 0 && React.createElement('div', { style: { marginTop: 10, padding: '8px 12px', background: 'var(--bg-input)', borderRadius: 'var(--radius-sm)', fontSize: 12, fontWeight: 600 } },
+                    'Total: ', itens.reduce((s, i) => s + i.quantidade, 0).toLocaleString('pt-BR'), ' doses')),
+
+            React.createElement('div', { className: 'card' },
+                React.createElement('div', { className: 'form-group', style: { marginBottom: 0 } },
+                    React.createElement('label', { className: 'form-label' }, '📝 Observação (opcional)'),
+                    React.createElement('input', { type: 'text', className: 'form-input', value: obs, onChange: e => setObs(e.target.value), placeholder: 'Ex: Reposição urgente para campanha...' }))),
+
+            React.createElement('div', { style: { display: 'flex', justifyContent: 'flex-end' } },
+                React.createElement('button', { className: 'btn btn-primary', style: { minWidth: 180, padding: '12px 24px', fontSize: 15 }, onClick: salvar, disabled: saving },
+                    saving ? 'Criando...' : '✓ Criar Rota de Transferência'))),
+
+        // ── ACOMPANHAR ──
+        abaAtiva === 'acompanhar' && React.createElement('div', null,
+            loadingRotas
+                ? React.createElement(LoadingSpinner, null)
+                : rotas.length === 0
+                    ? React.createElement('div', { className: 'empty-state' },
+                        React.createElement('div', { style: { fontSize: 40 } }, '🔄'),
+                        React.createElement('div', null, 'Nenhuma rota de transferência encontrada'))
+                    : React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 12 } },
+                        rotas.map(r => {
+                            const remessa = (r.remessas || [])[0];
+                            const totalDoses = (remessa?.remessa_itens || []).reduce((s, i) => s + Number(i.quantidade || 0), 0);
+                            const baseDestNome = remessa?.bases?.nome || '—';
+                            return React.createElement('div', { key: r.id, className: 'card' },
+                                React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 8 } },
+                                    React.createElement('div', null,
+                                        React.createElement('div', { style: { fontFamily: 'JetBrains Mono', fontSize: 12, color: 'var(--accent)', fontWeight: 600 } }, r.codigo || r.id.slice(0,8)),
+                                        React.createElement('div', { style: { fontSize: 14, fontWeight: 700, marginTop: 4 } },
+                                            (r.bases?.nome || '—'), ' → ', baseDestNome),
+                                        React.createElement('div', { style: { fontSize: 12, color: 'var(--text-muted)', marginTop: 2 } },
+                                            '📅 ' + (r.data_prevista ? new Date(r.data_prevista + 'T12:00:00').toLocaleDateString('pt-BR') : '—'),
+                                            ' · 👤 ' + (r.profiles?.nome || '—'),
+                                            r.veiculo ? ' · 🚗 ' + r.veiculo : '')),
+                                    React.createElement('div', { style: { display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' } },
+                                        React.createElement('span', { className: `badge ${SB[r.status] || 'badge-gray'}` }, ST[r.status] || r.status),
+                                        totalDoses > 0 && React.createElement('span', { className: 'badge badge-cyan' }, totalDoses.toLocaleString('pt-BR') + ' doses'))),
+                                (remessa?.remessa_itens || []).length > 0 && React.createElement('div', { style: { marginTop: 10, display: 'flex', gap: 6, flexWrap: 'wrap' } },
+                                    (remessa.remessa_itens || []).map((it, i) =>
+                                        React.createElement('span', { key: i, style: { fontSize: 11, padding: '3px 10px', borderRadius: 4, background: 'var(--bg-input)', color: 'var(--text-secondary)', fontWeight: 600 } },
+                                            '💉 ' + (it.vacinas?.nome || '—') + ': ' + it.quantidade))),
+                                !['concluida', 'cancelada'].includes(r.status) && React.createElement('div', { style: { marginTop: 10, display: 'flex', gap: 8 } },
+                                    React.createElement('button', { className: 'btn btn-secondary btn-sm', style: { color: 'var(--danger)' }, onClick: () => cancelarRota(r.id) }, '✕ Cancelar')));
+                        }))));
+}
+
 // ── Modal de Problema na Entrega ──
 function ProblemaEntregaModal({ rem, onConfirm, onClose }) {
     const [motivo, setMotivo] = React.useState('recusa');
@@ -14253,6 +14489,7 @@ function App() {
             case 'rotas': return React.createElement(RotasPage, null);
             case 'veiculos': return React.createElement(VeiculosPage, null);
             case 'transferencia': return React.createElement(TransferenciaPage, null);
+            case 'rota-transferencia': return React.createElement(RotaTransferenciaPage, null);
             case 'recolhimento': return React.createElement(RecolhimentoPage, { onNavigate: (p) => setCurrentPage(p) });
             case 'montagem': return React.createElement(MontagemPage, null);
             case 'etiquetas': return React.createElement(EtiquetasPage, null);
