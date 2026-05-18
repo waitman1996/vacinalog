@@ -11763,7 +11763,7 @@ function RotaTransferenciaPage() {
         setLoadingRotas(true);
         const { data } = await sb.from('rotas')
             .select('id,codigo,status,data_prevista,veiculo,bases!rotas_base_origem_id_fkey(nome),profiles!rotas_motorista_id_fkey(nome),remessas(id,status,destino_tipo,bases(nome),remessa_itens(quantidade,vacinas(nome)))')
-            .eq('tipo', 'transferencia_base')
+            .eq('tipo', 'transferencia')
             .order('data_prevista', { ascending: false })
             .limit(30);
         setRotas(data || []);
@@ -11802,7 +11802,7 @@ function RotaTransferenciaPage() {
             const { data: rota, error: re } = await sb.from('rotas').insert({
                 base_origem_id: baseOrigem,
                 data_prevista: dataPrevista,
-                tipo: 'transferencia_base',
+                tipo: 'transferencia',
                 motorista_id: motoristaId,
                 veiculo: veiculo ? veiculo.modelo + ' - ' + veiculo.placa : null,
                 veiculo_id: veiculoId || null,
@@ -11820,7 +11820,7 @@ function RotaTransferenciaPage() {
             ].filter(Boolean).join(' | ');
             const { data: remessa, error: remErr } = await sb.from('remessas').insert({
                 rota_id: rota.id,
-                tipo: 'transferencia_base',
+                tipo: 'transferencia',
                 destino_tipo: 'base',
                 destino_base_id: baseDestino,
                 ordem_entrega: 1,
