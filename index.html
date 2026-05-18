@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VacinaLog v2</title>
+<title>VacinaLog v20 - Bases sem clínicas</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
@@ -2537,7 +2537,7 @@ function ImportConsulta() {
             // Buscar lookup tables e códigos existentes em paralelo
             const codigos = [...new Set(preview.data.map(r => r['Código']).filter(Boolean))];
             const [{ data: bases, error: bErr }, { data: vacinas, error: vErr }, { data: userInfo },] = await Promise.all([
-                sb.from('bases').select('id, nome'),
+                sb.from('bases').select('id, nome').not('nome','ilike','Clínica%').not('nome','ilike','Clinica%').not('nome','ilike','Rede Credenciada%'),
                 sb.from('vacinas').select('id, nome'),
                 sb.auth.getUser(),
             ]);
@@ -2875,7 +2875,7 @@ function ImportTutores() {
             // Buscar lookup tables em paralelo (bases, vacinas, aplicadores)
             const codigosTarefaArquivo = [...new Set(preview.data.map(r => String(r['Código da tarefa'] || '').trim()).filter(Boolean))];
             const [{ data: bases }, { data: vacinas }, { data: apExist }, { data: tarefasLookup },] = await Promise.all([
-                sb.from('bases').select('id, nome'),
+                sb.from('bases').select('id, nome').not('nome','ilike','Clínica%').not('nome','ilike','Clinica%').not('nome','ilike','Rede Credenciada%'),
                 sb.from('vacinas').select('id, nome'),
                 sb.from('aplicadores').select('id, cpf'),
                 // Busca só as tarefas cujos códigos estão no arquivo (não tudo)
@@ -4738,7 +4738,7 @@ function CriarRotaColeta({ onNavigate }) {
                 // para não quebrar quando a tabela usa localizacao_id/local_id em vez de aplicador_id
                 // ou quando o relacionamento automático com aplicadores não está configurado no Supabase.
                 const [basesRes, motoristasRes, veiculosRes, aplicRes, rotEntRes] = await Promise.all([
-                    sb.from('bases').select('id,nome,cidade,uf').order('nome'),
+                    sb.from('bases').select('id,nome,cidade,uf').not('nome','ilike','Clínica%').not('nome','ilike','Clinica%').not('nome','ilike','Rede Credenciada%').order('nome'),
                     sb.from('profiles').select('id,nome').eq('role', 'motorista').order('nome'),
                     sb.from('veiculos').select('id,modelo,placa').order('modelo'),
                     sb.from('aplicadores').select('*').order('nome'),
@@ -9218,7 +9218,7 @@ function RoteirizacaoPage({ onBack }) {
     const [geocodeCache, setGeocodeCache] = useState({});
     const toast = useContext(ToastContext);
     useEffect(() => {
-        sb.from('bases').select('id, nome, latitude, longitude').eq('ativa', true).order('nome').then(r => setBases(r.data || []));
+        sb.from('bases').select('id, nome, latitude, longitude').eq('ativa', true).not('nome','ilike','Clínica%').not('nome','ilike','Clinica%').not('nome','ilike','Rede Credenciada%').order('nome').then(r => setBases(r.data || []));
         sb.from('veiculos').select('id, placa, modelo, capacidade_doses, motorista_padrao_id, base_id').eq('ativo', true).order('modelo').then(r => setVeiculos(r.data || []));
         sb.from('profiles').select('id, nome, base_id').eq('role', 'motorista').eq('ativo', true).order('nome').then(r => setMotoristas(r.data || []));
         loadEscalas();
