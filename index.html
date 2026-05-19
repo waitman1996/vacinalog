@@ -12627,6 +12627,9 @@ function MovimentacoesPage() {
     const [localSel, setLocalSel] = useState(null); // { tipo: 'base'|'aplicador', id, nome }
     const [vacinas, setVacinas] = useState([]);
     const [filtroVacina, setFiltroVacina] = useState('');
+    const [filtroTipoLocal, setFiltroTipoLocal] = useState('');
+    const [filtroCidadeLocal, setFiltroCidadeLocal] = useState('');
+    const [filtroUfLocal, setFiltroUfLocal] = useState('');
     const [extrato, setExtrato] = useState([]);
     const [loading, setLoading] = useState(false);
     const [saldoAtual, setSaldoAtual] = useState(0);
@@ -12649,20 +12652,20 @@ function MovimentacoesPage() {
             let estornoDestinoTipo, estornoDestinoBaseId, estornoDestinoApId;
             if (mov.direcao === 'entrada') {
                 // Estorno de entrada = saída do local para lugar nenhum (ajuste)
-                estornoOrigemTipo = localSel.tipo;
-                estornoOrigemBaseId = localSel.tipo === 'base' ? localSel.id : null;
+                estornoOrigemTipo = localSel.tipo === 'clinica' ? 'base' : localSel.tipo;
+                estornoOrigemBaseId = ((localSel.tipo === 'base' || localSel.tipo === 'clinica') || localSel.tipo === 'clinica') ? localSel.id : null;
                 estornoOrigemApId = localSel.tipo === 'aplicador' ? localSel.id : null;
-                estornoDestinoTipo = localSel.tipo;
-                estornoDestinoBaseId = localSel.tipo === 'base' ? localSel.id : null;
+                estornoDestinoTipo = localSel.tipo === 'clinica' ? 'base' : localSel.tipo;
+                estornoDestinoBaseId = ((localSel.tipo === 'base' || localSel.tipo === 'clinica') || localSel.tipo === 'clinica') ? localSel.id : null;
                 estornoDestinoApId = localSel.tipo === 'aplicador' ? localSel.id : null;
             }
             else {
                 // Estorno de saída = entrada de volta no local
-                estornoOrigemTipo = tiposValidos.includes(mov.destino_tipo) ? mov.destino_tipo : localSel.tipo;
+                estornoOrigemTipo = tiposValidos.includes(mov.destino_tipo) ? mov.destino_tipo : (localSel.tipo === 'clinica' ? 'base' : localSel.tipo);
                 estornoOrigemBaseId = mov.destino_base_id || null;
                 estornoOrigemApId = mov.destino_aplicador_id || null;
-                estornoDestinoTipo = localSel.tipo;
-                estornoDestinoBaseId = localSel.tipo === 'base' ? localSel.id : null;
+                estornoDestinoTipo = localSel.tipo === 'clinica' ? 'base' : localSel.tipo;
+                estornoDestinoBaseId = ((localSel.tipo === 'base' || localSel.tipo === 'clinica') || localSel.tipo === 'clinica') ? localSel.id : null;
                 estornoDestinoApId = localSel.tipo === 'aplicador' ? localSel.id : null;
             }
             const { error } = await sb.from('movimentacoes').insert({
@@ -12687,7 +12690,7 @@ function MovimentacoesPage() {
             // Lógica simples: se era entrada no local selecionado → debitar; se era saída → creditar
             const ajustarEstoque = async (delta) => {
                 // delta = -N para debitar, +N para creditar
-                if (localSel.tipo === 'base') {
+                if ((localSel.tipo === 'base' || localSel.tipo === 'clinica')) {
                     const { data: rows } = await sb.from('estoque').select('id,quantidade')
                         .eq('vacina_id', mov.vacina_id).eq('base_id', localSel.id).eq('localizacao_tipo', 'base');
                     if (rows === null || rows === void 0 ? void 0 : rows.length) {
@@ -12738,10 +12741,11 @@ function MovimentacoesPage() {
             return;
         setLoading(true);
         setExtrato([]);
-        const campo_origem = local.tipo === 'base' ? 'origem_base_id' : 'origem_aplicador_id';
-        const campo_destino = local.tipo === 'base' ? 'destino_base_id' : 'destino_aplicador_id';
+        const localEhBase = local.tipo === 'base' || local.tipo === 'clinica';
+        const campo_origem = localEhBase ? 'origem_base_id' : 'origem_aplicador_id';
+        const campo_destino = localEhBase ? 'destino_base_id' : 'destino_aplicador_id';
         // Buscar saldo real do banco (fonte da verdade)
-        let estoqueQ = local.tipo === 'base'
+        let estoqueQ = localEhBase
             ? sb.from('estoque').select('quantidade, vacinas(nome)').eq('base_id', local.id).eq('localizacao_tipo', 'base')
             : sb.from('estoque').select('quantidade, vacinas(nome)').eq('aplicador_id', local.id).eq('localizacao_tipo', 'aplicador');
         if (vacinaId)
@@ -12766,8 +12770,8 @@ function MovimentacoesPage() {
         let saldo = 0;
         const rows = (data || []).map(m => {
             var _a, _b, _c, _d;
-            const ehOrigem = (local.tipo === 'base' ? m.origem_base_id : m.origem_aplicador_id) === local.id;
-            const ehDestino = (local.tipo === 'base' ? m.destino_base_id : m.destino_aplicador_id) === local.id;
+            const ehOrigem = (localEhBase ? m.origem_base_id : m.origem_aplicador_id) === local.id;
+            const ehDestino = (localEhBase ? m.destino_base_id : m.destino_aplicador_id) === local.id;
             let direcao, sinal;
             if (ehDestino && !ehOrigem) {
                 direcao = 'entrada';
@@ -12860,18 +12864,35 @@ function MovimentacoesPage() {
         w.document.close();
         w.focus();
     };
+    const normalizarTxt = (v) => String(v || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+    const basesOperacionais = bases.filter(b => !isClinicaEstoqueGlobal(b));
+    const clinicas = bases.filter(b => isClinicaEstoqueGlobal(b));
+    const filtrarLocal = (item, tipo) => {
+        if (filtroTipoLocal && tipo !== filtroTipoLocal) return false;
+        if (filtroCidadeLocal && !normalizarTxt(item.cidade).includes(normalizarTxt(filtroCidadeLocal))) return false;
+        if (filtroUfLocal && normalizarTxt(item.uf) !== normalizarTxt(filtroUfLocal)) return false;
+        return true;
+    };
+    const basesFiltradas = basesOperacionais.filter(b => filtrarLocal(b, 'base'));
+    const clinicasFiltradas = clinicas.filter(c => filtrarLocal(c, 'clinica'));
+    const aplicadoresFiltrados = aplicadores.filter(a => filtrarLocal(a, 'aplicador'));
+    const ufsDisponiveis = Array.from(new Set([
+        ...basesOperacionais.map(b => b.uf),
+        ...clinicas.map(c => c.uf),
+        ...aplicadores.map(a => a.uf)
+    ].filter(Boolean))).sort();
     return (React.createElement("div", null,
         React.createElement("div", { className: "page-header" },
             React.createElement("div", null,
                 React.createElement("div", { className: "page-title" }, "Extrato de Estoque"),
-                React.createElement("div", { className: "page-subtitle" }, "Hist\u00F3rico de movimenta\u00E7\u00F5es por base ou aplicador")),
+                React.createElement("div", { className: "page-subtitle" }, "Hist\u00F3rico de movimenta\u00E7\u00F5es por Base, Cl\u00EDnica ou Aplicador")),
             React.createElement("div", { style: { display: 'flex', gap: 8 } },
                 localSel && (React.createElement("button", { className: "btn btn-secondary", onClick: () => loadExtrato(localSel, filtroVacina), disabled: loading }, loading ? '⟳ Carregando...' : '↻ Atualizar')),
                 localSel && extrato.length > 0 && (React.createElement("button", { className: "btn btn-primary", onClick: () => imprimirExtrato(localSel, extrato, saldoAtual, filtroVacina, vacinas) }, "\uD83D\uDDA8\uFE0F Imprimir PDF")))),
         React.createElement("div", { className: "card", style: { marginBottom: 16, padding: 14 } },
-            React.createElement("div", { style: { display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end' } },
-                React.createElement("div", { className: "form-group", style: { marginBottom: 0, minWidth: 220 } },
-                    React.createElement("label", { className: "form-label" }, "Base ou Aplicador"),
+            React.createElement("div", { style: { display: 'grid', gridTemplateColumns: 'minmax(260px, 2fr) 150px 180px 110px 160px auto', gap: 12, alignItems: 'end' } },
+                React.createElement("div", { className: "form-group", style: { marginBottom: 0 } },
+                    React.createElement("label", { className: "form-label" }, "Local"),
                     React.createElement("select", { className: "form-select", style: { padding: '6px 10px' }, value: localSel ? `${localSel.tipo}|${localSel.id}` : '', onChange: e => {
                             if (!e.target.value) {
                                 setLocalSel(null);
@@ -12879,30 +12900,66 @@ function MovimentacoesPage() {
                                 return;
                             }
                             const [tipo, id] = e.target.value.split('|');
-                            const lista = tipo === 'base' ? bases : aplicadores;
+                            const lista = tipo === 'aplicador' ? aplicadores : bases;
                             const item = lista.find(x => x.id === id);
-                            setLocalSel({ tipo, id, nome: (item === null || item === void 0 ? void 0 : item.nome) || '' });
+                            setLocalSel({ tipo, id, nome: (item === null || item === void 0 ? void 0 : item.nome) || '', cidade: item === null || item === void 0 ? void 0 : item.cidade, uf: item === null || item === void 0 ? void 0 : item.uf });
                         } },
                         React.createElement("option", { value: "" }, "Selecione..."),
-                        React.createElement("optgroup", { label: "\uD83C\uDFE2 Bases" }, bases.map(b => React.createElement("option", { key: b.id, value: `base|${b.id}` },
+                        (!filtroTipoLocal || filtroTipoLocal === 'base') && React.createElement("optgroup", { label: "🏢 Bases" }, basesFiltradas.map(b => React.createElement("option", { key: b.id, value: `base|${b.id}` },
                             b.nome,
-                            " \u2014 ",
-                            b.cidade,
+                            " — ",
+                            b.cidade || '—',
                             "/",
-                            b.uf))),
-                        React.createElement("optgroup", { label: "\uD83D\uDC64 Aplicadores" }, aplicadores.map(a => React.createElement("option", { key: a.id, value: `aplicador|${a.id}` }, a.nome))))),
-                React.createElement("div", { className: "form-group", style: { marginBottom: 0, minWidth: 180 } },
+                            b.uf || '—'))),
+                        (!filtroTipoLocal || filtroTipoLocal === 'clinica') && React.createElement("optgroup", { label: "🏥 Clínicas" }, clinicasFiltradas.map(c => React.createElement("option", { key: c.id, value: `clinica|${c.id}` },
+                            c.nome,
+                            " — ",
+                            c.cidade || '—',
+                            "/",
+                            c.uf || '—'))),
+                        (!filtroTipoLocal || filtroTipoLocal === 'aplicador') && React.createElement("optgroup", { label: "👤 Aplicadores" }, aplicadoresFiltrados.map(a => React.createElement("option", { key: a.id, value: `aplicador|${a.id}` },
+                            a.nome,
+                            a.cidade || a.uf ? ` — ${a.cidade || '—'}/${a.uf || '—'}` : ''))))),
+                React.createElement("div", { className: "form-group", style: { marginBottom: 0 } },
+                    React.createElement("label", { className: "form-label" }, "Tipo"),
+                    React.createElement("select", { className: "form-select", style: { padding: '6px 10px' }, value: filtroTipoLocal, onChange: e => {
+                            setFiltroTipoLocal(e.target.value);
+                            setLocalSel(null);
+                            setExtrato([]);
+                        } },
+                        React.createElement("option", { value: "" }, "Todos"),
+                        React.createElement("option", { value: "base" }, "Base"),
+                        React.createElement("option", { value: "clinica" }, "Clínica"),
+                        React.createElement("option", { value: "aplicador" }, "Aplicador"))),
+                React.createElement("div", { className: "form-group", style: { marginBottom: 0 } },
+                    React.createElement("label", { className: "form-label" }, "Cidade"),
+                    React.createElement("input", { className: "form-input", style: { padding: '6px 10px' }, value: filtroCidadeLocal, onChange: e => {
+                            setFiltroCidadeLocal(e.target.value);
+                            setLocalSel(null);
+                            setExtrato([]);
+                        }, placeholder: "Filtrar cidade..." })),
+                React.createElement("div", { className: "form-group", style: { marginBottom: 0 } },
+                    React.createElement("label", { className: "form-label" }, "UF"),
+                    React.createElement("select", { className: "form-select", style: { padding: '6px 10px' }, value: filtroUfLocal, onChange: e => {
+                            setFiltroUfLocal(e.target.value);
+                            setLocalSel(null);
+                            setExtrato([]);
+                        } },
+                        React.createElement("option", { value: "" }, "Todas"),
+                        ufsDisponiveis.map(uf => React.createElement("option", { key: uf, value: uf }, uf)))),
+                React.createElement("div", { className: "form-group", style: { marginBottom: 0 } },
                     React.createElement("label", { className: "form-label" }, "Vacina"),
                     React.createElement("select", { className: "form-select", style: { padding: '6px 10px' }, value: filtroVacina, onChange: e => setFiltroVacina(e.target.value) },
                         React.createElement("option", { value: "" }, "Todas"),
                         vacinas.map(v => React.createElement("option", { key: v.id, value: v.id }, v.nome)))),
-                localSel && (React.createElement("div", { style: { marginLeft: 'auto', textAlign: 'right' } },
+                localSel ? (React.createElement("div", { style: { marginLeft: 'auto', textAlign: 'right' } },
                     React.createElement("div", { style: { fontSize: 11, color: 'var(--text-muted)' } }, "Saldo atual"),
-                    React.createElement("div", { style: { fontSize: 24, fontWeight: 700, fontFamily: 'JetBrains Mono', color: saldoAtual >= 0 ? 'var(--success)' : 'var(--danger)' } }, saldoAtual.toLocaleString('pt-BR')))))),
-        !localSel && (React.createElement("div", { className: "card" },
+                    React.createElement("div", { style: { fontSize: 24, fontWeight: 700, fontFamily: 'JetBrains Mono', color: saldoAtual >= 0 ? 'var(--success)' : 'var(--danger)' } }, saldoAtual.toLocaleString('pt-BR')))) :
+                    React.createElement("button", { className: "btn btn-secondary btn-sm", onClick: () => { setFiltroTipoLocal(''); setFiltroCidadeLocal(''); setFiltroUfLocal(''); setLocalSel(null); setExtrato([]); } }, "Limpar"))),
+                !localSel && (React.createElement("div", { className: "card" },
             React.createElement("div", { className: "empty-state" },
                 React.createElement("div", { className: "empty-icon" }, "\uD83D\uDCCB"),
-                React.createElement("div", { className: "empty-text" }, "Selecione uma base ou aplicador para ver o extrato")))),
+                React.createElement("div", { className: "empty-text" }, "Selecione uma base, clínica ou aplicador para ver o extrato")))),
         loading && React.createElement("div", { className: "card" },
             React.createElement("div", { className: "empty-state" },
                 React.createElement("div", { className: "empty-text" }, "Carregando..."))),
