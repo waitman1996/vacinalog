@@ -9284,6 +9284,8 @@ function RoteirizacaoPage({ onBack }) {
     const [erroTela, setErroTela] = useState('');
     const [mapKey, setMapKey] = useState(0);
     const [configRotaMin, setConfigRotaMin] = useState(false);
+    const [expandedTutorKey, setExpandedTutorKey] = useState(null);
+    const [doseOverrides, setDoseOverrides] = useState({});
 
     const norm = (v) => String(v || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
     const num = (v) => { const n = Number(String(v ?? 0).replace(',', '.')); return Number.isFinite(n) ? n : 0; };
@@ -9435,19 +9437,31 @@ function RoteirizacaoPage({ onBack }) {
         return t.tarefas.some(tarefaPassaFiltro);
     });
     const tarefasFiltradasTutor = (t) => (t.tarefas || []).filter(tarefaPassaFiltro);
-    const dosesFiltradasTutor = (t) => tarefasFiltradasTutor(t).reduce((s,e) => s + num(e._doses), 0);
+    const tarefaDoseKey = (e) => String((e && (e.tarefa_id || (e._tarefa && e._tarefa.id) || e.id || e._codigo || e.codigo_tarefa || e.codigo)) || 'sem_id');
+    const doseTarefa = (e) => {
+        const k = tarefaDoseKey(e);
+        return Object.prototype.hasOwnProperty.call(doseOverrides, k) ? num(doseOverrides[k]) : num(e._doses);
+    };
+    const alterarDoseTarefa = (e, valor) => {
+        const k = tarefaDoseKey(e);
+        setDoseOverrides(prev => ({ ...prev, [k]: valor }));
+    };
+    const dosesFiltradasTutor = (t) => tarefasFiltradasTutor(t).reduce((s,e) => s + doseTarefa(e), 0);
+    const alterarDoseParada = (idx, valor) => {
+        setParadas(prev => prev.map((p,i) => i === idx ? { ...p, doses: Math.max(0, Math.floor(num(valor))) } : p));
+    };
 
     const addTutor = (tutor) => {
         const tarefas = tarefasFiltradasTutor(tutor).filter(e => {
             const sl = norm(e._status_logistica || e.status_logistica || '');
             return !['concluido','concluida','entregue','cancelado','cancelada'].includes(sl);
         });
-        const doses = tarefas.reduce((s,e) => s + num(e._doses), 0);
+        const doses = tarefas.reduce((s,e) => s + doseTarefa(e), 0);
         if (!tarefas.length || doses <= 0) { toast('Este aplicador não tem doses previstas nos filtros atuais', 'error'); return; }
         setParadas(prev => prev.concat({
             tipo:'aplicador', aplicador_id:tutor.aplicador_id || null, cpf:tutor.cpf || '', nome:tutor.nome || 'Aplicador',
             cidade:tutor.cidade || '', uf:tutor.uf || '', endereco:tutor.endereco || '', ponto_partida:tutor.ponto_partida || '',
-            doses:doses, doses_originais:tutor.total_doses || doses, tarefas:tarefas, tarefas_count:tarefas.length,
+            doses:doses, doses_originais:tutor.total_doses || doses, tarefas:tarefas.map(e => ({ ...e, _doses: doseTarefa(e), dose_original: num(e._doses) })), tarefas_count:tarefas.length,
             status_filtro:filterStatus || null, ordem:prev.length + 1
         }));
         toast((tutor.nome || 'Aplicador') + ' adicionado ✓ (' + tarefas.length + ' tarefas · ' + doses + ' doses)', 'success');
@@ -9595,16 +9609,49 @@ function RoteirizacaoPage({ onBack }) {
                             const tarefas = tarefasFiltradasTutor(t);
                             const doses = dosesFiltradasTutor(t);
                             const statusCounts = tarefas.reduce((acc,e)=>{ const st=e._status||e.status; acc[st]=(acc[st]||0)+1; return acc; },{});
+                            const aberto = expandedTutorKey === t.key;
                             return h('div',{key:t.key,style:{padding:8,borderBottom:'1px solid var(--border)',fontSize:11,opacity:t.jaRoteirizado?0.65:1}},
                                 h('div',{style:{display:'flex',justifyContent:'space-between',gap:6,alignItems:'center'}},
-                                    h('div',{style:{minWidth:0,flex:1}},
+                                    h('button',{
+                                        type:'button',
+                                        title: aberto ? 'Recolher tarefas' : 'Ver tarefas',
+                                        onClick:()=>setExpandedTutorKey(aberto ? null : t.key),
+                                        style:{width:20,height:24,display:'flex',alignItems:'center',justifyContent:'center',background:'transparent',border:'none',color:'var(--accent)',cursor:'pointer',fontSize:12,flexShrink:0}
+                                    }, aberto ? '▾' : '▸'),
+                                    h('div',{style:{minWidth:0,flex:1,cursor:'pointer'},onClick:()=>setExpandedTutorKey(aberto ? null : t.key)},
                                         h('div',{style:{fontWeight:700,color:'var(--text-primary)',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}},t.nome, t.jaRoteirizado?' 🚚':''),
                                         h('div',{style:{color:'var(--text-muted)',fontSize:10}},(t.ponto_partida||t.cidade||'')+' · '+tarefas.length+' tar. · '+doses+' doses'),
                                         h('div',{style:{fontSize:9,color:'var(--text-muted)'}},
                                             statusCounts.aprovada ? '✓'+statusCounts.aprovada+' ' : '',
                                             statusCounts.pronta_faturamento ? '💰'+statusCounts.pronta_faturamento+' ' : '',
                                             statusCounts.em_execucao ? '▶'+statusCounts.em_execucao+' ' : '')),
-                                    h('button',{className:'btn btn-success btn-sm',onClick:()=>addTutor(t),disabled:doses<=0},'+Add')));
+                                    h('button',{className:'btn btn-success btn-sm',onClick:()=>addTutor(t),disabled:doses<=0},'+Add')),
+                                aberto && h('div',{style:{marginTop:7,marginLeft:20,border:'1px solid var(--border)',borderRadius:6,overflow:'hidden',background:'var(--bg-input)'}},
+                                    tarefas.length===0
+                                        ? h('div',{style:{padding:8,color:'var(--text-muted)',fontSize:10}},'Nenhuma tarefa dentro dos filtros atuais.')
+                                        : tarefas.slice(0,80).map((e,i)=>h('div',{key:(e.id||e._codigo||i),style:{padding:'7px 8px',borderBottom:i===Math.min(tarefas.length,80)-1?'none':'1px solid var(--border)'}},
+                                            h('div',{style:{display:'flex',justifyContent:'space-between',gap:6,alignItems:'center'}},
+                                                h('div',{style:{minWidth:0,flex:1}},
+                                                    h('div',{style:{fontFamily:'JetBrains Mono',fontSize:10,color:'var(--accent)',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}},e._codigo || e.codigo_tarefa || e.codigo || 'Sem código'),
+                                                    h('div',{style:{fontSize:10,color:'var(--text-secondary)',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}},e._cliente || e.cliente || 'Sem cliente'),
+                                                    h('div',{style:{fontSize:9,color:'var(--text-muted)'}},
+                                                        (e._data_inicio || e.data_inicio || 'Sem data'),
+                                                        ' · ',
+                                                        e._status_original || e.status || e._status || 'Sem status',
+                                                        e._ponto_partida ? ' · '+e._ponto_partida : '')),
+                                                h('div',{style:{display:'flex',alignItems:'center',gap:4,whiteSpace:'nowrap'}},
+                                                    h('input',{
+                                                        className:'form-input',
+                                                        type:'number',
+                                                        min:'0',
+                                                        value:Object.prototype.hasOwnProperty.call(doseOverrides, tarefaDoseKey(e)) ? doseOverrides[tarefaDoseKey(e)] : num(e._doses),
+                                                        onClick:(ev)=>ev.stopPropagation(),
+                                                        onChange:(ev)=>alterarDoseTarefa(e, ev.target.value),
+                                                        title:'Alterar doses desta tarefa',
+                                                        style:{width:58,padding:'4px 5px',fontSize:10,textAlign:'right'}
+                                                    }),
+                                                    h('span',{style:{fontSize:10,color:'var(--text-muted)'}},'doses'))))),
+                                    tarefas.length>80 && h('div',{style:{padding:7,color:'var(--text-muted)',fontSize:10,textAlign:'center'}},'Mostrando 80 de ',tarefas.length,' tarefas filtradas')));
                         }))),
                 abaEsq==='clinicas' && h(React.Fragment,null,
                     h('input',{className:'form-input',placeholder:'Buscar clínica...',value:clinicaSearch,onChange:e=>setClinicaSearch(e.target.value),style:{width:'100%',padding:'6px 8px',fontSize:11}}),
@@ -9635,7 +9682,18 @@ function RoteirizacaoPage({ onBack }) {
                         h('div',{style:{display:'flex',justifyContent:'space-between',gap:8}},
                             h('div',{style:{minWidth:0}},
                                 h('div',{style:{fontWeight:700,color:'var(--text-primary)',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}},idx+1,'. ',p.nome),
-                                h('div',{style:{fontSize:11,color:'var(--text-muted)'}},p.tipo==='clinica'?'🏥 Clínica':'👤 Aplicador',' · ',p.doses,' doses',p.tarefas_count?' · '+p.tarefas_count+' tar.':'')),
+                                h('div',{style:{fontSize:11,color:'var(--text-muted)',display:'flex',alignItems:'center',gap:5,flexWrap:'wrap'}},
+                                    h('span',null,p.tipo==='clinica'?'🏥 Clínica':'👤 Aplicador',' ·'),
+                                    h('input',{
+                                        className:'form-input',
+                                        type:'number',
+                                        min:'0',
+                                        value:p.doses,
+                                        onChange:e=>alterarDoseParada(idx, e.target.value),
+                                        title:'Alterar doses totais deste envio',
+                                        style:{width:64,padding:'3px 5px',fontSize:10,textAlign:'right'}
+                                    }),
+                                    h('span',null,'doses',p.tarefas_count?' · '+p.tarefas_count+' tar.':''))),
                             h('button',{className:'btn btn-danger btn-sm',onClick:()=>removeParada(idx)},'×'))))))
         )
     );
