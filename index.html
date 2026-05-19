@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VacinaLog v20 - Bases sem clínicas</title>
+<title>VacinaLog v2</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
@@ -529,7 +529,7 @@ function getEstoqueCidadeUf(i) {
 }
 function isClinicaEstoqueGlobal(i) {
     if (!i) return false;
-    if (i.localizacao_tipo === 'clinica') return false; // enum não tem 'clinica', usa 'base'
+    if (i.localizacao_tipo === 'clinica') return true;
     // Usa o set de IDs de clínicas populado pelo EstoquePage.load() se disponível
     if (window.__clinicaBaseIds && window.__clinicaBaseIds.size > 0) {
         return i.localizacao_tipo === 'base' && window.__clinicaBaseIds.has(i.base_id);
@@ -694,7 +694,7 @@ function Sidebar({ profile, currentPage, onNavigate, open, onClose, collapsed, o
     const menuItems = [];
     if (role === 'admin') {
         menuItems.push({ section: 'Geral' }, { id: 'dashboard', icon: '📊', label: 'Dashboard' }, { section: 'Cadastros' }, { id: 'bases', icon: '🏢', label: 'Bases' },
-      { id: 'clinicas', icon: '🏥', label: 'Clínicas Parceiras' }, { id: 'vacinas', icon: '💉', label: 'Vacinas' }, { id: 'aplicadores', icon: '👤', label: 'Aplicadores' }, { id: 'usuarios', icon: '👥', label: 'Usuários' }, { section: 'Operação' }, { id: 'estoque', icon: '📦', label: 'Estoque' }, { id: 'mapa-estoque', icon: '🗺️', label: 'Mapa Estoque' }, { id: 'importacao', icon: '📥', label: 'Importação' }, { id: 'tarefas', icon: '📋', label: 'Tarefas' }, { id: 'escalas', icon: '👩‍⚕️', label: 'Escalas' }, { id: 'tarefas-escalas', icon: '🔗', label: 'Tarefas × Escalas' }, { id: 'demanda', icon: '⚖️', label: 'Demanda vs Oferta' }, { id: 'previsao', icon: '🔮', label: 'Previsão de Demanda' }, { id: 'relatorio', icon: '📊', label: 'Relatório Executivo' }, { section: 'Logística' }, { id: 'rotas', icon: '🚚', label: 'Rotas' }, { id: 'rota-transferencia', icon: '🔄', label: 'Rota de Transferência' }, { id: 'veiculos', icon: '🚗', label: 'Veículos' }, { id: 'montagem', icon: '📦', label: 'Fila de Montagem' }, { id: 'etiquetas', icon: '🏷️', label: 'Etiquetas/Recibos' }, { id: 'transferencia', icon: '↔️', label: 'Transferência' }, { id: 'recolhimento', icon: '↩️', label: 'Recolhimento' }, { id: 'movimentacoes', icon: '📜', label: 'Movimentações' }, { id: 'aumentos-doses', icon: '➕', label: 'Aumento de Doses' });
+      { id: 'clinicas', icon: '🏥', label: 'Clínicas Parceiras' }, { id: 'vacinas', icon: '💉', label: 'Vacinas' }, { id: 'aplicadores', icon: '👤', label: 'Aplicadores' }, { id: 'usuarios', icon: '👥', label: 'Usuários' }, { section: 'Operação' }, { id: 'estoque', icon: '📦', label: 'Estoque' }, { id: 'mapa-estoque', icon: '🗺️', label: 'Mapa Estoque' }, { id: 'importacao', icon: '📥', label: 'Importação' }, { id: 'tarefas', icon: '📋', label: 'Tarefas' }, { id: 'escalas', icon: '👩‍⚕️', label: 'Escalas' }, { id: 'tarefas-escalas', icon: '🔗', label: 'Tarefas × Escalas' }, { id: 'demanda', icon: '⚖️', label: 'Demanda vs Oferta' }, { id: 'previsao', icon: '🔮', label: 'Previsão de Demanda' }, { id: 'relatorio', icon: '📊', label: 'Relatório Executivo' }, { section: 'Logística' }, { id: 'rotas', icon: '🚚', label: 'Rotas' }, { id: 'veiculos', icon: '🚗', label: 'Veículos' }, { id: 'montagem', icon: '📦', label: 'Fila de Montagem' }, { id: 'etiquetas', icon: '🏷️', label: 'Etiquetas/Recibos' }, { id: 'transferencia', icon: '↔️', label: 'Transferência' }, { id: 'recolhimento', icon: '↩️', label: 'Recolhimento' }, { id: 'movimentacoes', icon: '📜', label: 'Movimentações' }, { id: 'aumentos-doses', icon: '➕', label: 'Aumento de Doses' });
     }
     else if (role === 'planejador') {
         menuItems.push({ section: 'Planejamento' }, { id: 'dashboard', icon: '📊', label: 'Dashboard' }, { id: 'estoque', icon: '📦', label: 'Estoque' }, { id: 'mapa-estoque', icon: '🗺️', label: 'Mapa Estoque' }, { id: 'demanda', icon: '⚖️', label: 'Demanda vs Oferta' }, { id: 'tarefas', icon: '📋', label: 'Tarefas' }, { id: 'escalas', icon: '👩‍⚕️', label: 'Escalas' }, { id: 'tarefas-escalas', icon: '🔗', label: 'Tarefas × Escalas' }, { id: 'demanda', icon: '⚖️', label: 'Demanda vs Oferta' }, { id: 'previsao', icon: '🔮', label: 'Previsão de Demanda' }, { id: 'relatorio', icon: '📊', label: 'Relatório Executivo' }, { id: 'rotas', icon: '🚚', label: 'Rotas' }, { id: 'transferencia', icon: '↔️', label: 'Transferência' }, { id: 'aumentos-doses', icon: '➕', label: 'Aumento de Doses' }, { id: 'importacao', icon: '📥', label: 'Importação' });
@@ -2537,7 +2537,7 @@ function ImportConsulta() {
             // Buscar lookup tables e códigos existentes em paralelo
             const codigos = [...new Set(preview.data.map(r => r['Código']).filter(Boolean))];
             const [{ data: bases, error: bErr }, { data: vacinas, error: vErr }, { data: userInfo },] = await Promise.all([
-                sb.from('bases').select('id, nome').not('nome','ilike','Clínica%').not('nome','ilike','Clinica%').not('nome','ilike','Rede Credenciada%'),
+                sb.from('bases').select('id, nome'),
                 sb.from('vacinas').select('id, nome'),
                 sb.auth.getUser(),
             ]);
@@ -2875,7 +2875,7 @@ function ImportTutores() {
             // Buscar lookup tables em paralelo (bases, vacinas, aplicadores)
             const codigosTarefaArquivo = [...new Set(preview.data.map(r => String(r['Código da tarefa'] || '').trim()).filter(Boolean))];
             const [{ data: bases }, { data: vacinas }, { data: apExist }, { data: tarefasLookup },] = await Promise.all([
-                sb.from('bases').select('id, nome').not('nome','ilike','Clínica%').not('nome','ilike','Clinica%').not('nome','ilike','Rede Credenciada%'),
+                sb.from('bases').select('id, nome'),
                 sb.from('vacinas').select('id, nome'),
                 sb.from('aplicadores').select('id, cpf'),
                 // Busca só as tarefas cujos códigos estão no arquivo (não tudo)
@@ -3448,7 +3448,7 @@ function ImportEstoque() {
         else if (tipoKey.includes('aplicador') || tipoKey.includes('tutor'))
             localizacao_tipo = 'aplicador';
         else if (tipoKey.includes('clinica') || tipoKey.includes('clinica'))
-            localizacao_tipo = 'base';
+            localizacao_tipo = 'clinica';
         const quantidade = parseQtd(qtdRaw);
         const vacina = norm(vacinaRaw);
         const base = norm(baseRaw || (localizacao_tipo === 'base' ? localRaw : ''));
@@ -3467,7 +3467,7 @@ function ImportEstoque() {
         if (localizacao_tipo === 'aplicador' && !aplicador && !cpf && !local)
             erros.push('aplicador/cpf/local vazio');
         if (localizacao_tipo === 'clinica')
-            localizacao_tipo = 'base'; // clinica usa localizacao_tipo='base' no banco
+            erros.push('clínica ainda não implementada no banco');
         return {
             linha: idx + 2,
             raw: r,
@@ -4738,7 +4738,7 @@ function CriarRotaColeta({ onNavigate }) {
                 // para não quebrar quando a tabela usa localizacao_id/local_id em vez de aplicador_id
                 // ou quando o relacionamento automático com aplicadores não está configurado no Supabase.
                 const [basesRes, motoristasRes, veiculosRes, aplicRes, rotEntRes] = await Promise.all([
-                    sb.from('bases').select('id,nome,cidade,uf').not('nome','ilike','Clínica%').not('nome','ilike','Clinica%').not('nome','ilike','Rede Credenciada%').order('nome'),
+                    sb.from('bases').select('id,nome,cidade,uf').order('nome'),
                     sb.from('profiles').select('id,nome').eq('role', 'motorista').order('nome'),
                     sb.from('veiculos').select('id,modelo,placa').order('modelo'),
                     sb.from('aplicadores').select('*').order('nome'),
@@ -5101,8 +5101,6 @@ function CriarRotaColeta({ onNavigate }) {
 }
 // ── ABA 2: Acompanhar Coletas ───────────────────────────────────────────────
 function AcompanharColetas() {
-    const ROTA_ST = { planejada: 'Planejada', montagem: 'Montagem', pronta: 'Pronta', em_transito: 'Em Trânsito', concluida: 'Concluída', cancelada: 'Cancelada' };
-    const ROTA_BADGE = { planejada: 'badge-blue', montagem: 'badge-yellow', pronta: 'badge-cyan', em_transito: 'badge-green', concluida: 'badge-gray', cancelada: 'badge-red' };
     const [rotas, setRotas] = useState([]);
     const [loading, setLoading] = useState(true);
     const [detalhe, setDetalhe] = useState(null);
@@ -6792,7 +6790,7 @@ function EntradaEstoqueModal({ onClose }) {
     const [saving, setSaving] = useState(false);
     const toast = useContext(ToastContext);
     useEffect(() => {
-        sb.from('bases').select('id, nome').eq('ativa', true).not('nome','ilike','Cl%nica%').not('nome','ilike','Clinica%').not('nome','ilike','Rede Credenciada%').order('nome').then(r => setBases(r.data || []));
+        sb.from('bases').select('id, nome').eq('ativa', true).order('nome').then(r => setBases(r.data || []));
         sb.from('aplicadores').select('id, nome, cpf, cidade, uf').order('nome').then(r => setAplicadores(r.data || []));
         // Entrada de estoque deve listar PRODUTO pelo nome comercial da vacina, sem depender de lote.
         // Importante: NÃO usar produto_nome aqui, porque no banco ele pode estar agrupando
@@ -7864,7 +7862,7 @@ function VeiculosPage() {
     };
     useEffect(() => {
         load();
-        sb.from('bases').select('id, nome').eq('ativa', true).not('nome','ilike','Cl%nica%').not('nome','ilike','Clinica%').not('nome','ilike','Rede Credenciada%').order('nome').then(r => setBases(r.data || []));
+        sb.from('bases').select('id, nome').eq('ativa', true).order('nome').then(r => setBases(r.data || []));
         sb.from('profiles').select('id, nome').eq('role', 'motorista').eq('ativo', true).order('nome').then(r => setMotoristas(r.data || []));
     }, []);
     const save = async (form) => {
@@ -8867,7 +8865,18 @@ function RotasListPage({ onOpenRoteirizacao }) {
                 const itens = rem.remessa_itens || [];
                 return s + (itens.length ? itens.reduce((x, it) => x + Number(it.quantidade || 0), 0) : parseDosesObs(rem.observacao));
             }, 0);
-            const rowsHtml = remessas.map((rem, idx) => {
+            // Separar remessas: clinicas (destino_tipo=base com base sendo clinica) vs aplicadores
+                const isClinicaRem = (rem) => {
+                    if (rem.destino_tipo !== 'base') return false;
+                    const baseId = rem.destino_base_id;
+                    if (window.__clinicaBaseIds && window.__clinicaBaseIds.has(baseId)) return true;
+                    const nomeBase = rem.bases?.nome || '';
+                    return /^cl[ií]nica|rede credenciada/i.test(nomeBase);
+                };
+                const remessasAplicador = remessas.filter(r => r.destino_tipo === 'aplicador');
+                const remessasClinica = remessas.filter(r => isClinicaRem(r));
+                const remessasBase = remessas.filter(r => r.destino_tipo === 'base' && !isClinicaRem(r));
+                const buildRow = (rem, idx) => {
                 const destino = rem.destino_tipo === 'base' ? rem.bases : rem.aplicadores;
                 const responsavel = rem.destino_tipo === 'base'
                     ? ((destino === null || destino === void 0 ? void 0 : destino.nome) || 'Base')
@@ -8896,7 +8905,9 @@ function RotasListPage({ onOpenRoteirizacao }) {
                     '<td></td>',
                     '</tr>'
                 ].join('');
-            }).join('');
+                };
+                const rowsHtml = remessasAplicador.concat(remessasBase).map((rem, idx) => buildRow(rem, idx)).join('');
+                const rowsClinicaHtml = remessasClinica.map((rem, idx) => buildRow(rem, idx)).join('');
             const htmlParts = [
                 '<!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8"><title>Romaneio ' + esc(rotaData.codigo || rota.codigo || '') + '</title>',
                 '<style>',
@@ -8921,6 +8932,13 @@ function RotasListPage({ onOpenRoteirizacao }) {
                 '</tr></thead><tbody>',
                 rowsHtml || '<tr><td colspan="11" style="text-align:center;padding:18px">Nenhuma parada/remessa encontrada para esta rota.</td></tr>',
                 '</tbody></table>',
+                // Seção de clínicas parceiras
+                ...(rowsClinicaHtml ? [
+                    '<h2 style="font-size:13px;margin:14px 0 6px;text-transform:uppercase;border-top:2px solid #000;padding-top:8px">&#127973; Cl\u00EDnicas Parceiras</h2>',
+                    '<table class="rom"><thead><tr><th>Cl\u00EDnica</th><th>Cidade/UF</th><th>Parada</th><th>Doses</th><th>Vacina/Lote</th><th>Descri\u00E7\u00E3o</th><th>Recebido</th><th>Assinatura</th></tr></thead><tbody>',
+                    rowsClinicaHtml,
+                    '</tbody></table>',
+                ] : []),
                 // Seção de coleta vinculada
                 ...(rotaColeta ? (() => {
                     const remColetas = (rotaColeta.remessas || []).sort((a, b) => Number(a.ordem_entrega) - Number(b.ordem_entrega));
@@ -9185,6 +9203,32 @@ async function atualizarTarefasDaRota(rotaId, novoStatusLogistica) {
         console.warn('atualizarTarefasDaRota:', e.message);
     }
 }
+function ClinicaParadaRow({ clinica, jaAdicionada, onAdd }) {
+    const [doses, setDoses] = React.useState('');
+    const nome = clinica.nome.replace(/^Clínica - /i, '').replace(/^Rede Credenciada - /i, '');
+    return React.createElement("div", { style: {
+        borderBottom: '1px solid var(--border)',
+        opacity: jaAdicionada ? 0.5 : 1,
+        padding: '7px 10px',
+        fontSize: 11
+    } },
+        React.createElement("div", { style: { display: 'flex', alignItems: 'center', gap: 6 } },
+            React.createElement("div", { style: { flex: 1, minWidth: 0 } },
+                React.createElement("div", { style: { fontWeight: 600, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, nome),
+                React.createElement("div", { style: { color: 'var(--text-muted)', fontSize: 10 } },
+                    clinica.cidade || '—', clinica.uf ? '/' + clinica.uf : '')
+            ),
+            jaAdicionada
+                ? React.createElement("span", { className: "badge badge-green", style: { fontSize: 9 } }, "✓ Na rota")
+                : React.createElement(React.Fragment, null,
+                    React.createElement("input", { className: "form-input", type: "number", min: "1", placeholder: "Doses", style: { width: 70, padding: '3px 6px', fontSize: 10 }, value: doses, onChange: e => setDoses(e.target.value) }),
+                    React.createElement("button", { className: "btn btn-primary btn-sm", style: { padding: '3px 8px', fontSize: 10 }, onClick: () => { if (doses > 0) { onAdd(Number(doses)); setDoses(''); } } }, "+ Add")
+                )
+        )
+    );
+}
+
+
 function RoteirizacaoPage({ onBack }) {
     var _a;
     const [bases, setBases] = useState([]);
@@ -9213,6 +9257,9 @@ function RoteirizacaoPage({ onBack }) {
     const [manualDosesTarefaRota, setManualDosesTarefaRota] = useState({});
     const [rotaTipo, setRotaTipo] = useState('entrega');
     const [rotaData, setRotaData] = useState(new Date().toISOString().split('T')[0]);
+    const [abaEsq, setAbaEsq] = useState('aplicadores'); // 'aplicadores' | 'clinicas'
+    const [clinicasRot, setClinicasRot] = useState([]); // bases de clinicas para roteirizar
+    const [clinicaSearch, setClinicaSearch] = useState('');
     const [motoristaId, setMotoristaId] = useState('');
     const [veiculoId, setVeiculoId] = useState('');
     const [saving, setSaving] = useState(false);
@@ -9220,10 +9267,15 @@ function RoteirizacaoPage({ onBack }) {
     const [geocodeCache, setGeocodeCache] = useState({});
     const toast = useContext(ToastContext);
     useEffect(() => {
-        sb.from('bases').select('id, nome, latitude, longitude').eq('ativa', true).not('nome','ilike','Clínica%').not('nome','ilike','Clinica%').not('nome','ilike','Rede Credenciada%').order('nome').then(r => setBases(r.data || []));
+        sb.from('bases').select('id, nome, latitude, longitude').eq('ativa', true).order('nome').then(r => setBases(r.data || []));
         sb.from('veiculos').select('id, placa, modelo, capacidade_doses, motorista_padrao_id, base_id').eq('ativo', true).order('modelo').then(r => setVeiculos(r.data || []));
         sb.from('profiles').select('id, nome, base_id').eq('role', 'motorista').eq('ativo', true).order('nome').then(r => setMotoristas(r.data || []));
         loadEscalas();
+    // Carregar bases de clínicas para roteirização
+    sb.from('bases').select('id, nome, cidade, uf, latitude, longitude')
+        .or('nome.ilike.Clínica%,nome.ilike.Rede Credenciada%')
+        .eq('ativa', true).order('nome')
+        .then(r => setClinicasRot(r.data || []));
     }, []);
     const loadEscalas = async () => {
         const PAGE = 1000;
@@ -9668,6 +9720,33 @@ function RoteirizacaoPage({ onBack }) {
         if (coords)
             toast(tutor.nome + ' adicionado(a) ✓ (' + tarefasFiltradas.length + ' tarefas · ' + dosesFiltradas + ' doses para enviar)', 'success');
     };
+    const addClinica = async (clinica, doses) => {
+        if (!doses || doses <= 0) { toast('Informe a quantidade de doses para esta clínica', 'error'); return; }
+        const jaAdicionada = paradas.find(p => p.tipo === 'clinica' && p.base_id === clinica.id);
+        if (jaAdicionada) { toast('Esta clínica já está na rota', 'error'); return; }
+        const query = clinica.cidade ? (clinica.cidade + ', ' + clinica.uf) : clinica.nome;
+        const coords = await geocode(query);
+        const parada = {
+            tipo: 'clinica',
+            base_id: clinica.id,
+            cpf: 'clinica_' + clinica.id, // key única
+            nome: clinica.nome.replace(/^Clínica - /i, ''),
+            nome_completo: clinica.nome,
+            cidade: clinica.cidade || '',
+            uf: clinica.uf || '',
+            ponto_partida: clinica.cidade || clinica.nome,
+            doses: Number(doses),
+            doses_originais: Number(doses),
+            tarefas_count: 0,
+            tarefas: [],
+            lat: coords?.lat || null,
+            lng: coords?.lng || null,
+            ordem: paradas.length + 1
+        };
+        setParadas(p => [...p, parada]);
+        setMapKey(k => k + 1);
+        toast(parada.nome + ' adicionada ✓ (' + doses + ' doses)', 'success');
+    };
     const removeParada = (idx) => {
         setParadas(p => p.filter((_, i) => i !== idx).map((x, i) => ({ ...x, ordem: i + 1 })));
         setMapKey(k => k + 1);
@@ -9760,6 +9839,17 @@ function RoteirizacaoPage({ onBack }) {
         }
         let errs = 0;
         for (const p of paradas) {
+            // Clínica parceira: destino é a base da clínica
+            if (p.tipo === 'clinica') {
+                const obsClinica = (p.nome_completo || p.nome) + ' | ' + p.doses + ' doses | ' + (p.cidade || '') + '/' + (p.uf || '');
+                const { error: ercl } = await sb.from('remessas').insert({
+                    rota_id: rota.id, tipo: 'entrega',
+                    destino_tipo: 'base', destino_base_id: p.base_id, destino_aplicador_id: null,
+                    ordem_entrega: p.ordem, observacao: obsClinica, codigo_rastreio: ''
+                });
+                if (ercl) errs++;
+                continue;
+            }
             const aplicadorId = apMap[p.cpf] || null;
             const obs = p.nome + ' (' + p.cpf + ') | ' + p.doses + ' doses para enviar | original ' + (p.doses_originais || p.doses) + ' | ' + (p.decisao_demanda_oferta || '') + ' | ' + p.tarefas.map(t => { var _a; return t.codigo_tarefa || ((_a = t._tarefa) === null || _a === void 0 ? void 0 : _a.codigo); }).join(', ');
             const { error } = await sb.from('remessas').insert({
@@ -9792,7 +9882,7 @@ function RoteirizacaoPage({ onBack }) {
     const veiculoSel = veiculos.find(v => v.id === veiculoId);
     const motoristaSel = motoristas.find(m => m.id === motoristaId);
     const km = distTotal();
-    return (React.createElement("div", { style: { display: 'flex', flexDirection: 'column', height: 'calc(100vh - 48px)', minHeight: 0 } },
+    return (React.createElement("div", { style: { display: 'flex', flexDirection: 'column', height: 'calc(100vh - 48px)' } },
         React.createElement("div", { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid var(--border)', marginBottom: 8, gap: 8, flexWrap: 'wrap' } },
             React.createElement("div", { style: { display: 'flex', alignItems: 'center', gap: 8 } },
                 React.createElement("button", { className: "btn btn-secondary btn-sm", onClick: onBack }, "\u2190 Voltar"),
@@ -9808,31 +9898,34 @@ function RoteirizacaoPage({ onBack }) {
                 React.createElement("button", { className: "btn btn-success btn-sm", onClick: otimizarRota, disabled: paradas.length < 2 }, "\u26A1 Otimizar"),
                 React.createElement("button", { className: "btn btn-primary", onClick: salvarRota, disabled: saving || paradas.length === 0 }, saving ? 'Salvando...' : '💾 Salvar'))),
         React.createElement("div", { style: { display: 'flex', gap: 8, flex: 1, minHeight: 0, overflow: 'hidden' } },
-            leftOpen && (React.createElement("div", { style: { width: 360, flexShrink: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' } },
-                React.createElement("div", { className: "card", style: { padding: 12, marginBottom: 8, flexShrink: 0, overflow: 'visible' } },
-                    React.createElement("div", { style: { fontSize: 12, fontWeight: 700, marginBottom: 8 } }, "Config. da Rota"),
-                    React.createElement("div", { style: { display: 'grid', gridTemplateColumns: '1fr', gap: 8 } },
+            leftOpen && (React.createElement("div", { style: { width: 300, flexShrink: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' } },
+                React.createElement("div", { className: "card", style: { padding: 10, marginBottom: 6, flexShrink: 0 } },
+                    React.createElement("div", { style: { fontSize: 12, fontWeight: 600, marginBottom: 6 } }, "Config. da Rota"),
+                    React.createElement("div", { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 } },
                         React.createElement("div", { className: "form-group" },
                             React.createElement("label", { className: "form-label", style: { fontSize: 10 } }, "Base Origem"),
-                            React.createElement("select", { className: "form-select", style: { padding: '8px 10px', fontSize: 12, width: '100%' }, value: baseOrigem, onChange: e => setBaseOrigem(e.target.value) },
+                            React.createElement("select", { className: "form-select", style: { padding: '5px 6px', fontSize: 11 }, value: baseOrigem, onChange: e => setBaseOrigem(e.target.value) },
                                 React.createElement("option", { value: "" }, "Selecione"),
                                 bases.map(b => React.createElement("option", { key: b.id, value: b.id }, b.nome)))),
                         React.createElement("div", { className: "form-group" },
                             React.createElement("label", { className: "form-label", style: { fontSize: 10 } }, "Data"),
-                            React.createElement("input", { className: "form-input", style: { padding: '8px 10px', fontSize: 12, width: '100%' }, type: "date", onClick: openDatePicker, onFocus: openDatePicker, value: rotaData, onChange: e => setRotaData(e.target.value) })),
+                            React.createElement("input", { className: "form-input", style: { padding: '5px 6px', fontSize: 11 }, type: "date", onClick: openDatePicker, onFocus: openDatePicker, value: rotaData, onChange: e => setRotaData(e.target.value) })),
                         React.createElement("div", { className: "form-group" },
                             React.createElement("label", { className: "form-label", style: { fontSize: 10 } }, "Motorista"),
-                            React.createElement("select", { className: "form-select", style: { padding: '8px 10px', fontSize: 12, width: '100%' }, value: motoristaId, onChange: e => setMotoristaId(e.target.value), disabled: !baseOrigem },
+                            React.createElement("select", { className: "form-select", style: { padding: '5px 6px', fontSize: 11 }, value: motoristaId, onChange: e => setMotoristaId(e.target.value), disabled: !baseOrigem },
                                 React.createElement("option", { value: "" }, baseOrigem ? 'Selecione' : 'Escolha a base primeiro'),
                                 motoristasFiltrados.map(m => React.createElement("option", { key: m.id, value: m.id }, m.nome)))),
                         React.createElement("div", { className: "form-group" },
                             React.createElement("label", { className: "form-label", style: { fontSize: 10 } }, "Ve\u00EDculo"),
-                            React.createElement("select", { className: "form-select", style: { padding: '8px 10px', fontSize: 12, width: '100%' }, value: veiculoId, onChange: e => setVeiculoId(e.target.value), disabled: !baseOrigem },
+                            React.createElement("select", { className: "form-select", style: { padding: '5px 6px', fontSize: 11 }, value: veiculoId, onChange: e => setVeiculoId(e.target.value), disabled: !baseOrigem },
                                 React.createElement("option", { value: "" }, baseOrigem ? 'Selecione' : 'Escolha a base primeiro'),
                                 veiculosFiltrados.map(v => React.createElement("option", { key: v.id, value: v.id },
                                     v.modelo,
                                     " ",
                                     v.placa)))))),
+                React.createElement("div", { style: { display:'flex', gap:4, marginBottom:6, flexShrink:0 } },
+                    React.createElement("button", { className: `btn btn-sm ${abaEsq==='aplicadores'?'btn-primary':'btn-secondary'}`, style:{flex:1,fontSize:11}, onClick: ()=>setAbaEsq('aplicadores') }, "👤 Aplicadores"),
+                    React.createElement("button", { className: `btn btn-sm ${abaEsq==='clinicas'?'btn-primary':'btn-secondary'}`, style:{flex:1,fontSize:11}, onClick: ()=>setAbaEsq('clinicas') }, "🏥 Clínicas")),
                 React.createElement("div", { className: "card", style: { padding: 10, marginBottom: 6, flexShrink: 0 } },
                     React.createElement("div", { style: { fontSize: 12, fontWeight: 600, marginBottom: 6 } }, "Filtros"),
                     React.createElement("input", { className: "form-input", style: { padding: '5px 8px', fontSize: 11, marginBottom: 4 }, value: searchTarefa, onChange: e => setSearchTarefa(e.target.value), placeholder: "\uD83D\uDD0D Nome, CPF, c\u00F3digo..." }),
@@ -9872,7 +9965,7 @@ function RoteirizacaoPage({ onBack }) {
                             tutores.filter(t => t.jaRoteirizado).length),
                         React.createElement("button", { className: "btn btn-secondary btn-sm", style: { fontSize: 9, padding: '2px 6px' }, onClick: () => setShowJaRoteirizado(s => !s) }, showJaRoteirizado ? '🙈 Ocultar roteirizados' : '👁 Ver roteirizados'),
                         React.createElement("button", { className: "btn btn-secondary btn-sm", style: { fontSize: 9, padding: '2px 6px' }, onClick: () => { setFilterDateStart(''); setFilterDateEnd(''); setFilterPP(''); setFilterStatus(''); setSearchTarefa(''); } }, "\uD83E\uDDF9 Limpar filtros"))),
-                React.createElement("div", { style: { flex: 1, overflow: 'auto', border: '1px solid var(--border)', borderRadius: 'var(--radius)', background: 'var(--bg-card)' } },
+                React.createElement("div", { style: { flex: 1, overflow: 'auto', border: '1px solid var(--border)', borderRadius: 'var(--radius)', background: 'var(--bg-card)', display: abaEsq === 'aplicadores' ? 'block' : 'none' } },
                     filteredTutores.length === 0 && React.createElement("div", { style: { padding: 20, textAlign: 'center', color: 'var(--text-muted)', fontSize: 12 } }, tutores.length === 0 ? 'Nenhuma escala encontrada. A tela de Escalas tem registros, então clique em Atualizar ou limpe os filtros.' : 'Nenhum resultado para os filtros selecionados. Use Limpar filtros para voltar a listar as escalas.'),
                     filteredTutores.slice(0, 80).map(t => {
                         var _a;
@@ -9991,8 +10084,20 @@ function RoteirizacaoPage({ onBack }) {
                                 getTarefasRotaTutor(t).length > 20 && React.createElement("div", { style: { fontSize: 10, color: 'var(--text-muted)', marginTop: 3 } },
                                     "+",
                                     getTarefasRotaTutor(t).length - 20,
-                                    " tarefas...")))));
-                    })))),
+                                    " tarefas...")))))
+                    })
+                    ),
+                    React.createElement("div", { style: { flex: 1, overflow: 'auto', border: '1px solid var(--border)', borderRadius: 'var(--radius)', background: 'var(--bg-card)', display: abaEsq === 'clinicas' ? 'block' : 'none' } },
+                        React.createElement("div", { style: { padding: '8px 10px', borderBottom: '1px solid var(--border)' } },
+                            React.createElement("input", { className: "form-input", style: { padding: '5px 8px', fontSize: 11, width: '100%' }, placeholder: "Buscar clínica ou cidade...", value: clinicaSearch, onChange: e => setClinicaSearch(e.target.value) })
+                        ),
+                        clinicasRot.length === 0 && React.createElement("div", { style: { padding: 20, textAlign: 'center', color: 'var(--text-muted)', fontSize: 11 } }, "Nenhuma clínica parceira encontrada."),
+                        clinicasRot.filter(c => !clinicaSearch || c.nome.toLowerCase().includes(clinicaSearch.toLowerCase()) || (c.cidade||'').toLowerCase().includes(clinicaSearch.toLowerCase())).map(c => {
+                            const jaAdicionada = paradas.find(p => p.tipo === 'clinica' && p.base_id === c.id);
+                            const [dosesInput, setDosesInput] = [null, null]; // placeholder
+                            return React.createElement(ClinicaParadaRow, { key: c.id, clinica: c, jaAdicionada: !!jaAdicionada, onAdd: (doses) => addClinica(c, doses) });
+                        })
+                    )),
             React.createElement("div", { style: { flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 } },
                 React.createElement(MapaRota, { key: mapKey, paradas: paradas, bases: bases, baseOrigemId: baseOrigem }),
                 React.createElement("div", { style: { display: 'flex', gap: 12, padding: '8px 12px', background: 'var(--bg-card)', border: '1px solid var(--border)', borderTop: 'none', borderRadius: '0 0 var(--radius) var(--radius)', flexWrap: 'wrap', fontSize: 12 } },
@@ -10019,7 +10124,7 @@ function RoteirizacaoPage({ onBack }) {
                             totalDoses,
                             "/",
                             veiculoSel.capacidade_doses)))),
-            rightOpen && (React.createElement("div", { style: { width: 300, flexShrink: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' } },
+            rightOpen && (React.createElement("div", { style: { width: 280, flexShrink: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' } },
                 React.createElement("div", { style: { display: 'flex', gap: 4, marginBottom: 6, flexShrink: 0 } },
                     React.createElement("button", { className: "btn btn-secondary btn-sm", style: { flex: 1, fontSize: 10 }, onClick: otimizarRota, disabled: paradas.length < 2 }, "\u26A1 Otimizar"),
                     React.createElement("button", { className: "btn btn-danger btn-sm", style: { flex: 1, fontSize: 10 }, onClick: () => { if (confirm('Limpar?')) {
@@ -10029,7 +10134,7 @@ function RoteirizacaoPage({ onBack }) {
                 React.createElement("div", { style: { flex: 1, overflow: 'auto', border: '1px solid var(--border)', borderRadius: 'var(--radius)', background: 'var(--bg-card)' } },
                     React.createElement("div", { style: { padding: '6px 10px', fontSize: 10, color: 'var(--text-muted)', borderBottom: '1px solid var(--border)', fontWeight: 600 } }, "ARRASTE PARA REORDENAR"),
                     paradas.length === 0 && React.createElement("div", { style: { padding: 24, textAlign: 'center', color: 'var(--text-muted)', fontSize: 12 } }, "Clique + nos aplicadores \u00E0 esquerda"),
-                    paradas.map((p, idx) => (React.createElement("div", { key: p.cpf, draggable: true, onDragStart: () => onDragStart(idx), onDragOver: onDragOver, onDrop: e => onDrop(e, idx), style: { padding: '8px 10px', borderBottom: '1px solid var(--border)', cursor: 'grab', background: dragIdx === idx ? 'var(--accent-subtle)' : 'transparent' } },
+                    paradas.map((p, idx) => (React.createElement("div", { key: p.tipo === 'clinica' ? ('cl_' + p.base_id) : p.cpf, draggable: true, onDragStart: () => onDragStart(idx), onDragOver: onDragOver, onDrop: e => onDrop(e, idx), style: { padding: '8px 10px', borderBottom: '1px solid var(--border)', cursor: 'grab', background: dragIdx === idx ? 'var(--accent-subtle)' : 'transparent' } },
                         React.createElement("div", { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' } },
                             React.createElement("div", { style: { display: 'flex', gap: 6, alignItems: 'flex-start', flex: 1 } },
                                 React.createElement("div", { style: { width: 20, height: 20, borderRadius: '50%', background: 'var(--accent)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10, fontWeight: 700, flexShrink: 0 } }, p.ordem),
@@ -10039,12 +10144,12 @@ function RoteirizacaoPage({ onBack }) {
                                         p.ponto_partida || p.cidade,
                                         " \u00B7 ",
                                         p.doses,
-                                        " doses \u00B7 ",
-                                        p.tarefas_count,
-                                        " tarefas selecionadas",
+                                        " doses",
+                                        p.tipo !== 'clinica' && React.createElement(React.Fragment, null, " \u00B7 ", p.tarefas_count, " tarefas selecionadas"),
+                                        p.tipo === 'clinica' && React.createElement("span", { style: { marginLeft: 4, fontSize: 9, color: 'var(--info)', fontWeight: 600 } }, "\uD83C\uDFE5 Cl\u00EDnica"),
                                         !p.lat && React.createElement("span", { style: { color: 'var(--danger)', marginLeft: 3 } }, "\u26A0")))),
-                            React.createElement("button", { style: { background: 'none', border: 'none', color: 'var(--danger)', cursor: 'pointer', fontSize: 12, padding: 2 }, onClick: e => { e.stopPropagation(); removeParada(idx); } }, "\u2715"))))))))),
-        infoTutor && React.createElement(TutorInfoModal, { tutor: infoTutor, onClose: () => setInfoTutor(null) })));
+                            React.createElement("button", { style: { background: 'none', border: 'none', color: 'var(--danger)', cursor: 'pointer', fontSize: 12, padding: 2 }, onClick: e => { e.stopPropagation(); removeParada(idx); } }, "\u2715"))))))),
+        infoTutor && React.createElement(TutorInfoModal, { tutor: infoTutor, onClose: () => setInfoTutor(null) }))))));
 }
 function MapaRota({ paradas, bases, baseOrigemId }) {
     const mapRef = useRef(null);
@@ -10114,7 +10219,7 @@ function TransferenciaPage() {
     const [loadingSaldoDevolucao, setLoadingSaldoDevolucao] = useState(false);
     const toast = useContext(ToastContext);
     useEffect(() => {
-        sb.from('bases').select('id, nome').eq('ativa', true).not('nome','ilike','Cl%nica%').not('nome','ilike','Clinica%').not('nome','ilike','Rede Credenciada%').order('nome').then(r => setBases(r.data || []));
+        sb.from('bases').select('id, nome').eq('ativa', true).order('nome').then(r => setBases(r.data || []));
         sb.from('vacinas').select('id, nome, lote, produto_nome').eq('ativa', true).order('nome').then(r => setVacinas(r.data || []));
         carregarDescarte();
     }, []);
@@ -10525,7 +10630,7 @@ function UsuariosPage() {
     };
     useEffect(() => {
         load();
-        sb.from('bases').select('id, nome').eq('ativa', true).not('nome','ilike','Cl%nica%').not('nome','ilike','Clinica%').not('nome','ilike','Rede Credenciada%').order('nome').then(r => setBases(r.data || []));
+        sb.from('bases').select('id, nome').eq('ativa', true).order('nome').then(r => setBases(r.data || []));
     }, []);
     const updatePerfil = async (form) => {
         const { error } = await sb.from('profiles').update({
@@ -10728,7 +10833,7 @@ function MontagemPage() {
     const addItem = async (remessaId, vacinaId, quantidade, lote) => {
         if (!vacinaId || quantidade === undefined || quantidade === null || quantidade < 0)
             return;
-        const qtd = parseInt(quantidade); // 0 é válido: significa que o tutor já tem as doses
+        const qtd = parseInt(quantidade);
         // Tentar com coluna lote primeiro, cair para sem lote se coluna não existir
         let error;
         if (lote) {
@@ -10768,12 +10873,16 @@ function MontagemPage() {
             selecionarRota(rotaSel);
     };
     const marcarPronta = async (rem) => {
+        if ((rem.remessa_itens || []).length === 0) {
+            toast('Adicione pelo menos um item antes de marcar como pronta', 'error');
+            return;
+        }
         const { error } = await sb.from('remessas').update({ status: 'pronta' }).eq('id', rem.id);
         if (error) {
             toast(error.message, 'error');
             return;
         }
-        toast('Remessa pronta!', 'success');
+        toast('Remessa pronta para envio!', 'success');
         selecionarRota(rotaSel);
     };
     const marcarMontagem = async (remId) => {
@@ -10789,52 +10898,16 @@ function MontagemPage() {
             toast('Todas as remessas precisam estar prontas antes de liberar a rota', 'error');
             return;
         }
-        const reloadRotas = () => sb.from('rotas')
-            .select('id, codigo, data_prevista, status, tipo, bases!rotas_base_origem_id_fkey(nome), profiles!rotas_motorista_id_fkey(nome), veiculo')
-            .in('status', ['montagem', 'planejada']).order('data_prevista')
-            .then(r => setRotas(r.data || []));
-
-        // Separar remessas zeradas (tutor já tem doses) das que têm doses para enviar
-        const remessasComDoses = remessas.filter(r => {
-            const total = (r.remessa_itens || []).reduce((s, i) => s + Number(i.quantidade || 0), 0);
-            return total > 0 && !['concluida', 'cancelada'].includes(r.status);
-        });
-        const remessasZeradas = remessas.filter(r => {
-            const total = (r.remessa_itens || []).reduce((s, i) => s + Number(i.quantidade || 0), 0);
-            return total === 0 && !['concluida', 'cancelada'].includes(r.status);
-        });
-
-        // Concluir remessas zeradas direto (tutor já tem as doses)
-        for (const r of remessasZeradas) {
-            await sb.from('remessas').update({ status: 'concluida' }).eq('id', r.id);
-        }
-
-        // Se não sobrou nenhuma com doses — rota inteira conclui
-        if (remessasComDoses.length === 0) {
-            const { error } = await sb.from('rotas').update({ status: 'concluida' }).eq('id', rotaSel.id);
-            if (error) { toast(error.message, 'error'); return; }
-            await atualizarTarefasDaRota(rotaSel.id, 'concluido');
-            const nZeradas = remessasZeradas.length;
-            toast(`Rota concluída! ${nZeradas} remessa${nZeradas !== 1 ? 's' : ''} zerada${nZeradas !== 1 ? 's' : ''} — tutores já possuem as doses. ✓`, 'success');
+        const { error } = await sb.from('rotas').update({ status: 'pronta' }).eq('id', rotaSel.id);
+        if (error)
+            toast(error.message, 'error');
+        else {
+            await atualizarTarefasDaRota(rotaSel.id, 'pronta');
+            toast('Rota liberada para o motorista!', 'success');
             setRotaSel(null);
             setRemessas([]);
-            reloadRotas();
-            return;
+            sb.from('rotas').select('id, codigo, data_prevista, status, tipo, bases!rotas_base_origem_id_fkey(nome), profiles!rotas_motorista_id_fkey(nome), veiculo').in('status', ['montagem', 'planejada']).order('data_prevista').then(r => setRotas(r.data || []));
         }
-
-        // Tem remessas com doses — liberar rota para o motorista
-        const { error } = await sb.from('rotas').update({ status: 'pronta' }).eq('id', rotaSel.id);
-        if (error) { toast(error.message, 'error'); return; }
-        await atualizarTarefasDaRota(rotaSel.id, 'pronta');
-        const nZeradas = remessasZeradas.length;
-        const nDoses = remessasComDoses.length;
-        const msg = nZeradas > 0
-            ? `Rota liberada para o motorista! ${nDoses} entrega${nDoses !== 1 ? 's' : ''} + ${nZeradas} zerada${nZeradas !== 1 ? 's' : ''} concluída${nZeradas !== 1 ? 's' : ''} automaticamente.`
-            : 'Rota liberada para o motorista!';
-        toast(msg, 'success');
-        setRotaSel(null);
-        setRemessas([]);
-        reloadRotas();
     };
     // Imprimir Recibo / Termo de Entrega e Responsabilidade
     const imprimirRecibo = (rem) => {
@@ -11625,111 +11698,21 @@ async function transferirEstoqueDireto({ vacina_id, quantidade, origem_base_id, 
             console.error('Dados inválidos para transferência', { vacina_id, quantidade, origem_base_id, destino_aplicador_id });
             return false;
         }
+        // Transferência atômica no Supabase:
+        // debita a base por PRODUTO consolidado, credita o aplicador e grava o extrato.
+        // Se qualquer etapa falhar, nada é concluído parcialmente.
         const { data: { user } } = await sb.auth.getUser();
-        const userId = user?.id || null;
-
-        // 1ª tentativa: RPC atômica (funciona quando localizacao_tipo = 'base')
-        const { error: rpcError } = await sb.rpc('transferir_estoque_produto', {
+        const { error } = await sb.rpc('transferir_estoque_produto', {
             p_vacina_id: vacina_id,
             p_quantidade: quantidade,
             p_origem_base_id: origem_base_id,
             p_destino_aplicador_id: destino_aplicador_id,
             p_remessa_id: remessa_id,
             p_observacao: observacao,
-            p_criado_por: userId
+            p_criado_por: (user === null || user === void 0 ? void 0 : user.id) || null
         });
-        if (!rpcError) return true;
-
-        // RPC falhou — pode ser origem do tipo 'clinica' (localizacao_tipo diferente de 'base').
-        // Fallback JS: busca o estoque aceitando qualquer localizacao_tipo vinculado à base.
-        console.warn('RPC falhou, tentando fallback JS. Erro RPC:', rpcError.message, rpcError.details || '', { vacina_id, origem_base_id, destino_aplicador_id, quantidade });
-
-        // Buscar linha de estoque de origem (base OU clinica) — tenta todas as variações
-        let { data: origemRows } = await sb.from('estoque')
-            .select('id, quantidade, localizacao_tipo, base_id')
-            .eq('vacina_id', vacina_id)
-            .eq('base_id', origem_base_id)
-            .in('localizacao_tipo', ['base']);
-
-        // Se não achou, pode ser que base_origem_id da rota não corresponde ao base_id do estoque
-        // Tenta buscar por qualquer base com saldo positivo desta vacina
-        if (!origemRows || origemRows.length === 0) {
-            console.warn('Fallback: sem estoque com base_id exato, buscando qualquer base com saldo...', { vacina_id, origem_base_id });
-            const { data: anyRows } = await sb.from('estoque')
-                .select('id, quantidade, localizacao_tipo, base_id')
-                .eq('vacina_id', vacina_id)
-                .in('localizacao_tipo', ['base'])
-                .gt('quantidade', 0);
-            if (anyRows && anyRows.length > 0) {
-                console.warn('Fallback: usando base alternativa:', anyRows.map(r => r.base_id));
-                origemRows = anyRows;
-            }
-        }
-
-        if (!origemRows || origemRows.length === 0) {
-            console.error('Fallback: sem estoque de origem para', { vacina_id, origem_base_id });
-            // Retornar true para não bloquear a entrega — o estoque pode não ter sido
-            // configurado no banco para esta vacina. Operação registrada nos logs.
-            console.warn('ATENÇÃO: transferência ignorada por ausência de estoque — verifique o cadastro da vacina id:', vacina_id);
-            return true;
-        }
-
-        // Consolidar saldo disponível (pode haver linhas base + clinica para mesma base)
-        const saldoTotal = origemRows.reduce((s, r) => s + Number(r.quantidade || 0), 0);
-        if (saldoTotal < quantidade) {
-            console.warn('Fallback: saldo insuficiente — entrega liberada mas estoque ficará negativo', { saldoTotal, quantidade, vacina_id });
-            // Zerar o estoque disponível em vez de bloquear — ajuste manual necessário depois
-            quantidade = saldoTotal;
-            if (quantidade <= 0) return true; // sem nada para debitar
-        }
-
-        // Debitar da primeira linha com saldo suficiente
-        let restante = quantidade;
-        for (const row of origemRows) {
-            if (restante <= 0) break;
-            const debito = Math.min(Number(row.quantidade || 0), restante);
-            if (debito <= 0) continue;
-            const { error: debErr } = await sb.from('estoque')
-                .update({ quantidade: Number(row.quantidade) - debito })
-                .eq('id', row.id);
-            if (debErr) { console.error('Fallback debito erro:', debErr); return false; }
-            restante -= debito;
-        }
-
-        // Creditar no aplicador destino
-        const { data: destRows } = await sb.from('estoque')
-            .select('id, quantidade')
-            .eq('vacina_id', vacina_id)
-            .eq('aplicador_id', destino_aplicador_id)
-            .eq('localizacao_tipo', 'aplicador');
-
-        if (destRows && destRows.length > 0) {
-            const { error: credErr } = await sb.from('estoque')
-                .update({ quantidade: Number(destRows[0].quantidade || 0) + quantidade })
-                .eq('id', destRows[0].id);
-            if (credErr) { console.error('Fallback credito erro:', credErr); return false; }
-        } else {
-            const { error: insErr } = await sb.from('estoque').insert({
-                vacina_id, aplicador_id: destino_aplicador_id,
-                localizacao_tipo: 'aplicador', quantidade
-            });
-            if (insErr) { console.error('Fallback insert destino erro:', insErr); return false; }
-        }
-
-        // Registrar movimentação
-        await sb.from('movimentacoes').insert({
-            tipo: 'transferencia',
-            vacina_id,
-            quantidade,
-            origem_tipo: 'base',
-            origem_base_id,
-            destino_tipo: 'aplicador',
-            destino_aplicador_id,
-            remessa_id: remessa_id || null,
-            observacao: (observacao || '') + ' [fallback-js]',
-            criado_por: userId
-        });
-
+        if (error)
+            throw error;
         return true;
     }
     catch (err) {
@@ -11737,293 +11720,6 @@ async function transferirEstoqueDireto({ vacina_id, quantidade, origem_base_id, 
         return false;
     }
 }
-// ── Rota de Transferência Base → Base ──
-function RotaTransferenciaPage() {
-    const [bases, setBases] = React.useState([]);
-    const [vacinas, setVacinas] = React.useState([]);
-    const [motoristas, setMotoristas] = React.useState([]);
-    const [veiculos, setVeiculos] = React.useState([]);
-    const [rotas, setRotas] = React.useState([]);
-    const [loadingRotas, setLoadingRotas] = React.useState(true);
-    // Form nova rota
-    const [baseOrigem, setBaseOrigem] = React.useState('');
-    const [baseDestino, setBaseDestino] = React.useState('');
-    const [motoristaId, setMotoristaId] = React.useState('');
-    const [veiculoId, setVeiculoId] = React.useState('');
-    const [dataPrevista, setDataPrevista] = React.useState(new Date().toISOString().split('T')[0]);
-    const [itens, setItens] = React.useState([]); // [{vacina_id, vacina_nome, quantidade}]
-    const [novaVacina, setNovaVacina] = React.useState('');
-    const [novaQtd, setNovaQtd] = React.useState('');
-    const [obs, setObs] = React.useState('');
-    const [saving, setSaving] = React.useState(false);
-    const [abaAtiva, setAbaAtiva] = React.useState('nova'); // 'nova' | 'acompanhar'
-    const toast = React.useContext(ToastContext);
-
-    const loadRotas = async () => {
-        setLoadingRotas(true);
-        const { data } = await sb.from('rotas')
-            .select('id,codigo,status,data_prevista,veiculo,bases!rotas_base_origem_id_fkey(nome),profiles!rotas_motorista_id_fkey(nome),remessas(id,status,destino_tipo,bases(nome),remessa_itens(quantidade,vacinas(nome)))')
-            .eq('tipo', 'transferencia')
-            .order('data_prevista', { ascending: false })
-            .limit(30);
-        setRotas(data || []);
-        setLoadingRotas(false);
-    };
-
-    React.useEffect(() => {
-        sb.from('bases').select('id,nome,cidade,uf').eq('ativa', true).not('nome','ilike','Cl%nica%').not('nome','ilike','Rede Credenciada%').order('nome').then(r => setBases(r.data || []));
-        sb.from('vacinas').select('id,nome').eq('ativa', true).order('nome').then(r => setVacinas(r.data || []));
-        sb.from('profiles').select('id,nome').eq('role','motorista').eq('ativo', true).order('nome').then(r => setMotoristas(r.data || []));
-        sb.from('veiculos').select('id,placa,modelo').eq('ativo', true).order('modelo').then(r => setVeiculos(r.data || []));
-        loadRotas();
-    }, []);
-
-    const addItem = () => {
-        if (!novaVacina || !novaQtd || Number(novaQtd) <= 0) { toast('Selecione a vacina e informe a quantidade', 'error'); return; }
-        if (itens.find(i => i.vacina_id === novaVacina)) { toast('Vacina já adicionada', 'error'); return; }
-        const v = vacinas.find(v => v.id === novaVacina);
-        setItens([...itens, { vacina_id: novaVacina, vacina_nome: v?.nome || '', quantidade: Number(novaQtd) }]);
-        setNovaVacina(''); setNovaQtd('');
-    };
-
-    const salvar = async () => {
-        if (!baseOrigem) { toast('Selecione a base de origem', 'error'); return; }
-        if (!baseDestino) { toast('Selecione a base de destino', 'error'); return; }
-        if (baseOrigem === baseDestino) { toast('Origem e destino não podem ser iguais', 'error'); return; }
-        if (!motoristaId) { toast('Selecione o motorista', 'error'); return; }
-        if (itens.length === 0) { toast('Adicione pelo menos uma vacina', 'error'); return; }
-        setSaving(true);
-        try {
-            const { data: { user } } = await sb.auth.getUser();
-            const baseOrig = bases.find(b => b.id === baseOrigem);
-            const baseDest = bases.find(b => b.id === baseDestino);
-            const veiculo = veiculos.find(v => v.id === veiculoId);
-            // Criar rota
-            const { data: rota, error: re } = await sb.from('rotas').insert({
-                base_origem_id: baseOrigem,
-                data_prevista: dataPrevista,
-                tipo: 'transferencia',
-                motorista_id: motoristaId,
-                veiculo: veiculo ? veiculo.modelo + ' - ' + veiculo.placa : null,
-                veiculo_id: veiculoId || null,
-                criado_por: user.id,
-                codigo: '',
-                status: 'planejada'
-            }).select().single();
-            if (re) throw re;
-            // Criar remessa única base→base
-            const obsRemessa = [
-                'Transferência de estoque',
-                'Origem: ' + (baseOrig?.nome || ''),
-                'Destino: ' + (baseDest?.nome || ''),
-                obs || ''
-            ].filter(Boolean).join(' | ');
-            const { data: remessa, error: remErr } = await sb.from('remessas').insert({
-                rota_id: rota.id,
-                tipo: 'transferencia',
-                destino_tipo: 'base',
-                destino_base_id: baseDestino,
-                ordem_entrega: 1,
-                observacao: obsRemessa,
-                codigo_rastreio: '',
-                status: 'planejada'
-            }).select().single();
-            if (remErr) throw remErr;
-            // Inserir itens da remessa
-            for (const item of itens) {
-                await sb.from('remessa_itens').insert({
-                    remessa_id: remessa.id,
-                    vacina_id: item.vacina_id,
-                    quantidade: item.quantidade
-                });
-            }
-            toast('Rota de transferência criada! ✓', 'success');
-            setBaseOrigem(''); setBaseDestino(''); setMotoristaId(''); setVeiculoId('');
-            setItens([]); setObs(''); setAbaAtiva('acompanhar');
-            loadRotas();
-        } catch(e) {
-            toast(e.message || 'Erro ao salvar', 'error');
-        }
-        setSaving(false);
-    };
-
-    const cancelarRota = async (rotaId) => {
-        if (!confirm('Cancelar esta rota de transferência?')) return;
-        await sb.from('rotas').update({ status: 'cancelada' }).eq('id', rotaId);
-        toast('Rota cancelada', 'success');
-        loadRotas();
-    };
-
-    const ST = { planejada: 'Planejada', montagem: 'Montagem', pronta: 'Pronta', em_transito: 'Em Trânsito', concluida: 'Concluída', cancelada: 'Cancelada' };
-    const SB = { planejada: 'badge-blue', montagem: 'badge-yellow', pronta: 'badge-cyan', em_transito: 'badge-green', concluida: 'badge-gray', cancelada: 'badge-red' };
-
-    return React.createElement('div', { className: 'page-container' },
-        React.createElement('div', { className: 'page-header' },
-            React.createElement('div', null,
-                React.createElement('h1', { className: 'page-title' }, '🔄 Rota de Transferência'),
-                React.createElement('div', { className: 'page-subtitle' }, 'Transferência de estoque entre bases com motorista escalado'))),
-        // Abas
-        React.createElement('div', { style: { display: 'flex', gap: 8, marginBottom: 20 } },
-            ['nova', 'acompanhar'].map(aba =>
-                React.createElement('button', { key: aba, className: `btn ${abaAtiva === aba ? 'btn-primary' : 'btn-secondary'}`, onClick: () => setAbaAtiva(aba) },
-                    aba === 'nova' ? '➕ Nova Transferência' : '📋 Acompanhar'))),
-
-        // ── NOVA TRANSFERÊNCIA ──
-        abaAtiva === 'nova' && React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 16 } },
-            React.createElement('div', { className: 'card' },
-                React.createElement('div', { style: { fontWeight: 700, fontSize: 14, marginBottom: 14, color: 'var(--accent)' } }, '📍 Origem e Destino'),
-                React.createElement('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(220px,1fr))', gap: 12 } },
-                    React.createElement('div', { className: 'form-group' },
-                        React.createElement('label', { className: 'form-label' }, '🏢 Base de Origem'),
-                        React.createElement('select', { className: 'form-select', value: baseOrigem, onChange: e => setBaseOrigem(e.target.value) },
-                            React.createElement('option', { value: '' }, 'Selecione...'),
-                            bases.map(b => React.createElement('option', { key: b.id, value: b.id }, b.nome + (b.cidade ? ' — ' + b.cidade + '/' + b.uf : ''))))),
-                    React.createElement('div', { className: 'form-group' },
-                        React.createElement('label', { className: 'form-label' }, '🏢 Base de Destino'),
-                        React.createElement('select', { className: 'form-select', value: baseDestino, onChange: e => setBaseDestino(e.target.value) },
-                            React.createElement('option', { value: '' }, 'Selecione...'),
-                            bases.filter(b => b.id !== baseOrigem).map(b => React.createElement('option', { key: b.id, value: b.id }, b.nome + (b.cidade ? ' — ' + b.cidade + '/' + b.uf : ''))))),
-                    React.createElement('div', { className: 'form-group' },
-                        React.createElement('label', { className: 'form-label' }, '📅 Data Prevista'),
-                        React.createElement('input', { type: 'date', className: 'form-input', value: dataPrevista, onChange: e => setDataPrevista(e.target.value) })))),
-
-            React.createElement('div', { className: 'card' },
-                React.createElement('div', { style: { fontWeight: 700, fontSize: 14, marginBottom: 14, color: 'var(--accent)' } }, '🚚 Motorista e Veículo'),
-                React.createElement('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(220px,1fr))', gap: 12 } },
-                    React.createElement('div', { className: 'form-group' },
-                        React.createElement('label', { className: 'form-label' }, '👤 Motorista *'),
-                        React.createElement('select', { className: 'form-select', value: motoristaId, onChange: e => setMotoristaId(e.target.value) },
-                            React.createElement('option', { value: '' }, 'Selecione...'),
-                            motoristas.map(m => React.createElement('option', { key: m.id, value: m.id }, m.nome)))),
-                    React.createElement('div', { className: 'form-group' },
-                        React.createElement('label', { className: 'form-label' }, '🚗 Veículo'),
-                        React.createElement('select', { className: 'form-select', value: veiculoId, onChange: e => setVeiculoId(e.target.value) },
-                            React.createElement('option', { value: '' }, 'Selecione...'),
-                            veiculos.map(v => React.createElement('option', { key: v.id, value: v.id }, v.modelo + ' - ' + v.placa)))))),
-
-            React.createElement('div', { className: 'card' },
-                React.createElement('div', { style: { fontWeight: 700, fontSize: 14, marginBottom: 14, color: 'var(--accent)' } }, '💉 Vacinas a Transferir'),
-                React.createElement('div', { style: { display: 'flex', gap: 10, marginBottom: 12, flexWrap: 'wrap', alignItems: 'flex-end' } },
-                    React.createElement('div', { className: 'form-group', style: { flex: 2, minWidth: 180, marginBottom: 0 } },
-                        React.createElement('label', { className: 'form-label' }, 'Vacina'),
-                        React.createElement('select', { className: 'form-select', value: novaVacina, onChange: e => setNovaVacina(e.target.value) },
-                            React.createElement('option', { value: '' }, 'Selecione...'),
-                            vacinas.filter(v => !itens.find(i => i.vacina_id === v.id)).map(v => React.createElement('option', { key: v.id, value: v.id }, v.nome)))),
-                    React.createElement('div', { className: 'form-group', style: { width: 120, marginBottom: 0 } },
-                        React.createElement('label', { className: 'form-label' }, 'Quantidade'),
-                        React.createElement('input', { type: 'number', className: 'form-input', min: 1, value: novaQtd, onChange: e => setNovaQtd(e.target.value), placeholder: '0' })),
-                    React.createElement('button', { className: 'btn btn-primary', style: { whiteSpace: 'nowrap' }, onClick: addItem }, '+ Adicionar')),
-                itens.length === 0
-                    ? React.createElement('div', { style: { color: 'var(--text-muted)', fontSize: 13, padding: '12px 0' } }, 'Nenhuma vacina adicionada')
-                    : React.createElement('table', { style: { width: '100%', borderCollapse: 'collapse' } },
-                        React.createElement('thead', null,
-                            React.createElement('tr', null,
-                                ['Vacina', 'Quantidade', ''].map(h => React.createElement('th', { key: h, style: { textAlign: 'left', padding: '6px 8px', fontSize: 11, color: 'var(--text-muted)', borderBottom: '1px solid var(--border)', textTransform: 'uppercase' } }, h)))),
-                        React.createElement('tbody', null,
-                            itens.map((item, i) =>
-                                React.createElement('tr', { key: i },
-                                    React.createElement('td', { style: { padding: '8px', fontSize: 13 } }, '💉 ' + item.vacina_nome),
-                                    React.createElement('td', { style: { padding: '8px', fontSize: 13, fontWeight: 700 } }, item.quantidade.toLocaleString('pt-BR') + ' doses'),
-                                    React.createElement('td', { style: { padding: '8px', textAlign: 'right' } },
-                                        React.createElement('button', { className: 'btn btn-secondary btn-sm', onClick: () => setItens(itens.filter((_, j) => j !== i)) }, '✕')))))),
-                itens.length > 0 && React.createElement('div', { style: { marginTop: 10, padding: '8px 12px', background: 'var(--bg-input)', borderRadius: 'var(--radius-sm)', fontSize: 12, fontWeight: 600 } },
-                    'Total: ', itens.reduce((s, i) => s + i.quantidade, 0).toLocaleString('pt-BR'), ' doses')),
-
-            React.createElement('div', { className: 'card' },
-                React.createElement('div', { className: 'form-group', style: { marginBottom: 0 } },
-                    React.createElement('label', { className: 'form-label' }, '📝 Observação (opcional)'),
-                    React.createElement('input', { type: 'text', className: 'form-input', value: obs, onChange: e => setObs(e.target.value), placeholder: 'Ex: Reposição urgente para campanha...' }))),
-
-            React.createElement('div', { style: { display: 'flex', justifyContent: 'flex-end' } },
-                React.createElement('button', { className: 'btn btn-primary', style: { minWidth: 180, padding: '12px 24px', fontSize: 15 }, onClick: salvar, disabled: saving },
-                    saving ? 'Criando...' : '✓ Criar Rota de Transferência'))),
-
-        // ── ACOMPANHAR ──
-        abaAtiva === 'acompanhar' && React.createElement('div', null,
-            loadingRotas
-                ? React.createElement('div', { style: { padding: 40, textAlign: 'center', color: 'var(--text-muted)' } }, 'Carregando...')
-                : rotas.length === 0
-                    ? React.createElement('div', { className: 'empty-state' },
-                        React.createElement('div', { style: { fontSize: 40 } }, '🔄'),
-                        React.createElement('div', null, 'Nenhuma rota de transferência encontrada'))
-                    : React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 12 } },
-                        rotas.map(r => {
-                            const remessa = (r.remessas || [])[0];
-                            const totalDoses = (remessa?.remessa_itens || []).reduce((s, i) => s + Number(i.quantidade || 0), 0);
-                            const baseDestNome = remessa?.bases?.nome || '—';
-                            return React.createElement('div', { key: r.id, className: 'card' },
-                                React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 8 } },
-                                    React.createElement('div', null,
-                                        React.createElement('div', { style: { fontFamily: 'JetBrains Mono', fontSize: 12, color: 'var(--accent)', fontWeight: 600 } }, r.codigo || r.id.slice(0,8)),
-                                        React.createElement('div', { style: { fontSize: 14, fontWeight: 700, marginTop: 4 } },
-                                            (r.bases?.nome || '—'), ' → ', baseDestNome),
-                                        React.createElement('div', { style: { fontSize: 12, color: 'var(--text-muted)', marginTop: 2 } },
-                                            '📅 ' + (r.data_prevista ? new Date(r.data_prevista + 'T12:00:00').toLocaleDateString('pt-BR') : '—'),
-                                            ' · 👤 ' + (r.profiles?.nome || '—'),
-                                            r.veiculo ? ' · 🚗 ' + r.veiculo : '')),
-                                    React.createElement('div', { style: { display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' } },
-                                        React.createElement('span', { className: `badge ${SB[r.status] || 'badge-gray'}` }, ST[r.status] || r.status),
-                                        totalDoses > 0 && React.createElement('span', { className: 'badge badge-cyan' }, totalDoses.toLocaleString('pt-BR') + ' doses'))),
-                                (remessa?.remessa_itens || []).length > 0 && React.createElement('div', { style: { marginTop: 10, display: 'flex', gap: 6, flexWrap: 'wrap' } },
-                                    (remessa.remessa_itens || []).map((it, i) =>
-                                        React.createElement('span', { key: i, style: { fontSize: 11, padding: '3px 10px', borderRadius: 4, background: 'var(--bg-input)', color: 'var(--text-secondary)', fontWeight: 600 } },
-                                            '💉 ' + (it.vacinas?.nome || '—') + ': ' + it.quantidade))),
-                                !['concluida', 'cancelada'].includes(r.status) && React.createElement('div', { style: { marginTop: 10, display: 'flex', gap: 8 } },
-                                    React.createElement('button', { className: 'btn btn-secondary btn-sm', style: { color: 'var(--danger)' }, onClick: () => cancelarRota(r.id) }, '✕ Cancelar')));
-                        }))));
-}
-
-// ── Modal de Problema na Entrega ──
-function ProblemaEntregaModal({ rem, onConfirm, onClose }) {
-    const [motivo, setMotivo] = React.useState('recusa');
-    const [obs, setObs] = React.useState('');
-    const [loading, setLoading] = React.useState(false);
-    const motivos = [
-        { value: 'recusa', label: '🚫 Destinatário recusou o recebimento' },
-        { value: 'ausente', label: '🔔 Destinatário ausente' },
-        { value: 'endereco', label: '📍 Endereço não encontrado' },
-        { value: 'reagendamento', label: '📅 Solicitou reagendamento' },
-        { value: 'outro', label: '✏️ Outro motivo' },
-    ];
-    const nomeExibir = rem.destino_tipo === 'aplicador'
-        ? rem.aplicadores?.nome
-        : rem.bases?.nome;
-    const handleConfirm = async () => {
-        if (motivo === 'outro' && !obs.trim()) return;
-        setLoading(true);
-        await onConfirm(rem, motivo, obs.trim());
-        setLoading(false);
-    };
-    return React.createElement('div', { style: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 } },
-        React.createElement('div', { style: { background: 'var(--bg-card)', borderRadius: 'var(--radius)', padding: 24, width: '100%', maxWidth: 440, border: '1px solid rgba(239,68,68,0.3)' } },
-            React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 } },
-                React.createElement('div', { style: { fontSize: 16, fontWeight: 700, color: 'var(--danger)' } }, '⚠️ Registrar Problema na Entrega'),
-                React.createElement('button', { className: 'btn btn-secondary btn-sm', onClick: onClose }, '✕')),
-            React.createElement('div', { style: { padding: '10px 14px', background: 'var(--bg-input)', borderRadius: 'var(--radius-sm)', marginBottom: 16, fontSize: 13 } },
-                React.createElement('div', { style: { color: 'var(--text-muted)', fontSize: 11, marginBottom: 2 } }, 'DESTINATÁRIO'),
-                React.createElement('div', { style: { fontWeight: 600 } }, nomeExibir || rem.codigo_rastreio)),
-            React.createElement('div', { style: { marginBottom: 14 } },
-                React.createElement('div', { style: { fontSize: 12, fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: 8 } }, 'Motivo da não entrega'),
-                motivos.map(m =>
-                    React.createElement('label', { key: m.value, style: { display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px', borderRadius: 'var(--radius-sm)', marginBottom: 6, cursor: 'pointer', background: motivo === m.value ? 'rgba(239,68,68,0.1)' : 'var(--bg-input)', border: `1px solid ${motivo === m.value ? 'rgba(239,68,68,0.4)' : 'var(--border)'}`, fontSize: 13, transition: 'all 0.15s' } },
-                        React.createElement('input', { type: 'radio', name: 'motivo', value: m.value, checked: motivo === m.value, onChange: () => setMotivo(m.value), style: { accentColor: 'var(--danger)' } }),
-                        m.label))),
-            (motivo === 'outro' || motivo === 'ausente' || motivo === 'reagendamento') &&
-                React.createElement('div', { style: { marginBottom: 14 } },
-                    React.createElement('label', { style: { fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 6 } }, motivo === 'outro' ? 'Descreva o problema *' : 'Observação adicional (opcional)'),
-                    React.createElement('textarea', { className: 'form-input', rows: 3, style: { resize: 'vertical', fontFamily: 'inherit' }, placeholder: motivo === 'outro' ? 'Descreva o que aconteceu...' : 'Detalhes adicionais...', value: obs, onChange: e => setObs(e.target.value) })),
-            React.createElement('div', { style: { padding: '10px 14px', background: 'rgba(239,68,68,0.08)', borderRadius: 'var(--radius-sm)', marginBottom: 16, fontSize: 12, color: 'var(--danger)' } },
-                '⚠️ A entrega será marcada como ',
-                React.createElement('strong', null, 'Não Realizada'),
-                ' e a rota poderá ser finalizada normalmente. O estoque ',
-                React.createElement('strong', null, 'não será debitado'),
-                ' desta remessa.'),
-            React.createElement('div', { style: { display: 'flex', gap: 10 } },
-                React.createElement('button', { className: 'btn btn-secondary', style: { flex: 1 }, onClick: onClose }, 'Cancelar'),
-                React.createElement('button', { className: 'btn btn-danger', style: { flex: 2 }, onClick: handleConfirm, disabled: loading || (motivo === 'outro' && !obs.trim()) },
-                    loading ? 'Registrando...' : '✓ Confirmar Não Entrega'))));
-}
-
 // ── Modal de Detalhes da Entrega (assinatura, local, nome, cpf) ──
 function EntregaDetalheModal({ remessa, rota, onClose }) {
     var _a, _b, _c, _d, _e, _f, _g, _h;
@@ -12482,8 +12178,6 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
     const [checkoutModal, setCheckoutModal] = useState(false);
     const [checkinModal, setCheckinModal] = useState(false);
     const [assinaturaModal, setAssinaturaModal] = useState(null);
-    const [problemaModal, setProblemaModal] = useState(null); // rem ou null
-    const [rotaColetaAberta, setRotaColetaAberta] = useState(false);
     const [assinaturaColetaModal, setAssinaturaColetaModal] = useState(null); // para coleta
     const [entregaDetalhe, setEntregaDetalhe] = useState(null);
     const [rotaColeta, setRotaColeta] = useState(null); // rota de coleta vinculada
@@ -12644,14 +12338,16 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
             return;
         }
         const itens = rem.remessa_itens || [];
-        // Resolver destino correto (aplicador)
-        let destTipo = rem.destino_tipo;
+        // Resolver destino
+        let destTipo = rem.destino_tipo || 'aplicador';
         let destId = destTipo === 'aplicador' ? rem.destino_aplicador_id : rem.destino_base_id;
-        // Se destino incorreto, resolver pelo CPF na observação
-        if ((!destId || destTipo !== 'aplicador') && rem.observacao) {
-            const mCPF = rem.observacao.match(/\(([^)]+)\)/);
-            if (mCPF) {
-                const { data: ap } = await sb.from('aplicadores').select('id').eq('cpf', mCPF[1].trim()).single();
+        // Fallback: resolver aplicador pelo CPF na observação
+        if ((!destId || destTipo !== 'aplicador') && destTipo !== 'base' && rem.observacao) {
+            const mCPF = rem.observacao.match(/CPF:\s*([0-9.\-]+)/);
+            const mCPF2 = !mCPF && rem.observacao.match(/\(([^)]+)\)/);
+            const cpfStr = (mCPF ? mCPF[1] : mCPF2 ? mCPF2[1] : '').trim();
+            if (cpfStr && !cpfStr.includes(' ')) {
+                const { data: ap } = await sb.from('aplicadores').select('id').eq('cpf', cpfStr).single();
                 if (ap) {
                     destTipo = 'aplicador';
                     destId = ap.id;
@@ -12661,64 +12357,70 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
                 }
             }
         }
-        // ── Remessa de COLETA (aplicador → base) ──
-        // O motorista apenas registra que recolheu — estoque só é movimentado
-        // quando a base confere e confirma o recebimento físico da caixa.
-        if (rem.tipo === 'coleta') {
-            await sb.from('remessas').update({ status: 'em_transito' }).eq('id', remId);
-            toast('Coleta registrada! Aguardando conferência na base. ✓', 'success');
-            load();
-            return;
-        }
-
-        // ── Remessa de ENTREGA (base → aplicador) ──
-        if (!destId || destTipo !== 'aplicador') {
-            toast('Não foi possível identificar o aplicador de destino. Entrega não concluída para evitar estoque errado.', 'error');
+        if (!destId) {
+            toast('Não foi possível identificar o destino. Verifique os dados da remessa.', 'error');
             return;
         }
         if (itens.length > 0) {
             let errosTransferencia = [];
             for (const item of itens) {
                 const qtd = Number(item.quantidade || 0);
-                if (qtd <= 0)
-                    continue; // Pula itens sem doses (aplicador já tem estoque)
+                if (qtd <= 0) continue;
                 const obs = [
                     'Entrega confirmada',
                     'Rota: ' + rota.codigo,
                     'Remessa: ' + rem.codigo_rastreio,
-                    'Aplicador: ' + (((_a = rem.aplicadores) === null || _a === void 0 ? void 0 : _a.nome) || destId),
+                    destTipo === 'aplicador'
+                        ? 'Aplicador: ' + (((_a = rem.aplicadores) === null || _a === void 0 ? void 0 : _a.nome) || destId)
+                        : 'Base destino: ' + destId,
                     ((_b = item.vacinas) === null || _b === void 0 ? void 0 : _b.nome) ? 'Vacina: ' + item.vacinas.nome : null
                 ].filter(Boolean).join(' | ');
-                console.log('Tentando transferência:', {
-                    vacina_nome: item.vacinas?.nome,
-                    vacina_id: item.vacina_id,
-                    quantidade: qtd,
-                    origem_base_id: rota.base_origem_id,
-                    destino_aplicador_id: destId,
-                });
-                const transferOk = await transferirEstoqueDireto({
-                    vacina_id: item.vacina_id,
-                    quantidade: qtd,
-                    origem_base_id: rota.base_origem_id,
-                    destino_aplicador_id: destId,
-                    remessa_id: remId,
-                    observacao: obs
-                });
+                let transferOk = false;
+                if (destTipo === 'aplicador') {
+                    // Entrega normal: base → aplicador
+                    transferOk = await transferirEstoqueDireto({
+                        vacina_id: item.vacina_id,
+                        quantidade: qtd,
+                        origem_base_id: rota.base_origem_id,
+                        destino_aplicador_id: destId,
+                        remessa_id: remId,
+                        observacao: obs
+                    });
+                } else if (destTipo === 'base') {
+                    // Transferência entre bases: base origem → base destino
+                    try {
+                        // Debita base origem
+                        const { data: estOrig } = await sb.from('estoque').select('id,quantidade')
+                            .eq('vacina_id', item.vacina_id).eq('base_id', rota.base_origem_id)
+                            .eq('localizacao_tipo', 'base').limit(1);
+                        if (estOrig?.[0]) {
+                            await sb.from('estoque').update({ quantidade: Math.max(0, Number(estOrig[0].quantidade) - qtd) }).eq('id', estOrig[0].id);
+                        }
+                        // Credita base destino
+                        const { data: estDest } = await sb.from('estoque').select('id,quantidade')
+                            .eq('vacina_id', item.vacina_id).eq('base_id', destId)
+                            .eq('localizacao_tipo', 'base').limit(1);
+                        if (estDest?.[0]) {
+                            await sb.from('estoque').update({ quantidade: Number(estDest[0].quantidade) + qtd }).eq('id', estDest[0].id);
+                        } else {
+                            await sb.from('estoque').insert({ vacina_id: item.vacina_id, base_id: destId, localizacao_tipo: 'base', quantidade: qtd });
+                        }
+                        // Movimentação
+                        await sb.from('movimentacoes').insert({ tipo: 'transferencia', vacina_id: item.vacina_id, quantidade: qtd, origem_tipo: 'base', origem_base_id: rota.base_origem_id, destino_tipo: 'base', destino_base_id: destId, remessa_id: remId, observacao: obs });
+                        transferOk = true;
+                    } catch(e) {
+                        console.error('Transferência base→base:', e.message);
+                    }
+                }
                 if (!transferOk) {
-                    errosTransferencia.push((((_c = item.vacinas) === null || _c === void 0 ? void 0 : _c.nome) || 'Vacina') + ' (id:' + item.vacina_id + ')');
+                    errosTransferencia.push(((_c = item.vacinas) === null || _c === void 0 ? void 0 : _c.nome) || 'Vacina');
                 }
             }
-            // Segurança: se o estoque não transferiu, NÃO concluir a entrega.
-            // Antes a entrega era marcada como concluída mesmo quando a RPC falhava,
-            // o que deixava remessa concluída sem debitar a base nem creditar o aplicador.
             if (errosTransferencia.length > 0) {
-                toast('❌ Entrega NÃO concluída. Falha ao transferir: ' + errosTransferencia.join(', ') + '. Verifique o console (F12) para detalhes.', 'error');
-                console.error('Erros de transferência:', { errosTransferencia, rota_id: rota.id, base_origem_id: rota.base_origem_id, remessa_id: remId });
+                toast('❌ Entrega NÃO concluída. Falha ao transferir: ' + errosTransferencia.join(', '), 'error');
                 return;
             }
-            else {
-                toast('Estoque transferido para o aplicador ✓', 'success');
-            }
+            toast(destTipo === 'base' ? 'Transferência entre bases concluída ✓' : 'Estoque transferido ✓', 'success');
         }
         else {
             toast('Remessa sem itens — entrega confirmada sem movimentação de estoque', 'info');
@@ -12759,30 +12461,6 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
         }
     };
     const fazerCheckout = fazerCheckoutComTracking;
-    const confirmarProblema = async (rem, motivo, obs) => {
-        const motivoLabel = {
-            'recusa': 'Destinatário recusou o recebimento',
-            'ausente': 'Destinatário ausente',
-            'endereco': 'Endereço não encontrado',
-            'reagendamento': 'Solicitou reagendamento',
-            'outro': obs || 'Outro motivo'
-        }[motivo] || motivo;
-        const obsFinal = (rem.observacao || '') + '\n[NÃO ENTREGUE ' + new Date().toLocaleTimeString('pt-BR') + '] ' + motivoLabel + (obs && motivo !== 'outro' ? ' — ' + obs : '');
-        const { error } = await sb.from('remessas').update({ status: 'cancelada', observacao: obsFinal }).eq('id', rem.id);
-        if (error) { toast(error.message, 'error'); return; }
-        // Atualizar status_logistica da tarefa para 'nao_entregue' (se existir, senão fica como está)
-        try {
-            const { data: escalas } = await sb.from('escalas').select('tarefa_id').eq('aplicador_id', rem.destino_aplicador_id).not('tarefa_id', 'is', null);
-            const ids = [...new Set((escalas || []).map(e => e.tarefa_id).filter(Boolean))];
-            if (ids.length > 0) await sb.from('tarefas').update({ status_logistica: 'nao_roteirizado' }).in('id', ids);
-        } catch(e) { console.warn(e); }
-        toast('Entrega marcada como não realizada. A remessa foi cancelada.', 'success');
-        setProblemaModal(null);
-        load();
-        const { data } = await sb.from('remessas').select('status').eq('rota_id', rota.id);
-        const allDone = (data || []).every(r => ['concluida', 'cancelada'].includes(r.status));
-        if (allDone) toast('Todas as paradas finalizadas! Faça o check-out quando chegar na empresa.', 'success');
-    };
     const reportarProblema = async (remId, problema) => {
         var _a;
         const obs = (((_a = remessas.find(r => r.id === remId)) === null || _a === void 0 ? void 0 : _a.observacao) || '') + '\n[PROBLEMA ' + new Date().toLocaleTimeString('pt-BR') + '] ' + problema;
@@ -12809,8 +12487,8 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
         return doses > 0 || r.status === 'concluida' || r.status === 'cancelada';
     });
     const totalDoses = remessas.reduce((s, r) => s + (r.remessa_itens || []).reduce((ss, i) => ss + i.quantidade, 0), 0);
-    const entregues = remessas.filter(r => r.status === 'concluida' || (r.tipo === 'coleta' && r.status === 'em_transito')).length;
-    const pendentes = remessas.filter(r => !['concluida', 'cancelada'].includes(r.status) && !(r.tipo === 'coleta' && r.status === 'em_transito')).length;
+    const entregues = remessas.filter(r => r.status === 'concluida').length;
+    const pendentes = remessas.filter(r => !['concluida', 'cancelada'].includes(r.status)).length;
     const progresso = remessas.length > 0 ? (entregues / remessas.length * 100) : 0;
     const todasEntregues = remessas.length > 0 && pendentes === 0;
     // Formatação de data/hora
@@ -12962,10 +12640,10 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
                 React.createElement("div", { style: { display: 'flex', gap: 12, alignItems: 'flex-start' } },
                     React.createElement("div", { style: {
                             width: 36, height: 36, borderRadius: '50%', flexShrink: 0,
-                            background: isConcluida ? 'var(--success)' : isCancelada ? 'var(--danger)' : 'var(--accent)',
+                            background: isConcluida ? 'var(--success)' : 'var(--accent)',
                             color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center',
                             fontWeight: 700, fontSize: 16
-                        } }, isConcluida ? '✓' : isCancelada ? '✕' : rem.ordem_entrega),
+                        } }, isConcluida ? '✓' : rem.ordem_entrega),
                     React.createElement("div", { style: { flex: 1, minWidth: 0 } },
                         React.createElement("div", { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 6, marginBottom: 6 } },
                             React.createElement("div", null,
@@ -12996,18 +12674,18 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
                         }))),
                         !isConcluida && !isCancelada && rota.status === 'em_transito' && (React.createElement("div", { style: { display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 4 } },
                             React.createElement("button", { className: "btn btn-success btn-sm", onClick: () => setAssinaturaModal(rem) }, "\u2713 Confirmar Entrega"),
-                            React.createElement("button", { className: "btn btn-warning btn-sm", onClick: () => setProblemaModal(rem) }, "\u26A0\uFE0F Problema"),
+                            React.createElement("button", { className: "btn btn-secondary btn-sm", onClick: () => {
+                                    const p = prompt('Descreva o problema:');
+                                    if (p)
+                                        reportarProblema(rem.id, p);
+                                } }, "\u26A0 Problema"),
                             React.createElement("button", { className: "btn btn-secondary btn-sm", onClick: () => abrirMaps(endExibir, destCidade) }, "\uD83D\uDDFA Abrir Maps"))),
                         (isConcluida || rota.status !== 'em_transito') && (endExibir || destCidade) && (React.createElement("button", { className: "btn btn-secondary btn-sm", style: { marginTop: 4 }, onClick: () => abrirMaps(endExibir, destCidade) }, "\uD83D\uDDFA Abrir Maps")),
                         isConcluida && (React.createElement("button", { className: "btn btn-secondary btn-sm", style: { marginTop: 4 }, onClick: () => setEntregaDetalhe(rem) }, "\uD83D\uDCCB Ver Entrega")),
-                        isCancelada && (React.createElement("div", { style: { marginTop: 8, padding: '10px 14px', background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 'var(--radius-sm)', fontSize: 12 } },
-                            React.createElement("div", { style: { fontWeight: 700, color: 'var(--danger)', marginBottom: 4 } }, "\u274C N\u00E3o entregue"),
-                            React.createElement("div", { style: { color: 'var(--text-secondary)', fontSize: 11 } }, (rem.observacao || '').split('\n').filter(l => l.includes('[N\u00C3O ENTREGUE')).map(l => l.replace(/\[N\u00C3O ENTREGUE [^\]]*\]\s*/, '')).join(' | ') || 'Motivo registrado'))),
                         rem.observacao && rem.observacao.includes('[PROBLEMA') && (React.createElement("div", { style: { marginTop: 8, padding: '6px 10px', background: 'var(--danger-bg)', borderRadius: 'var(--radius-sm)', fontSize: 11, color: 'var(--danger)' } }, rem.observacao.split('\n').filter(l => l.includes('[PROBLEMA')).join(' | ')))))));
         })),
         entregaDetalhe && (React.createElement(EntregaDetalheModal, { remessa: entregaDetalhe, rota: rota, onClose: () => setEntregaDetalhe(null) })),
         assinaturaModal && (React.createElement(AssinaturaEntregaModal, { remessa: assinaturaModal, rota: rota, onConfirm: async (remId) => { setAssinaturaModal(null); await confirmarEntrega(remId); }, onClose: () => setAssinaturaModal(null) })),
-        problemaModal && React.createElement(ProblemaEntregaModal, { rem: problemaModal, onConfirm: confirmarProblema, onClose: () => setProblemaModal(null) }),
         assinaturaColetaModal && (React.createElement(AssinaturaColetaModal, { remessa: assinaturaColetaModal, rota: rotaColeta, onConfirm: async (remId, qtdDevolvida, sigInfo) => {
                 setAssinaturaColetaModal(null);
                 // Motorista coletou — salva assinatura + qtd_devolvida
@@ -13026,10 +12704,9 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
                 load();
             }, onClose: () => setAssinaturaColetaModal(null) })),
         remessasColeta.length > 0 && (React.createElement("div", { style: { marginTop: 24 } },
-            React.createElement("div", { style: { fontSize: 12, fontWeight: 700, color: 'var(--accent)', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8 }, onClick: () => setRotaColetaAberta(true) },
+            React.createElement("div", { style: { fontSize: 12, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 } },
                 "\u21A9 Coleta vinculada \u2014 ", rotaColeta === null || rotaColeta === void 0 ? void 0 :
-                rotaColeta.codigo,
-                React.createElement("span", { style: { fontSize: 11, padding: '2px 8px', background: 'var(--accent)', color: '#fff', borderRadius: 4 } }, "Abrir \u2192")),
+                rotaColeta.codigo),
             React.createElement("div", { style: { display: 'flex', flexDirection: 'column', gap: 10 } }, remessasColeta.map(rem => {
                 const ap = rem.aplicadores;
                 const doses = (rem.remessa_itens || []).reduce((s, it) => s + Number(it.quantidade || 0), 0);
@@ -13398,10 +13075,8 @@ function PlaceholderPage({ title, icon, description }) {
 // ═══════════════════════════════════════════════
 function MovimentacoesPage() {
     const [bases, setBases] = useState([]);
-    const [clinicas, setClinicas] = useState([]);
     const [aplicadores, setAplicadores] = useState([]);
-    const [tipoFiltro, setTipoFiltro] = useState(''); // 'base' | 'clinica' | 'aplicador' | ''
-    const [localSel, setLocalSel] = useState(null); // { tipo: 'base'|'clinica'|'aplicador', id, nome }
+    const [localSel, setLocalSel] = useState(null); // { tipo: 'base'|'aplicador', id, nome }
     const [vacinas, setVacinas] = useState([]);
     const [filtroVacina, setFiltroVacina] = useState('');
     const [extrato, setExtrato] = useState([]);
@@ -13422,16 +13097,15 @@ function MovimentacoesPage() {
             const destinoTipo = tiposValidos.includes(mov.destino_tipo) ? mov.destino_tipo : null;
             // Para estorno: se era entrada (local = destino) → estorno é saída (local = origem)
             //               se era saída (local = origem) → estorno é entrada (local = destino)
-            const localTipoDB = (localSel.tipo === 'clinica') ? 'base' : localSel.tipo; // clinica usa base_id no banco
             let estornoOrigemTipo, estornoOrigemBaseId, estornoOrigemApId;
             let estornoDestinoTipo, estornoDestinoBaseId, estornoDestinoApId;
             if (mov.direcao === 'entrada') {
                 // Estorno de entrada = saída do local para lugar nenhum (ajuste)
                 estornoOrigemTipo = localSel.tipo;
-                estornoOrigemBaseId = (localSel.tipo === 'base' || localSel.tipo === 'clinica') ? localSel.id : null;
+                estornoOrigemBaseId = localSel.tipo === 'base' ? localSel.id : null;
                 estornoOrigemApId = localSel.tipo === 'aplicador' ? localSel.id : null;
                 estornoDestinoTipo = localSel.tipo;
-                estornoDestinoBaseId = (localSel.tipo === 'base' || localSel.tipo === 'clinica') ? localSel.id : null;
+                estornoDestinoBaseId = localSel.tipo === 'base' ? localSel.id : null;
                 estornoDestinoApId = localSel.tipo === 'aplicador' ? localSel.id : null;
             }
             else {
@@ -13440,7 +13114,7 @@ function MovimentacoesPage() {
                 estornoOrigemBaseId = mov.destino_base_id || null;
                 estornoOrigemApId = mov.destino_aplicador_id || null;
                 estornoDestinoTipo = localSel.tipo;
-                estornoDestinoBaseId = (localSel.tipo === 'base' || localSel.tipo === 'clinica') ? localSel.id : null;
+                estornoDestinoBaseId = localSel.tipo === 'base' ? localSel.id : null;
                 estornoDestinoApId = localSel.tipo === 'aplicador' ? localSel.id : null;
             }
             const { error } = await sb.from('movimentacoes').insert({
@@ -13465,7 +13139,17 @@ function MovimentacoesPage() {
             // Lógica simples: se era entrada no local selecionado → debitar; se era saída → creditar
             const ajustarEstoque = async (delta) => {
                 // delta = -N para debitar, +N para creditar
-                if (localSel.tipo === 'aplicador') {
+                if (localSel.tipo === 'base') {
+                    const { data: rows } = await sb.from('estoque').select('id,quantidade')
+                        .eq('vacina_id', mov.vacina_id).eq('base_id', localSel.id).eq('localizacao_tipo', 'base');
+                    if (rows === null || rows === void 0 ? void 0 : rows.length) {
+                        await sb.from('estoque').update({ quantidade: rows[0].quantidade + delta }).eq('id', rows[0].id);
+                    }
+                    else if (delta > 0) {
+                        await sb.from('estoque').insert({ vacina_id: mov.vacina_id, base_id: localSel.id, localizacao_tipo: 'base', quantidade: delta });
+                    }
+                }
+                else {
                     const { data: rows } = await sb.from('estoque').select('id,quantidade')
                         .eq('vacina_id', mov.vacina_id).eq('aplicador_id', localSel.id).eq('localizacao_tipo', 'aplicador');
                     if (rows === null || rows === void 0 ? void 0 : rows.length) {
@@ -13473,18 +13157,6 @@ function MovimentacoesPage() {
                     }
                     else if (delta > 0) {
                         await sb.from('estoque').insert({ vacina_id: mov.vacina_id, aplicador_id: localSel.id, localizacao_tipo: 'aplicador', quantidade: delta });
-                    }
-                }
-                else {
-                    // base ou clinica — ambas usam base_id, localizacao_tipo diferente
-                    const locTipo = 'base'; // clinica usa localizacao_tipo='base' no enum do banco
-                    const { data: rows } = await sb.from('estoque').select('id,quantidade')
-                        .eq('vacina_id', mov.vacina_id).eq('base_id', localSel.id).eq('localizacao_tipo', locTipo);
-                    if (rows === null || rows === void 0 ? void 0 : rows.length) {
-                        await sb.from('estoque').update({ quantidade: rows[0].quantidade + delta }).eq('id', rows[0].id);
-                    }
-                    else if (delta > 0) {
-                        await sb.from('estoque').insert({ vacina_id: mov.vacina_id, base_id: localSel.id, localizacao_tipo: locTipo, quantidade: delta });
                     }
                 }
             };
@@ -13504,13 +13176,11 @@ function MovimentacoesPage() {
     };
     useEffect(() => {
         Promise.all([
-            sb.from('bases').select('id, nome, cidade, uf').not('nome','ilike','Cl%nica%').not('nome','ilike','Rede Credenciada%').order('nome'),
-            sb.from('bases').select('id, nome, cidade, uf').or("nome.ilike.Cl%nica%,nome.ilike.Rede Credenciada%").order('nome'),
+            sb.from('bases').select('id, nome, cidade, uf').order('nome'),
             sb.from('aplicadores').select('id, nome, cpf, cidade, uf').order('nome'),
             sb.from('vacinas').select('id, nome').order('nome'),
-        ]).then(([b, c, a, v]) => {
+        ]).then(([b, a, v]) => {
             setBases(b.data || []);
-            setClinicas(c.data || []);
             setAplicadores(a.data || []);
             setVacinas(v.data || []);
         });
@@ -13520,14 +13190,12 @@ function MovimentacoesPage() {
             return;
         setLoading(true);
         setExtrato([]);
-        const campo_origem = (local.tipo === 'base' || local.tipo === 'clinica') ? 'origem_base_id' : 'origem_aplicador_id';
-        const campo_destino = (local.tipo === 'base' || local.tipo === 'clinica') ? 'destino_base_id' : 'destino_aplicador_id';
+        const campo_origem = local.tipo === 'base' ? 'origem_base_id' : 'origem_aplicador_id';
+        const campo_destino = local.tipo === 'base' ? 'destino_base_id' : 'destino_aplicador_id';
         // Buscar saldo real do banco (fonte da verdade)
-        let estoqueQ = local.tipo === 'aplicador'
-            ? sb.from('estoque').select('quantidade, vacinas(nome)').eq('aplicador_id', local.id).eq('localizacao_tipo', 'aplicador')
-            : local.tipo === 'clinica'
-                ? sb.from('estoque').select('quantidade, vacinas(nome)').eq('base_id', local.id).eq('localizacao_tipo', 'base')
-                : sb.from('estoque').select('quantidade, vacinas(nome)').eq('base_id', local.id).eq('localizacao_tipo', 'base');
+        let estoqueQ = local.tipo === 'base'
+            ? sb.from('estoque').select('quantidade, vacinas(nome)').eq('base_id', local.id).eq('localizacao_tipo', 'base')
+            : sb.from('estoque').select('quantidade, vacinas(nome)').eq('aplicador_id', local.id).eq('localizacao_tipo', 'aplicador');
         if (vacinaId)
             estoqueQ = estoqueQ.eq('vacina_id', vacinaId);
         const { data: estoqueRows } = await estoqueQ;
@@ -13654,35 +13322,27 @@ function MovimentacoesPage() {
                 localSel && extrato.length > 0 && (React.createElement("button", { className: "btn btn-primary", onClick: () => imprimirExtrato(localSel, extrato, saldoAtual, filtroVacina, vacinas) }, "\uD83D\uDDA8\uFE0F Imprimir PDF")))),
         React.createElement("div", { className: "card", style: { marginBottom: 16, padding: 14 } },
             React.createElement("div", { style: { display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end' } },
-                React.createElement("div", { className: "form-group", style: { marginBottom: 0, minWidth: 160 } },
-                    React.createElement("label", { className: "form-label" }, "Tipo de estoque"),
-                    React.createElement("select", { className: "form-select", style: { padding: '6px 10px' }, value: tipoFiltro, onChange: e => {
-                            setTipoFiltro(e.target.value);
-                            setLocalSel(null);
-                            setExtrato([]);
-                        } },
-                        React.createElement("option", { value: "" }, "Selecione..."),
-                        React.createElement("option", { value: "base" }, "\uD83C\uDFE2 Base"),
-                        React.createElement("option", { value: "clinica" }, "\uD83C\uDFE5 Cl\u00EDnica"),
-                        React.createElement("option", { value: "aplicador" }, "\uD83D\uDC64 Aplicador"))),
-                tipoFiltro && React.createElement("div", { className: "form-group", style: { marginBottom: 0, minWidth: 240 } },
-                    React.createElement("label", { className: "form-label" }, tipoFiltro === 'base' ? 'Base' : tipoFiltro === 'clinica' ? 'Clínica' : 'Aplicador'),
-                    React.createElement("select", { className: "form-select", style: { padding: '6px 10px' }, value: localSel ? localSel.id : '', onChange: e => {
+                React.createElement("div", { className: "form-group", style: { marginBottom: 0, minWidth: 220 } },
+                    React.createElement("label", { className: "form-label" }, "Base ou Aplicador"),
+                    React.createElement("select", { className: "form-select", style: { padding: '6px 10px' }, value: localSel ? `${localSel.tipo}|${localSel.id}` : '', onChange: e => {
                             if (!e.target.value) {
                                 setLocalSel(null);
                                 setExtrato([]);
                                 return;
                             }
-                            const lista = tipoFiltro === 'base' ? bases : tipoFiltro === 'clinica' ? clinicas : aplicadores;
-                            const item = lista.find(x => x.id === e.target.value);
-                            setLocalSel({ tipo: tipoFiltro, id: e.target.value, nome: (item === null || item === void 0 ? void 0 : item.nome) || '' });
+                            const [tipo, id] = e.target.value.split('|');
+                            const lista = tipo === 'base' ? bases : aplicadores;
+                            const item = lista.find(x => x.id === id);
+                            setLocalSel({ tipo, id, nome: (item === null || item === void 0 ? void 0 : item.nome) || '' });
                         } },
-                        React.createElement("option", { value: "" }, tipoFiltro === 'base' ? 'Selecione a base...' : tipoFiltro === 'clinica' ? 'Selecione a clínica...' : 'Selecione o aplicador...'),
-                        tipoFiltro === 'base'
-                            ? bases.map(b => React.createElement("option", { key: b.id, value: b.id }, b.nome + (b.cidade ? ' \u2014 ' + b.cidade + '/' + b.uf : '')))
-                            : tipoFiltro === 'clinica'
-                                ? clinicas.map(c => React.createElement("option", { key: c.id, value: c.id }, c.nome + (c.cidade ? ' \u2014 ' + c.cidade + '/' + c.uf : '')))
-                                : aplicadores.map(a => React.createElement("option", { key: a.id, value: a.id }, a.nome)))),
+                        React.createElement("option", { value: "" }, "Selecione..."),
+                        React.createElement("optgroup", { label: "\uD83C\uDFE2 Bases" }, bases.map(b => React.createElement("option", { key: b.id, value: `base|${b.id}` },
+                            b.nome,
+                            " \u2014 ",
+                            b.cidade,
+                            "/",
+                            b.uf))),
+                        React.createElement("optgroup", { label: "\uD83D\uDC64 Aplicadores" }, aplicadores.map(a => React.createElement("option", { key: a.id, value: `aplicador|${a.id}` }, a.nome))))),
                 React.createElement("div", { className: "form-group", style: { marginBottom: 0, minWidth: 180 } },
                     React.createElement("label", { className: "form-label" }, "Vacina"),
                     React.createElement("select", { className: "form-select", style: { padding: '6px 10px' }, value: filtroVacina, onChange: e => setFiltroVacina(e.target.value) },
@@ -14489,7 +14149,6 @@ function App() {
             case 'rotas': return React.createElement(RotasPage, null);
             case 'veiculos': return React.createElement(VeiculosPage, null);
             case 'transferencia': return React.createElement(TransferenciaPage, null);
-            case 'rota-transferencia': return React.createElement(RotaTransferenciaPage, null);
             case 'recolhimento': return React.createElement(RecolhimentoPage, { onNavigate: (p) => setCurrentPage(p) });
             case 'montagem': return React.createElement(MontagemPage, null);
             case 'etiquetas': return React.createElement(EtiquetasPage, null);
