@@ -9884,7 +9884,7 @@ function RoteirizacaoPage({ onBack }) {
     const veiculoSel = veiculos.find(v => v.id === veiculoId);
     const motoristaSel = motoristas.find(m => m.id === motoristaId);
     const km = distTotal();
-    return (React.createElement("div", { style: { display: 'flex', flexDirection: 'column', height: 'calc(100vh - 48px)' } },
+    return (React.createElement("div", { style: { display: 'flex', flexDirection: 'column', minHeight: 'calc(100vh - 90px)', height: 'auto' } },
         React.createElement("div", { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid var(--border)', marginBottom: 8, gap: 8, flexWrap: 'wrap' } },
             React.createElement("div", { style: { display: 'flex', alignItems: 'center', gap: 8 } },
                 React.createElement("button", { className: "btn btn-secondary btn-sm", onClick: onBack }, "\u2190 Voltar"),
@@ -9899,7 +9899,7 @@ function RoteirizacaoPage({ onBack }) {
                 React.createElement("button", { className: "btn btn-secondary btn-sm", onClick: () => setRightOpen(!rightOpen) }, rightOpen ? 'Ocultar rota ▶' : '◀ Rota'),
                 React.createElement("button", { className: "btn btn-success btn-sm", onClick: otimizarRota, disabled: paradas.length < 2 }, "\u26A1 Otimizar"),
                 React.createElement("button", { className: "btn btn-primary", onClick: salvarRota, disabled: saving || paradas.length === 0 }, saving ? 'Salvando...' : '💾 Salvar'))),
-        React.createElement("div", { style: { display: 'flex', gap: 8, flex: 1, minHeight: 0, overflow: 'hidden' } },
+        React.createElement("div", { style: { display: 'flex', gap: 8, height: 'calc(100vh - 140px)', minHeight: 520, overflow: 'visible' } },
             leftOpen && (React.createElement("div", { style: { width: 300, flexShrink: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' } },
                 React.createElement("div", { className: "card", style: { padding: 10, marginBottom: 6, flexShrink: 0 } },
                     React.createElement("div", { style: { fontSize: 12, fontWeight: 600, marginBottom: 6 } }, "Config. da Rota"),
@@ -10100,7 +10100,7 @@ function RoteirizacaoPage({ onBack }) {
                             return React.createElement(ClinicaParadaRow, { key: c.id, clinica: c, jaAdicionada: !!jaAdicionada, onAdd: (doses) => addClinica(c, doses) });
                         })
                     )),
-            React.createElement("div", { style: { flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 } },
+            React.createElement("div", { style: { flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, minHeight: 500 } },
                 React.createElement(MapaRota, { key: mapKey, paradas: paradas, bases: bases, baseOrigemId: baseOrigem }),
                 React.createElement("div", { style: { display: 'flex', gap: 12, padding: '8px 12px', background: 'var(--bg-card)', border: '1px solid var(--border)', borderTop: 'none', borderRadius: '0 0 var(--radius) var(--radius)', flexWrap: 'wrap', fontSize: 12 } },
                     React.createElement("div", null,
@@ -10196,7 +10196,7 @@ function MapaRota({ paradas, bases, baseOrigemId }) {
             mapInstanceRef.current = null;
         } };
     }, [paradas, bases, baseOrigemId]);
-    return React.createElement("div", { ref: mapRef, style: { flex: 1, borderRadius: 'var(--radius) var(--radius) 0 0', border: '1px solid var(--border)', borderBottom: 'none', minHeight: 250 } });
+    return React.createElement("div", { ref: mapRef, style: { flex: 1, height: '100%', borderRadius: 'var(--radius) var(--radius) 0 0', border: '1px solid var(--border)', borderBottom: 'none', minHeight: 420, background: 'var(--bg-card)' } });
 }
 // Campo de busca de aplicador fora da página para não perder foco a cada renderização
 function AplicadorBuscaCampo({ value, onChange, result, onSelect, placeholder }) {
