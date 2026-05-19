@@ -9267,15 +9267,17 @@ function RoteirizacaoPage({ onBack }) {
     const [geocodeCache, setGeocodeCache] = useState({});
     const toast = useContext(ToastContext);
     useEffect(() => {
-        sb.from('bases').select('id, nome, latitude, longitude').eq('ativa', true).order('nome').then(r => setBases(r.data || []));
+        sb.from('bases').select('id, nome, cidade, uf, latitude, longitude').eq('ativa', true).order('nome').then(r => {
+            const todas = r.data || [];
+            const isClinicaNome = (nome) => /^(cl[ií]nica|rede credenciada)/i.test(String(nome || '').trim());
+            setBases(todas.filter(b => !isClinicaNome(b.nome)));
+            setClinicasRot(todas.filter(b => isClinicaNome(b.nome)));
+        });
         sb.from('veiculos').select('id, placa, modelo, capacidade_doses, motorista_padrao_id, base_id').eq('ativo', true).order('modelo').then(r => setVeiculos(r.data || []));
         sb.from('profiles').select('id, nome, base_id').eq('role', 'motorista').eq('ativo', true).order('nome').then(r => setMotoristas(r.data || []));
         loadEscalas();
-    // Carregar bases de clínicas para roteirização
-    sb.from('bases').select('id, nome, cidade, uf, latitude, longitude')
-        .or('nome.ilike.Clínica%,nome.ilike.Rede Credenciada%')
-        .eq('ativa', true).order('nome')
-        .then(r => setClinicasRot(r.data || []));
+    // Clínicas são carregadas junto com bases acima e separadas pelo nome.
+    // Isso evita erro no filtro .or do Supabase e impede clínica misturada na lista de bases.
     }, []);
     const loadEscalas = async () => {
         const PAGE = 1000;
@@ -10161,6 +10163,10 @@ function MapaRota({ paradas, bases, baseOrigemId }) {
         }
         if (!mapRef.current)
             return;
+        if (typeof L === 'undefined') {
+            mapRef.current.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text-muted);font-size:13px">Mapa indisponível no momento. A roteirização continua funcionando.</div>';
+            return;
+        }
         const map = L.map(mapRef.current).setView([-15.78, -47.93], 4);
         L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OpenStreetMap' }).addTo(map);
         mapInstanceRef.current = map;
