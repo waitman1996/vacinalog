@@ -9254,177 +9254,261 @@ function ClinicaParadaRow({ clinica, jaAdicionada, onAdd }) {
 }
 
 
-
 function RoteirizacaoPage({ onBack }) {
     const h = React.createElement;
     const toast = useContext(ToastContext);
     const [bases, setBases] = useState([]);
     const [basesTodas, setBasesTodas] = useState([]);
-    const [clinicas, setClinicas] = useState([]);
+    const [clinicasRot, setClinicasRot] = useState([]);
     const [veiculos, setVeiculos] = useState([]);
     const [motoristas, setMotoristas] = useState([]);
-    const [aplicadores, setAplicadores] = useState([]);
+    const [tutores, setTutores] = useState([]);
     const [paradas, setParadas] = useState([]);
-    const [aba, setAba] = useState('aplicadores');
-    const [busca, setBusca] = useState('');
-    const [buscaClinica, setBuscaClinica] = useState('');
     const [baseOrigem, setBaseOrigem] = useState('');
     const [motoristaId, setMotoristaId] = useState('');
     const [veiculoId, setVeiculoId] = useState('');
-    const [rotaData, setRotaData] = useState(new Date().toISOString().split('T')[0]);
     const [rotaTipo, setRotaTipo] = useState('entrega');
+    const [rotaData, setRotaData] = useState(new Date().toISOString().split('T')[0]);
+    const [abaEsq, setAbaEsq] = useState('aplicadores');
+    const [searchTarefa, setSearchTarefa] = useState('');
+    const [filterDateStart, setFilterDateStart] = useState('');
+    const [filterDateEnd, setFilterDateEnd] = useState('');
+    const [filterStatus, setFilterStatus] = useState('');
+    const [filterPP, setFilterPP] = useState('');
+    const [pontosPartida, setPontosPartida] = useState([]);
+    const [showJaRoteirizado, setShowJaRoteirizado] = useState(true);
+    const [clinicaSearch, setClinicaSearch] = useState('');
+    const [clinicaDoses, setClinicaDoses] = useState({});
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
     const [erroTela, setErroTela] = useState('');
+    const [mapKey, setMapKey] = useState(0);
+    const [configRotaMin, setConfigRotaMin] = useState(false);
 
-    const norm = (v) => String(v || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
-    const num = (v) => { const n = Number(v || 0); return Number.isFinite(n) ? n : 0; };
+    const norm = (v) => String(v || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
+    const num = (v) => { const n = Number(String(v ?? 0).replace(',', '.')); return Number.isFinite(n) ? n : 0; };
+    const normalizeRouteCode = (v) => String(v || '').trim().toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^A-Z0-9]/g, '');
+    const normalizeStatusKey = (status) => {
+        const raw = String(status || '').trim();
+        if (!raw) return 'aprovada';
+        if (typeof STATUS_MAP !== 'undefined' && STATUS_MAP[raw]) return STATUS_MAP[raw];
+        const key = raw.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/ç/g, 'c').replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+        const aliases = {
+            'em_validacao': 'em_validacao', 'em_execucao': 'em_execucao', 'pronta_p_faturamento': 'pronta_faturamento',
+            'pronta_fat': 'pronta_faturamento', 'pronta_faturamento': 'pronta_faturamento', 'aprovada': 'aprovada',
+            'aprovado': 'aprovada', 'cancelada': 'cancelada', 'cancelado': 'cancelada'
+        };
+        return aliases[key] || key || 'aprovada';
+    };
     const isClinicaLocal = (b) => {
-        try { return isClinicaBaseRoteirizacao(b); }
-        catch(e) {
-            const n = norm((b && b.nome) || '');
-            const t = norm((b && (b.tipo || b.categoria || b.tipo_base)) || '');
-            return n.includes('clinica') || n.includes('rede credenciada') || t.includes('clinica') || t.includes('credenciada');
+        try { if (typeof isClinicaBaseRoteirizacao === 'function') return isClinicaBaseRoteirizacao(b); } catch(e) {}
+        const n = norm((b && b.nome) || '');
+        const t = norm((b && (b.tipo || b.categoria || b.tipo_base || b.perfil || b.classificacao)) || '');
+        return n.includes('clinica') || n.includes('clínica') || n.includes('rede credenciada') || t.includes('clinica') || t.includes('credenciada') || t.includes('parceira');
+    };
+    const fetchPaged = async (table, select, queryBuilder) => {
+        const PAGE = 1000;
+        let all = [];
+        for (let page = 0; page < 50; page++) {
+            let q = sb.from(table).select(select).range(page * PAGE, (page + 1) * PAGE - 1);
+            if (queryBuilder) q = queryBuilder(q);
+            const { data, error } = await q;
+            if (error) throw error;
+            all = all.concat(data || []);
+            if (!data || data.length < PAGE) break;
         }
+        return all;
     };
 
     useEffect(() => {
         let alive = true;
-        async function load() {
-            setLoading(true);
-            setErroTela('');
+        async function loadAll() {
+            setLoading(true); setErroTela('');
             try {
-                const [rb, rv, rm, re] = await Promise.all([
+                const [rb, rv, rm] = await Promise.all([
                     sb.from('bases').select('*').eq('ativa', true).order('nome'),
-                    sb.from('veiculos').select('*').eq('ativo', true).order('modelo'),
-                    sb.from('profiles').select('*').eq('role', 'motorista').eq('ativo', true).order('nome'),
-                    sb.from('escalas').select('*').limit(5000)
+                    sb.from('veiculos').select('id, placa, modelo, capacidade_doses, motorista_padrao_id, base_id').eq('ativo', true).order('modelo'),
+                    sb.from('profiles').select('id, nome, email, base_id').eq('role', 'motorista').eq('ativo', true).order('nome')
                 ]);
-                if (!alive) return;
                 const todasBases = rb.data || [];
+                if (!alive) return;
                 setBasesTodas(todasBases);
                 setBases(todasBases.filter(b => !isClinicaLocal(b)));
-                setClinicas(todasBases.filter(b => isClinicaLocal(b)));
+                setClinicasRot(todasBases.filter(b => isClinicaLocal(b)));
                 setVeiculos(rv.data || []);
                 setMotoristas(rm.data || []);
-                const escalas = re.data || [];
-                const ids = [...new Set(escalas.map(e => e.aplicador_id).filter(Boolean))];
-                let aps = [];
-                if (ids.length) {
-                    for (let i = 0; i < ids.length; i += 500) {
-                        const parte = ids.slice(i, i + 500);
-                        const ra = await sb.from('aplicadores').select('*').in('id', parte);
-                        aps = aps.concat(ra.data || []);
-                    }
-                }
-                const apById = {};
-                aps.forEach(a => { apById[a.id] = a; });
-                const agrup = {};
-                escalas.forEach(e => {
-                    const ap = apById[e.aplicador_id] || {};
-                    const key = e.aplicador_id || e.cpf || e.aplicador_cpf || e.nome || e.aplicador_nome || e.id;
-                    if (!key) return;
-                    if (!agrup[key]) {
-                        agrup[key] = {
-                            aplicador_id: e.aplicador_id || ap.id || null,
-                            nome: ap.nome || e.aplicador_nome || e.nome || 'Aplicador sem nome',
-                            cpf: ap.cpf || e.cpf || e.aplicador_cpf || '',
-                            cidade: ap.cidade || e.cidade || e.cidade_campanha || '',
-                            uf: ap.uf || e.uf || e.uf_campanha || '',
-                            endereco: ap.endereco || e.endereco || '',
-                            tarefas: [],
-                            doses: 0
-                        };
-                    }
-                    const doses = num(e.doses_previstas || e.doses || e.quantidade || e.qtd_doses || e.total_doses);
-                    agrup[key].doses += doses;
-                    agrup[key].tarefas.push(e);
-                });
-                if (!alive) return;
-                setAplicadores(Object.values(agrup).sort((a,b) => String(a.nome).localeCompare(String(b.nome))));
+                await loadEscalasSeguro(alive);
             } catch (err) {
-                console.error('Erro Roteirizacao emergencia:', err);
+                console.error('Erro Roteirizacao:', err);
                 if (alive) setErroTela((err && err.message) ? err.message : String(err));
-            } finally {
-                if (alive) setLoading(false);
-            }
+            } finally { if (alive) setLoading(false); }
         }
-        load();
+        loadAll();
         return () => { alive = false; };
     }, []);
 
-    const totalDoses = paradas.reduce((s,p) => s + num(p.doses), 0);
-    const filtroAp = aplicadores.filter(a => {
-        const q = norm(busca);
-        if (!q) return true;
-        return norm(a.nome).includes(q) || norm(a.cpf).includes(q) || norm(a.cidade).includes(q);
-    }).slice(0, 250);
-    const filtroCli = clinicas.filter(c => {
-        const q = norm(buscaClinica);
-        if (!q) return true;
-        return norm(c.nome).includes(q) || norm(c.cidade).includes(q) || norm(c.uf).includes(q);
-    }).slice(0, 250);
+    async function loadEscalasSeguro(aliveFlag) {
+        let allRows = [];
+        try { allRows = await fetchPaged('escalas', '*', q => q.order('data_inicio', { ascending: true })); }
+        catch (err) { console.warn('Falha order escalas, tentando sem order', err); allRows = await fetchPaged('escalas', '*'); }
+        let tarefasAll = [];
+        try { tarefasAll = await fetchPaged('tarefas', 'id,codigo,cliente,cidade_campanha,uf_campanha,data_inicio,doses_previstas,status,status_logistica,ponto_partida,base_id,base_nome,vacina_id,semanas', q => q.order('data_inicio', { ascending: true })); }
+        catch (err) { console.warn('Falha tarefas complemento', err); tarefasAll = []; }
+        const tarefaById = {}, tarefaByCodigo = {};
+        tarefasAll.forEach(t => { if (t.id) tarefaById[t.id] = t; const c = normalizeRouteCode(t.codigo); if (c) tarefaByCodigo[c] = t; });
+        const apIds = [...new Set(allRows.map(e => e.aplicador_id).filter(Boolean))];
+        const apById = {};
+        for (let i = 0; i < apIds.length; i += 500) {
+            try {
+                const { data } = await sb.from('aplicadores').select('id,nome,cpf,cidade,uf,endereco,base_vinculada_id').in('id', apIds.slice(i, i + 500));
+                (data || []).forEach(a => { apById[a.id] = a; });
+            } catch(e) { console.warn('Falha aplicadores', e); }
+        }
+        const apJaRoteirizados = new Set();
+        try {
+            const remessasAtivas = await fetchPaged('remessas', 'destino_aplicador_id,status', q => q.not('destino_aplicador_id', 'is', null));
+            remessasAtivas.forEach(r => { const st = norm(r.status); if (!['concluida','concluido','cancelada','entregue'].includes(st)) apJaRoteirizados.add(r.destino_aplicador_id); });
+        } catch(e) { console.warn('Falha remessas ativas', e); }
+        const rows = allRows.map(e => {
+            const ap = apById[e.aplicador_id] || {};
+            const t = tarefaById[e.tarefa_id] || tarefaByCodigo[normalizeRouteCode(e.codigo_tarefa || e.codigo || e.tarefa_codigo)] || {};
+            const doses = num(t.doses_previstas) || num(e.doses_previstas) || num(e.doses_necessarias) || num(e.doses) || num(e.quantidade) || num(e.qtd_doses) || num(e.total_doses) || num(e.qtd);
+            const statusOriginal = t.status || e.status || 'Aprovada';
+            const statusFinal = normalizeStatusKey(statusOriginal);
+            return {
+                ...e,
+                aplicadores: ap,
+                _tarefa: t,
+                _data_inicio: String(t.data_inicio || e.data_inicio || e.data || '').slice(0,10),
+                _status: statusFinal,
+                _status_original: statusOriginal,
+                _status_logistica: String(t.status_logistica || e.status_logistica || 'nao_roteirizado').toLowerCase().trim().normalize('NFD').replace(/[\u0300-\u036f]/g, ''),
+                _doses: doses,
+                _ponto_partida: t.ponto_partida || e.ponto_partida || e.base_nome || '',
+                _cliente: t.cliente || e.cliente || '',
+                _codigo: t.codigo || e.codigo_tarefa || e.codigo || '',
+                _cidade: ap.cidade || e.cidade || e.cidade_campanha || t.cidade_campanha || '',
+                _uf: ap.uf || e.uf || e.uf_campanha || t.uf_campanha || '',
+                _nome: ap.nome || e.aplicador_nome || e.nome || e.nome_aplicador || 'Aplicador sem nome',
+                _cpf: ap.cpf || e.cpf || e.aplicador_cpf || ''
+            };
+        });
+        const groups = {};
+        rows.forEach(e => {
+            const key = e.aplicador_id || e._cpf || e._nome || e.id;
+            if (!key) return;
+            if (!groups[key]) groups[key] = {
+                key, aplicador_id: e.aplicador_id || null, nome: e._nome, cpf: e._cpf, cidade: e._cidade, uf: e._uf,
+                endereco: (e.aplicadores && e.aplicadores.endereco) || e.endereco || '', ponto_partida: e._ponto_partida,
+                tarefas: [], total_doses: 0, statuses: new Set(), jaRoteirizado: !!(e.aplicador_id && apJaRoteirizados.has(e.aplicador_id))
+            };
+            groups[key].tarefas.push(e);
+            groups[key].total_doses += num(e._doses);
+            groups[key].statuses.add(e._status);
+            if (e._ponto_partida && !groups[key].ponto_partida) groups[key].ponto_partida = e._ponto_partida;
+        });
+        const list = Object.values(groups).sort((a,b) => b.total_doses - a.total_doses);
+        const ppMap = {};
+        rows.forEach(e => { const pp = e._ponto_partida; if (pp) ppMap[pp] = (ppMap[pp] || 0) + 1; });
+        if (aliveFlag) {
+            setTutores(list);
+            setPontosPartida(Object.entries(ppMap).sort((a,b) => a[0].localeCompare(b[0])));
+        }
+    }
 
-    const addAplicador = (a) => {
-        const doses = Math.max(1, num(a.doses));
+    const tarefaPassaFiltro = (e) => {
+        if (filterStatus && (e._status || e.status) !== filterStatus) return false;
+        const d = e._data_inicio || e.data_inicio || '';
+        if (filterDateStart && d && d < filterDateStart) return false;
+        if (filterDateEnd && d && d > filterDateEnd) return false;
+        if (filterPP && (e._ponto_partida || e.ponto_partida || '') !== filterPP) return false;
+        return true;
+    };
+    const filteredTutores = tutores.filter(t => {
+        if (!showJaRoteirizado && t.jaRoteirizado) return false;
+        const q = norm(searchTarefa);
+        if (q) {
+            const text = norm([t.nome,t.cpf,t.cidade,t.uf,t.ponto_partida].join(' '));
+            const tarefaText = t.tarefas.some(e => norm([e._codigo,e._cliente,e._status_original,e._ponto_partida].join(' ')).includes(q));
+            if (!text.includes(q) && !tarefaText) return false;
+        }
+        return t.tarefas.some(tarefaPassaFiltro);
+    });
+    const tarefasFiltradasTutor = (t) => (t.tarefas || []).filter(tarefaPassaFiltro);
+    const dosesFiltradasTutor = (t) => tarefasFiltradasTutor(t).reduce((s,e) => s + num(e._doses), 0);
+
+    const addTutor = (tutor) => {
+        const tarefas = tarefasFiltradasTutor(tutor).filter(e => {
+            const sl = norm(e._status_logistica || e.status_logistica || '');
+            return !['concluido','concluida','entregue','cancelado','cancelada'].includes(sl);
+        });
+        const doses = tarefas.reduce((s,e) => s + num(e._doses), 0);
+        if (!tarefas.length || doses <= 0) { toast('Este aplicador não tem doses previstas nos filtros atuais', 'error'); return; }
         setParadas(prev => prev.concat({
-            tipo: 'aplicador', aplicador_id: a.aplicador_id || null, cpf: a.cpf || '', nome: a.nome || 'Aplicador',
-            cidade: a.cidade || '', uf: a.uf || '', endereco: a.endereco || '', doses: doses, doses_originais: doses,
-            tarefas_count: (a.tarefas || []).length, tarefas: a.tarefas || [], lat: null, lng: null, ordem: prev.length + 1
+            tipo:'aplicador', aplicador_id:tutor.aplicador_id || null, cpf:tutor.cpf || '', nome:tutor.nome || 'Aplicador',
+            cidade:tutor.cidade || '', uf:tutor.uf || '', endereco:tutor.endereco || '', ponto_partida:tutor.ponto_partida || '',
+            doses:doses, doses_originais:tutor.total_doses || doses, tarefas:tarefas, tarefas_count:tarefas.length,
+            status_filtro:filterStatus || null, ordem:prev.length + 1
         }));
+        toast((tutor.nome || 'Aplicador') + ' adicionado ✓ (' + tarefas.length + ' tarefas · ' + doses + ' doses)', 'success');
     };
     const addClinica = (c) => {
-        const raw = prompt('Quantidade de doses para ' + (c.nome || 'clínica') + ':', '1');
-        const doses = parseInt(raw || '0', 10);
-        if (!doses || doses < 1) return;
+        const doses = Math.floor(num(clinicaDoses[c.id]));
+        if (!doses || doses <= 0) { toast('Informe a quantidade de doses para esta clínica', 'error'); return; }
         setParadas(prev => prev.concat({
-            tipo: 'clinica', base_id: c.id, destino_tipo: 'base', destino_base_id: c.id,
-            nome: c.nome || 'Clínica', cidade: c.cidade || '', uf: c.uf || '', endereco: c.endereco || '',
-            doses: doses, doses_originais: doses, tarefas_count: 0, tarefas: [],
-            lat: c.latitude ? parseFloat(c.latitude) : null, lng: c.longitude ? parseFloat(c.longitude) : null, ordem: prev.length + 1
+            tipo:'clinica', base_id:c.id, destino_tipo:'base', destino_base_id:c.id, nome:c.nome || 'Clínica', nome_completo:c.nome || 'Clínica',
+            cidade:c.cidade || '', uf:c.uf || '', endereco:c.endereco || '', lat:c.latitude ? parseFloat(c.latitude) : null, lng:c.longitude ? parseFloat(c.longitude) : null,
+            doses:doses, doses_originais:doses, tarefas:[], tarefas_count:0, ordem:prev.length + 1
         }));
+        setClinicaDoses(prev => ({...prev, [c.id]: ''}));
+        toast((c.nome || 'Clínica') + ' adicionada ✓ (' + doses + ' doses)', 'success');
     };
     const removeParada = (idx) => setParadas(prev => prev.filter((_,i) => i !== idx).map((p,i) => ({...p, ordem:i+1})));
+    const otimizarRota = () => setParadas(prev => prev.slice().sort((a,b) => String(a.cidade || '').localeCompare(String(b.cidade || ''))).map((p,i) => ({...p, ordem:i+1})));
 
     const salvarRota = async () => {
         if (!baseOrigem) { toast('Selecione a base de origem', 'error'); return; }
         if (!motoristaId) { toast('Selecione o motorista', 'error'); return; }
-        if (!paradas.length) { toast('Adicione pelo menos uma parada', 'error'); return; }
+        if (!paradas.length) { toast('Adicione paradas', 'error'); return; }
         setSaving(true);
         try {
-            const userRes = await sb.auth.getUser();
-            const userId = userRes && userRes.data && userRes.data.user ? userRes.data.user.id : null;
+            const auth = await sb.auth.getUser();
+            const userId = auth && auth.data && auth.data.user ? auth.data.user.id : null;
             const veiculo = veiculos.find(v => String(v.id) === String(veiculoId));
             const { data: rota, error: re } = await sb.from('rotas').insert({
-                base_origem_id: baseOrigem,
-                data_prevista: rotaData,
-                tipo: rotaTipo,
-                motorista_id: motoristaId,
-                veiculo: veiculo ? ((veiculo.modelo || '') + ' - ' + (veiculo.placa || '')).trim() : null,
-                veiculo_id: veiculoId || null,
-                criado_por: userId,
-                codigo: ''
+                base_origem_id: baseOrigem, data_prevista: rotaData, tipo: rotaTipo,
+                motorista_id: motoristaId, veiculo: veiculo ? ((veiculo.modelo || '') + ' - ' + (veiculo.placa || '')).trim() : null,
+                veiculo_id: veiculoId || null, criado_por: userId, codigo: ''
             }).select().single();
             if (re) throw re;
+            let apMap = {};
+            const cpfs = [...new Set(paradas.map(p => p.cpf).filter(Boolean))];
+            if (cpfs.length) {
+                const { data: aps } = await sb.from('aplicadores').select('id, cpf').in('cpf', cpfs);
+                (aps || []).forEach(a => { apMap[a.cpf] = a.id; });
+            }
             let errs = 0;
             for (const p of paradas) {
-                const obs = (p.nome || '') + ' | ' + num(p.doses) + ' doses | ' + (p.cidade || '') + '/' + (p.uf || '');
-                const row = {
+                const isCli = p.tipo === 'clinica';
+                const aplicadorId = isCli ? null : (p.aplicador_id || apMap[p.cpf] || null);
+                const obs = isCli
+                    ? ((p.nome_completo || p.nome) + ' | ' + p.doses + ' doses | ' + (p.cidade || '') + '/' + (p.uf || ''))
+                    : ((p.nome || '') + ' (' + (p.cpf || '') + ') | ' + p.doses + ' doses para enviar | ' + (p.tarefas || []).map(t => t._codigo || t.codigo_tarefa || (t._tarefa && t._tarefa.codigo) || '').filter(Boolean).join(', '));
+                const { error } = await sb.from('remessas').insert({
                     rota_id: rota.id,
                     tipo: rotaTipo === 'coleta' ? 'coleta' : 'entrega',
-                    destino_tipo: p.tipo === 'clinica' ? 'base' : (p.aplicador_id ? 'aplicador' : 'base'),
-                    destino_aplicador_id: p.tipo === 'clinica' ? null : (p.aplicador_id || null),
-                    destino_base_id: p.tipo === 'clinica' ? p.base_id : (p.aplicador_id ? null : baseOrigem),
+                    destino_tipo: isCli ? 'base' : (aplicadorId ? 'aplicador' : 'base'),
+                    destino_aplicador_id: isCli ? null : aplicadorId,
+                    destino_base_id: isCli ? p.base_id : (aplicadorId ? null : baseOrigem),
                     ordem_entrega: p.ordem,
                     observacao: obs,
                     codigo_rastreio: ''
-                };
-                const { error } = await sb.from('remessas').insert(row);
-                if (error) { console.error('Erro remessa', error); errs++; }
+                });
+                if (error) { console.error('Erro ao criar remessa:', error); errs++; }
             }
-            const tarefaIds = [...new Set(paradas.flatMap(p => (p.tarefas || []).map(t => t.tarefa_id || t.id).filter(Boolean)))];
+            const tarefaIds = [...new Set(paradas.flatMap(p => (p.tarefas || []).map(t => t.tarefa_id || (t._tarefa && t._tarefa.id) || t.id).filter(Boolean)))];
             if (tarefaIds.length) await sb.from('tarefas').update({ status_logistica: 'roteirizado' }).in('id', tarefaIds);
-            toast('Rota criada com ' + paradas.length + ' paradas' + (errs ? ' ('+errs+' erros em remessas)' : ''), errs ? 'error' : 'success');
+            toast('Rota criada com ' + paradas.length + ' paradas' + (errs ? ' (' + errs + ' erros em remessas)' : ''), errs ? 'error' : 'success');
             onBack();
         } catch (err) {
             console.error(err);
@@ -9432,70 +9516,126 @@ function RoteirizacaoPage({ onBack }) {
         } finally { setSaving(false); }
     };
 
-    const cardLista = (titulo, children) => h('div', {className:'card', style:{padding:10, marginBottom:8}},
-        h('div', {style:{fontSize:12,fontWeight:700,marginBottom:8}}, titulo), children);
+    const totalDoses = paradas.reduce((s,p) => s + num(p.doses), 0);
+    const veiculoSel = veiculos.find(v => String(v.id) === String(veiculoId));
+    const clinicasFiltradas = clinicasRot.filter(c => {
+        const q = norm(clinicaSearch);
+        if (!q) return true;
+        return norm(c.nome).includes(q) || norm(c.cidade).includes(q) || norm(c.uf).includes(q);
+    });
+    const statusOptions = [
+        {v:'aprovada', label:'Aprovada', color:'var(--success)'},
+        {v:'em_validacao', label:'Em Valid.', color:'var(--warning)'},
+        {v:'em_execucao', label:'Em Exec.', color:'var(--accent)'},
+        {v:'pronta_faturamento', label:'Pronta Fat.', color:'var(--info)'}
+    ];
+    const openDatePicker = (e) => { try { e.currentTarget.showPicker && e.currentTarget.showPicker(); } catch(_) {} };
 
     return h('div', {style:{display:'flex',flexDirection:'column',height:'calc(100vh - 48px)',gap:8}},
         h('div', {style:{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'8px 0',borderBottom:'1px solid var(--border)',gap:8}},
             h('div', {style:{display:'flex',alignItems:'center',gap:8}},
                 h('button', {className:'btn btn-secondary btn-sm', onClick:onBack}, '← Voltar'),
                 h('strong', null, 'Roteirização'),
-                h('span', {className:'badge badge-green'}, 'EMERGÊNCIA OK'),
-                h('span', {style:{fontSize:11,color:'var(--text-muted)'}}, loading ? 'Carregando...' : (aplicadores.length+' aplicadores · '+clinicas.length+' clínicas'))),
+                loading && h('span', {style:{fontSize:11,color:'var(--text-muted)'}}, 'Carregando...'),
+                !loading && h('span', {style:{fontSize:11,color:'var(--text-muted)'}}, tutores.length + ' aplicadores · ' + clinicasRot.length + ' clínicas')),
             h('div', {style:{display:'flex',gap:6}},
-                h('button', {className:'btn btn-success btn-sm', onClick:()=>setParadas(prev=>prev.slice().sort((a,b)=>(b.lat?1:0)-(a.lat?1:0)).map((p,i)=>({...p,ordem:i+1})))}, '⚡ Otimizar'),
+                h('button', {className:'btn btn-secondary btn-sm', onClick:()=>{}}, '◀ Ocultar filtros'),
+                h('button', {className:'btn btn-secondary btn-sm', onClick:()=>{}}, 'Ocultar rota ▶'),
+                h('button', {className:'btn btn-success btn-sm', onClick:otimizarRota}, '⚡ Otimizar'),
                 h('button', {className:'btn btn-primary btn-sm', onClick:salvarRota, disabled:saving||!paradas.length}, saving ? 'Salvando...' : '💾 Salvar'))),
         erroTela && h('div', {className:'card', style:{borderColor:'var(--danger)',color:'var(--danger)',padding:10,fontSize:12}}, 'Erro ao carregar dados: ', erroTela),
         h('div', {style:{display:'flex',gap:8,flex:1,minHeight:0}},
-            h('div', {style:{width:300,display:'flex',flexDirection:'column',minHeight:0,flexShrink:0}},
-                cardLista('Config. da Rota', h(React.Fragment, null,
-                    h('label',{className:'form-label'},'Base Origem'),
-                    h('select',{className:'form-select',style:{width:'100%',marginBottom:8},value:baseOrigem,onChange:e=>setBaseOrigem(e.target.value)},
-                        h('option',{value:''},'Selecione'), bases.map(b=>h('option',{key:b.id,value:b.id},b.nome))),
-                    h('label',{className:'form-label'},'Data'),
-                    h('input',{className:'form-input',style:{width:'100%',marginBottom:8},type:'date',value:rotaData,onChange:e=>setRotaData(e.target.value)}),
-                    h('label',{className:'form-label'},'Motorista'),
-                    h('select',{className:'form-select',style:{width:'100%',marginBottom:8},value:motoristaId,onChange:e=>setMotoristaId(e.target.value)},
-                        h('option',{value:''},'Selecione'), motoristas.map(m=>h('option',{key:m.id,value:m.id},m.nome || m.email || m.id))),
-                    h('label',{className:'form-label'},'Veículo'),
-                    h('select',{className:'form-select',style:{width:'100%'},value:veiculoId,onChange:e=>setVeiculoId(e.target.value)},
-                        h('option',{value:''},'Opcional'), veiculos.map(v=>h('option',{key:v.id,value:v.id},(v.modelo||'Veículo')+' · '+(v.placa||''))))
-                )),
-                h('div',{style:{display:'flex',gap:4,marginBottom:8}},
-                    h('button',{className:aba==='aplicadores'?'btn btn-primary btn-sm':'btn btn-secondary btn-sm',style:{flex:1},onClick:()=>setAba('aplicadores')},'👤 Aplicadores'),
-                    h('button',{className:aba==='clinicas'?'btn btn-primary btn-sm':'btn btn-secondary btn-sm',style:{flex:1},onClick:()=>setAba('clinicas')},'🏥 Clínicas')),
-                aba==='aplicadores' && h(React.Fragment,null,
-                    h('input',{className:'form-input',placeholder:'Buscar aplicador...',value:busca,onChange:e=>setBusca(e.target.value),style:{marginBottom:8}}),
+            h('div', {style:{width:320,display:'flex',flexDirection:'column',minHeight:0,flexShrink:0,gap:8}},
+                h('div',{className:'card',style:{padding:10}},
+                    h('div',{style:{display:'flex',alignItems:'center',justifyContent:'space-between',gap:8,marginBottom:configRotaMin?0:8}},
+                        h('div',{style:{fontSize:12,fontWeight:700}},'Config. da Rota'),
+                        h('button',{className:'btn btn-secondary btn-sm',style:{fontSize:10,padding:'3px 7px'},onClick:()=>setConfigRotaMin(v=>!v)},configRotaMin?'▼ Abrir':'▲ Recolher')),
+                    configRotaMin
+                        ? h('div',{style:{fontSize:10,color:'var(--text-muted)',marginTop:6,lineHeight:1.35}},
+                            h('div',null,'Base: ', (bases.find(b=>String(b.id)===String(baseOrigem))||{}).nome || 'não selecionada'),
+                            h('div',null,'Data: ', rotaData || '—'),
+                            h('div',null,'Motorista: ', (motoristas.find(m=>String(m.id)===String(motoristaId))||{}).nome || 'não selecionado'),
+                            h('div',null,'Veículo: ', (()=>{ const v=veiculos.find(v=>String(v.id)===String(veiculoId)); return v ? ((v.modelo||'Veículo')+' · '+(v.placa||'')) : 'não selecionado'; })()))
+                        : h(React.Fragment,null,
+                            h('label',{className:'form-label'},'Base Origem'),
+                            h('select',{className:'form-select',style:{width:'100%',marginBottom:8},value:baseOrigem,onChange:e=>setBaseOrigem(e.target.value)},
+                                h('option',{value:''},'Selecione'), bases.map(b=>h('option',{key:b.id,value:b.id},b.nome))),
+                            h('label',{className:'form-label'},'Data'),
+                            h('input',{className:'form-input',style:{width:'100%',marginBottom:8},type:'date',value:rotaData,onClick:openDatePicker,onFocus:openDatePicker,onChange:e=>setRotaData(e.target.value)}),
+                            h('label',{className:'form-label'},'Motorista'),
+                            h('select',{className:'form-select',style:{width:'100%',marginBottom:8},value:motoristaId,onChange:e=>setMotoristaId(e.target.value)},
+                                h('option',{value:''},'Escolha a base primeiro'), motoristas.map(m=>h('option',{key:m.id,value:m.id},m.nome || m.email || m.id))),
+                            h('label',{className:'form-label'},'Veículo'),
+                            h('select',{className:'form-select',style:{width:'100%'},value:veiculoId,onChange:e=>setVeiculoId(e.target.value)},
+                                h('option',{value:''},'Escolha a base primeiro'), veiculos.map(v=>h('option',{key:v.id,value:v.id},(v.modelo||'Veículo')+' · '+(v.placa||''))))
+                        )),
+                h('div',{style:{display:'flex',gap:4}},
+                    h('button',{className:abaEsq==='aplicadores'?'btn btn-primary btn-sm':'btn btn-secondary btn-sm',style:{flex:1},onClick:()=>setAbaEsq('aplicadores')},'👤 Aplicadores'),
+                    h('button',{className:abaEsq==='clinicas'?'btn btn-primary btn-sm':'btn btn-secondary btn-sm',style:{flex:1},onClick:()=>setAbaEsq('clinicas')},'🏥 Clínicas')),
+                abaEsq==='aplicadores' && h(React.Fragment,null,
+                    h('div',{className:'card',style:{padding:10}},
+                        h('div',{style:{fontSize:12,fontWeight:700,marginBottom:8}},'Filtros'),
+                        h('input',{className:'form-input',placeholder:'🔍 Nome, CPF, código...',value:searchTarefa,onChange:e=>setSearchTarefa(e.target.value),style:{width:'100%',marginBottom:8,padding:'6px 8px',fontSize:11}}),
+                        h('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:4,marginBottom:8}},
+                            h('input',{className:'form-input',type:'date',value:filterDateStart,onClick:openDatePicker,onFocus:openDatePicker,onChange:e=>setFilterDateStart(e.target.value),style:{padding:'5px 6px',fontSize:11}}),
+                            h('input',{className:'form-input',type:'date',value:filterDateEnd,onClick:openDatePicker,onFocus:openDatePicker,onChange:e=>setFilterDateEnd(e.target.value),style:{padding:'5px 6px',fontSize:11}})),
+                        h('select',{className:'form-select',style:{padding:'5px 6px',fontSize:11,width:'100%',marginBottom:8},value:filterPP,onChange:e=>setFilterPP(e.target.value)},
+                            h('option',{value:''},'Todos pontos de partida'), pontosPartida.map(([pp,c])=>h('option',{key:pp,value:pp},pp+' ('+c+')'))),
+                        h('div',{style:{fontSize:10,color:'var(--text-muted)',marginBottom:3,fontWeight:600}},'STATUS'),
+                        h('div',{style:{display:'flex',flexWrap:'wrap',gap:4}},
+                            statusOptions.map(opt=>h('button',{key:opt.v,onClick:()=>setFilterStatus(filterStatus===opt.v?'':opt.v),style:{fontSize:10,padding:'3px 7px',borderRadius:4,border:'1px solid '+(filterStatus===opt.v?opt.color:'var(--border)'),background:filterStatus===opt.v?opt.color+'22':'transparent',color:filterStatus===opt.v?opt.color:'var(--text-muted)',cursor:'pointer'}},(filterStatus===opt.v?'✓ ':'')+opt.label))),
+                        h('div',{style:{fontSize:10,color:'var(--text-muted)',marginTop:8,display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}},
+                            h('span',{className:'badge badge-blue',style:{fontSize:10}},'Disponíveis ',filteredTutores.length),
+                            h('span',{className:'badge badge-green',style:{fontSize:10}},'Na rota ',paradas.length),
+                            h('button',{className:'btn btn-secondary btn-sm',style:{fontSize:9,padding:'2px 6px'},onClick:()=>setShowJaRoteirizado(s=>!s)},showJaRoteirizado?'🙈 Ocultar roteirizados':'👁 Ver roteirizados'),
+                            h('button',{className:'btn btn-secondary btn-sm',style:{fontSize:9,padding:'2px 6px'},onClick:()=>{setFilterDateStart('');setFilterDateEnd('');setFilterPP('');setFilterStatus('');setSearchTarefa('');}},'🧹 Limpar filtros'))),
                     h('div',{style:{flex:1,overflow:'auto',border:'1px solid var(--border)',borderRadius:'var(--radius)',background:'var(--bg-card)'}},
-                        filtroAp.length===0 && h('div',{style:{padding:20,textAlign:'center',color:'var(--text-muted)',fontSize:12}},loading?'Carregando aplicadores...':'Nenhum aplicador encontrado'),
-                        filtroAp.map(a=>h('div',{key:(a.aplicador_id||a.cpf||a.nome),style:{padding:8,borderBottom:'1px solid var(--border)',fontSize:12,display:'flex',justifyContent:'space-between',gap:6}},
-                            h('div',{style:{minWidth:0}}, h('div',{style:{fontWeight:700,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}},a.nome), h('div',{style:{color:'var(--text-muted)',fontSize:11}},(a.cidade||'')+' '+(a.uf||''),' · ',num(a.doses),' doses')),
-                            h('button',{className:'btn btn-success btn-sm',onClick:()=>addAplicador(a)},'+Add'))))
-                ),
-                aba==='clinicas' && h(React.Fragment,null,
-                    h('input',{className:'form-input',placeholder:'Buscar clínica...',value:buscaClinica,onChange:e=>setBuscaClinica(e.target.value),style:{marginBottom:8}}),
+                        filteredTutores.length===0 && h('div',{style:{padding:20,textAlign:'center',color:'var(--text-muted)',fontSize:12}},loading?'Carregando escalas...':'Nenhum resultado para os filtros selecionados.'),
+                        filteredTutores.slice(0,150).map(t=>{
+                            const tarefas = tarefasFiltradasTutor(t);
+                            const doses = dosesFiltradasTutor(t);
+                            const statusCounts = tarefas.reduce((acc,e)=>{ const st=e._status||e.status; acc[st]=(acc[st]||0)+1; return acc; },{});
+                            return h('div',{key:t.key,style:{padding:8,borderBottom:'1px solid var(--border)',fontSize:11,opacity:t.jaRoteirizado?0.65:1}},
+                                h('div',{style:{display:'flex',justifyContent:'space-between',gap:6,alignItems:'center'}},
+                                    h('div',{style:{minWidth:0,flex:1}},
+                                        h('div',{style:{fontWeight:700,color:'var(--text-primary)',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}},t.nome, t.jaRoteirizado?' 🚚':''),
+                                        h('div',{style:{color:'var(--text-muted)',fontSize:10}},(t.ponto_partida||t.cidade||'')+' · '+tarefas.length+' tar. · '+doses+' doses'),
+                                        h('div',{style:{fontSize:9,color:'var(--text-muted)'}},
+                                            statusCounts.aprovada ? '✓'+statusCounts.aprovada+' ' : '',
+                                            statusCounts.pronta_faturamento ? '💰'+statusCounts.pronta_faturamento+' ' : '',
+                                            statusCounts.em_execucao ? '▶'+statusCounts.em_execucao+' ' : '')),
+                                    h('button',{className:'btn btn-success btn-sm',onClick:()=>addTutor(t),disabled:doses<=0},'+Add')));
+                        }))),
+                abaEsq==='clinicas' && h(React.Fragment,null,
+                    h('input',{className:'form-input',placeholder:'Buscar clínica...',value:clinicaSearch,onChange:e=>setClinicaSearch(e.target.value),style:{width:'100%',padding:'6px 8px',fontSize:11}}),
                     h('div',{style:{flex:1,overflow:'auto',border:'1px solid var(--border)',borderRadius:'var(--radius)',background:'var(--bg-card)'}},
-                        filtroCli.length===0 && h('div',{style:{padding:20,textAlign:'center',color:'var(--text-muted)',fontSize:12}},loading?'Carregando clínicas...':'Nenhuma clínica encontrada. Cadastre a base com nome contendo Clínica ou tipo Clínica.'),
-                        filtroCli.map(c=>h('div',{key:c.id,style:{padding:8,borderBottom:'1px solid var(--border)',fontSize:12,display:'flex',justifyContent:'space-between',gap:6}},
-                            h('div',{style:{minWidth:0}}, h('div',{style:{fontWeight:700,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}},c.nome), h('div',{style:{color:'var(--text-muted)',fontSize:11}},(c.cidade||'')+' '+(c.uf||''))),
-                            h('button',{className:'btn btn-success btn-sm',onClick:()=>addClinica(c)},'+Add'))))
-                )
+                        clinicasFiltradas.length===0 && h('div',{style:{padding:20,textAlign:'center',color:'var(--text-muted)',fontSize:12}},'Nenhuma clínica encontrada.'),
+                        clinicasFiltradas.slice(0,200).map(c=>{
+                            const ja = paradas.some(p=>p.tipo==='clinica' && String(p.base_id)===String(c.id));
+                            return h('div',{key:c.id,style:{padding:8,borderBottom:'1px solid var(--border)',fontSize:11,opacity:ja?0.55:1}},
+                                h('div',{style:{fontWeight:700,color:'var(--text-primary)',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}},c.nome),
+                                h('div',{style:{color:'var(--text-muted)',fontSize:10,marginBottom:6}},(c.cidade||'')+' '+(c.uf||'')),
+                                h('div',{style:{display:'flex',gap:4}},
+                                    h('input',{className:'form-input',type:'number',min:'1',placeholder:'Doses',value:clinicaDoses[c.id]||'',onChange:e=>setClinicaDoses(prev=>({...prev,[c.id]:e.target.value})),style:{padding:'5px 6px',fontSize:11,flex:1}}),
+                                    h('button',{className:'btn btn-success btn-sm',disabled:ja,onClick:()=>addClinica(c)},ja?'Adic.':'+Add')));
+                        })))
             ),
             h('div',{style:{flex:1,display:'flex',flexDirection:'column',minWidth:0,minHeight:0}},
-                h(MapaRota,{paradas:paradas,bases:basesTodas.length?basesTodas:bases,baseOrigemId:baseOrigem}),
+                h(MapaRota,{key:mapKey,paradas:paradas,bases:basesTodas.length?basesTodas:bases,baseOrigemId:baseOrigem}),
                 h('div',{style:{padding:8,border:'1px solid var(--border)',borderTop:'none',background:'var(--bg-card)',display:'flex',gap:14,fontSize:12}},
-                    h('strong',null,paradas.length,' paradas'), h('strong',null,totalDoses,' doses'))),
+                    h('strong',null,paradas.length,' paradas'), h('strong',{style:{color:veiculoSel && totalDoses > num(veiculoSel.capacidade_doses)?'var(--danger)':'inherit'}},totalDoses,' doses'),
+                    veiculoSel && h('span',{style:{color:'var(--text-muted)'}},'Capacidade: '+(veiculoSel.capacidade_doses || 0)))) ,
             h('div',{style:{width:300,display:'flex',flexDirection:'column',minHeight:0,flexShrink:0}},
                 h('div',{className:'card',style:{padding:10,marginBottom:8}},
                     h('div',{style:{fontWeight:700}},'Paradas da rota'),
                     h('div',{style:{fontSize:12,color:'var(--text-muted)'}},paradas.length,' paradas · ',totalDoses,' doses')),
                 h('div',{style:{flex:1,overflow:'auto',border:'1px solid var(--border)',borderRadius:'var(--radius)',background:'var(--bg-card)'}},
-                    paradas.length===0 && h('div',{style:{padding:24,textAlign:'center',color:'var(--text-muted)',fontSize:12}},'Adicione aplicadores ou clínicas à esquerda'),
+                    paradas.length===0 && h('div',{style:{padding:24,textAlign:'center',color:'var(--text-muted)',fontSize:12}},'Clique + nos aplicadores ou clínicas à esquerda'),
                     paradas.map((p,idx)=>h('div',{key:idx+'_'+(p.base_id||p.aplicador_id||p.cpf||p.nome),style:{padding:10,borderBottom:'1px solid var(--border)',fontSize:12}},
                         h('div',{style:{display:'flex',justifyContent:'space-between',gap:8}},
                             h('div',{style:{minWidth:0}},
                                 h('div',{style:{fontWeight:700,color:'var(--text-primary)',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}},idx+1,'. ',p.nome),
-                                h('div',{style:{fontSize:11,color:'var(--text-muted)'}},p.tipo==='clinica'?'🏥 Clínica':'👤 Aplicador',' · ',p.doses,' doses')),
+                                h('div',{style:{fontSize:11,color:'var(--text-muted)'}},p.tipo==='clinica'?'🏥 Clínica':'👤 Aplicador',' · ',p.doses,' doses',p.tarefas_count?' · '+p.tarefas_count+' tar.':'')),
                             h('button',{className:'btn btn-danger btn-sm',onClick:()=>removeParada(idx)},'×'))))))
         )
     );
@@ -9505,35 +9645,43 @@ function MapaRota({ paradas, bases, baseOrigemId }) {
     const mapRef = useRef(null);
     const mapInstanceRef = useRef(null);
     useEffect(() => {
-        if (typeof L === 'undefined') return;
-        try {
-            if (mapInstanceRef.current) { mapInstanceRef.current.remove(); mapInstanceRef.current = null; }
-            if (!mapRef.current) return;
-            const map = L.map(mapRef.current).setView([-15.78, -47.93], 4);
-            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OpenStreetMap' }).addTo(map);
-            mapInstanceRef.current = map;
-            const bounds = [];
-            const base = (bases || []).find(b => String(b.id) === String(baseOrigemId));
-            if (base && base.latitude && base.longitude) {
-                const lat = parseFloat(base.latitude), lng = parseFloat(base.longitude);
-                if (Number.isFinite(lat) && Number.isFinite(lng)) {
-                    L.marker([lat,lng]).addTo(map).bindPopup('<b>Base origem</b><br>'+String(base.nome||''));
-                    bounds.push([lat,lng]);
-                }
-            }
-            (paradas || []).forEach((p,i) => {
-                const lat = parseFloat(p.lat), lng = parseFloat(p.lng);
-                if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
-                L.marker([lat,lng]).addTo(map).bindPopup('<b>'+(i+1)+'. '+String(p.nome||'')+'</b><br>'+String(p.doses||0)+' doses');
-                bounds.push([lat,lng]);
-            });
-            if (bounds.length) map.fitBounds(bounds, { padding:[30,30], maxZoom:12 });
-            return () => { if (mapInstanceRef.current) { mapInstanceRef.current.remove(); mapInstanceRef.current = null; } };
-        } catch (err) { console.error('Erro mapa roteirizacao:', err); }
+        if (mapInstanceRef.current) {
+            mapInstanceRef.current.remove();
+            mapInstanceRef.current = null;
+        }
+        if (!mapRef.current)
+            return;
+        const map = L.map(mapRef.current).setView([-15.78, -47.93], 4);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OpenStreetMap' }).addTo(map);
+        mapInstanceRef.current = map;
+        const bounds = [];
+        const base = bases.find(b => b.id === baseOrigemId);
+        if (base === null || base === void 0 ? void 0 : base.latitude) {
+            const lat = parseFloat(base.latitude), lng = parseFloat(base.longitude);
+            L.marker([lat, lng], { icon: L.divIcon({ className: '', html: '<div style="background:#2563eb;color:#fff;border-radius:50%;width:28px;height:28px;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;border:3px solid #fff;box-shadow:0 2px 8px rgba(0,0,0,.3)">🏢</div>', iconSize: [28, 28], iconAnchor: [14, 14] }) }).addTo(map).bindPopup('<b>ORIGEM: ' + base.nome + '</b>');
+            bounds.push([lat, lng]);
+        }
+        const coords = [];
+        paradas.forEach(p => {
+            if (!p.lat || !p.lng)
+                return;
+            L.marker([p.lat, p.lng], { icon: L.divIcon({ className: '', html: '<div style="background:#10b981;color:#fff;border-radius:50%;width:24px;height:24px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;border:2px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,.3)">' + p.ordem + '</div>', iconSize: [24, 24], iconAnchor: [12, 12] }) }).addTo(map).bindPopup('<b>' + p.ordem + '. ' + p.nome + '</b><br>' + p.ponto_partida + '<br>' + p.doses + ' doses · ' + p.tarefas_count + ' tarefas' + (p.status_filtro ? '<br><i>Status: ' + p.status_filtro + '</i>' : ''));
+            bounds.push([p.lat, p.lng]);
+            coords.push([p.lat, p.lng]);
+        });
+        if ((base === null || base === void 0 ? void 0 : base.latitude) && coords.length > 0)
+            L.polyline([[parseFloat(base.latitude), parseFloat(base.longitude)], ...coords], { color: '#2563eb', weight: 3, opacity: 0.7, dashArray: '8,8' }).addTo(map);
+        else if (coords.length > 1)
+            L.polyline(coords, { color: '#2563eb', weight: 3, opacity: 0.7, dashArray: '8,8' }).addTo(map);
+        if (bounds.length > 0)
+            map.fitBounds(bounds, { padding: [30, 30], maxZoom: 12 });
+        return () => { if (mapInstanceRef.current) {
+            mapInstanceRef.current.remove();
+            mapInstanceRef.current = null;
+        } };
     }, [paradas, bases, baseOrigemId]);
-    return React.createElement('div', { ref: mapRef, style:{ flex:1, minHeight:280, border:'1px solid var(--border)', borderBottom:'none', borderRadius:'var(--radius) var(--radius) 0 0', background:'var(--bg-card)' } });
+    return React.createElement("div", { ref: mapRef, style: { flex: 1, borderRadius: 'var(--radius) var(--radius) 0 0', border: '1px solid var(--border)', borderBottom: 'none', minHeight: 250 } });
 }
-
 // Campo de busca de aplicador fora da página para não perder foco a cada renderização
 function AplicadorBuscaCampo({ value, onChange, result, onSelect, placeholder }) {
     return (React.createElement("div", null,
