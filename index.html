@@ -473,9 +473,6 @@ td.mono { font-family: 'JetBrains Mono', monospace; font-size: 12px; }
   font-size: 9px !important;
 }
 
-
-/* Correção emergencial Roteirização: impede área principal de colapsar */
-.leaflet-container { min-height: 520px !important; height: 100% !important; }
 </style>
 </head>
 <body>
@@ -9232,6 +9229,10 @@ function ClinicaParadaRow({ clinica, jaAdicionada, onAdd }) {
 }
 
 
+function isBaseClinicaParceiraRoteirizacao(base) {
+    const nome = String((base && base.nome) || '');
+    return /cl[ií]nica|rede credenciada/i.test(nome);
+}
 function RoteirizacaoPage({ onBack }) {
     var _a;
     const [bases, setBases] = useState([]);
@@ -9270,21 +9271,20 @@ function RoteirizacaoPage({ onBack }) {
     const [geocodeCache, setGeocodeCache] = useState({});
     const toast = useContext(ToastContext);
     useEffect(() => {
-        // Carrega bases uma única vez e separa BASES de CLÍNICAS no front.
-        // Isso evita que erro no filtro .or() do Supabase deixe a tela de Roteirização em branco.
-        sb.from('bases').select('id, nome, cidade, uf, latitude, longitude').eq('ativa', true).order('nome')
+        // Carrega as bases uma única vez e separa:
+        // - bases operacionais: aparecem em Base Origem
+        // - clínicas parceiras: aparecem somente na aba 🏥 Clínicas
+        sb.from('bases')
+            .select('id, nome, cidade, uf, latitude, longitude')
+            .eq('ativa', true)
+            .order('nome')
             .then(r => {
                 const todas = r.data || [];
-                const isClinica = (b) => {
-                    const n = String(b.nome || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-                    return n.includes('clinica') || n.includes('rede credenciada') || n.includes('parceira');
-                };
-                setBases(todas.filter(b => !isClinica(b)));
-                setClinicasRot(todas.filter(isClinica));
-            })
-            .catch(() => { setBases([]); setClinicasRot([]); });
-        sb.from('veiculos').select('id, placa, modelo, capacidade_doses, motorista_padrao_id, base_id').eq('ativo', true).order('modelo').then(r => setVeiculos(r.data || [])).catch(() => setVeiculos([]));
-        sb.from('profiles').select('id, nome, base_id').eq('role', 'motorista').eq('ativo', true).order('nome').then(r => setMotoristas(r.data || [])).catch(() => setMotoristas([]));
+                setBases(todas.filter(b => !isBaseClinicaParceiraRoteirizacao(b)));
+                setClinicasRot(todas.filter(isBaseClinicaParceiraRoteirizacao));
+            });
+        sb.from('veiculos').select('id, placa, modelo, capacidade_doses, motorista_padrao_id, base_id').eq('ativo', true).order('modelo').then(r => setVeiculos(r.data || []));
+        sb.from('profiles').select('id, nome, base_id').eq('role', 'motorista').eq('ativo', true).order('nome').then(r => setMotoristas(r.data || []));
         loadEscalas();
     }, []);
     const loadEscalas = async () => {
@@ -9892,7 +9892,7 @@ function RoteirizacaoPage({ onBack }) {
     const veiculoSel = veiculos.find(v => v.id === veiculoId);
     const motoristaSel = motoristas.find(m => m.id === motoristaId);
     const km = distTotal();
-    return (React.createElement("div", { style: { display: 'flex', flexDirection: 'column', height: 'calc(100vh - 20px)', minHeight: 650, overflow: 'hidden' } },
+    return (React.createElement("div", { style: { display: 'flex', flexDirection: 'column', height: 'calc(100vh - 48px)' } },
         React.createElement("div", { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid var(--border)', marginBottom: 8, gap: 8, flexWrap: 'wrap' } },
             React.createElement("div", { style: { display: 'flex', alignItems: 'center', gap: 8 } },
                 React.createElement("button", { className: "btn btn-secondary btn-sm", onClick: onBack }, "\u2190 Voltar"),
@@ -9907,8 +9907,8 @@ function RoteirizacaoPage({ onBack }) {
                 React.createElement("button", { className: "btn btn-secondary btn-sm", onClick: () => setRightOpen(!rightOpen) }, rightOpen ? 'Ocultar rota ▶' : '◀ Rota'),
                 React.createElement("button", { className: "btn btn-success btn-sm", onClick: otimizarRota, disabled: paradas.length < 2 }, "\u26A1 Otimizar"),
                 React.createElement("button", { className: "btn btn-primary", onClick: salvarRota, disabled: saving || paradas.length === 0 }, saving ? 'Salvando...' : '💾 Salvar'))),
-        React.createElement("div", { style: { display: 'flex', gap: 8, flex: 1, minHeight: 560, height: '100%', overflow: 'hidden' } },
-            leftOpen && (React.createElement("div", { style: { width: 300, flexShrink: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden', minHeight: 560 } },
+        React.createElement("div", { style: { display: 'flex', gap: 8, flex: 1, minHeight: 0, overflow: 'hidden' } },
+            leftOpen && (React.createElement("div", { style: { width: 300, flexShrink: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' } },
                 React.createElement("div", { className: "card", style: { padding: 10, marginBottom: 6, flexShrink: 0 } },
                     React.createElement("div", { style: { fontSize: 12, fontWeight: 600, marginBottom: 6 } }, "Config. da Rota"),
                     React.createElement("div", { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 } },
@@ -10099,16 +10099,17 @@ function RoteirizacaoPage({ onBack }) {
                     ),
                     React.createElement("div", { style: { flex: 1, overflow: 'auto', border: '1px solid var(--border)', borderRadius: 'var(--radius)', background: 'var(--bg-card)', display: abaEsq === 'clinicas' ? 'block' : 'none' } },
                         React.createElement("div", { style: { padding: '8px 10px', borderBottom: '1px solid var(--border)' } },
+                            React.createElement("div", { style: { fontSize: 11, fontWeight: 700, marginBottom: 6, color: 'var(--text-primary)' } }, "🏥 Clínicas parceiras para entrega"),
                             React.createElement("input", { className: "form-input", style: { padding: '5px 8px', fontSize: 11, width: '100%' }, placeholder: "Buscar clínica ou cidade...", value: clinicaSearch, onChange: e => setClinicaSearch(e.target.value) })
                         ),
-                        clinicasRot.length === 0 && React.createElement("div", { style: { padding: 20, textAlign: 'center', color: 'var(--text-muted)', fontSize: 11 } }, "Nenhuma clínica parceira encontrada."),
+                        clinicasRot.length === 0 && React.createElement("div", { style: { padding: 20, textAlign: 'center', color: 'var(--text-muted)', fontSize: 11 } }, "Nenhuma clínica parceira encontrada. As clínicas precisam estar cadastradas em Bases com nome começando por 'Clínica -' ou 'Rede Credenciada -'."),
                         clinicasRot.filter(c => !clinicaSearch || c.nome.toLowerCase().includes(clinicaSearch.toLowerCase()) || (c.cidade||'').toLowerCase().includes(clinicaSearch.toLowerCase())).map(c => {
                             const jaAdicionada = paradas.find(p => p.tipo === 'clinica' && p.base_id === c.id);
                             const [dosesInput, setDosesInput] = [null, null]; // placeholder
                             return React.createElement(ClinicaParadaRow, { key: c.id, clinica: c, jaAdicionada: !!jaAdicionada, onAdd: (doses) => addClinica(c, doses) });
                         })
                     )),
-            React.createElement("div", { style: { flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, minHeight: 560 } },
+            React.createElement("div", { style: { flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 } },
                 React.createElement(MapaRota, { key: mapKey, paradas: paradas, bases: bases, baseOrigemId: baseOrigem }),
                 React.createElement("div", { style: { display: 'flex', gap: 12, padding: '8px 12px', background: 'var(--bg-card)', border: '1px solid var(--border)', borderTop: 'none', borderRadius: '0 0 var(--radius) var(--radius)', flexWrap: 'wrap', fontSize: 12 } },
                     React.createElement("div", null,
@@ -10143,7 +10144,7 @@ function RoteirizacaoPage({ onBack }) {
                         } }, disabled: paradas.length === 0 }, "\u2715 Limpar")),
                 React.createElement("div", { style: { flex: 1, overflow: 'auto', border: '1px solid var(--border)', borderRadius: 'var(--radius)', background: 'var(--bg-card)' } },
                     React.createElement("div", { style: { padding: '6px 10px', fontSize: 10, color: 'var(--text-muted)', borderBottom: '1px solid var(--border)', fontWeight: 600 } }, "ARRASTE PARA REORDENAR"),
-                    paradas.length === 0 && React.createElement("div", { style: { padding: 24, textAlign: 'center', color: 'var(--text-muted)', fontSize: 12 } }, "Clique + nos aplicadores \u00E0 esquerda"),
+                    paradas.length === 0 && React.createElement("div", { style: { padding: 24, textAlign: 'center', color: 'var(--text-muted)', fontSize: 12 } }, "Clique + nos aplicadores ou adicione uma clínica na aba 🏥 Clínicas"),
                     paradas.map((p, idx) => (React.createElement("div", { key: p.tipo === 'clinica' ? ('cl_' + p.base_id) : p.cpf, draggable: true, onDragStart: () => onDragStart(idx), onDragOver: onDragOver, onDrop: e => onDrop(e, idx), style: { padding: '8px 10px', borderBottom: '1px solid var(--border)', cursor: 'grab', background: dragIdx === idx ? 'var(--accent-subtle)' : 'transparent' } },
                         React.createElement("div", { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' } },
                             React.createElement("div", { style: { display: 'flex', gap: 6, alignItems: 'flex-start', flex: 1 } },
@@ -10165,42 +10166,42 @@ function MapaRota({ paradas, bases, baseOrigemId }) {
     const mapRef = useRef(null);
     const mapInstanceRef = useRef(null);
     useEffect(() => {
-        if (!mapRef.current) return;
-        if (!window.L) return;
-        try {
-            if (mapInstanceRef.current) {
-                mapInstanceRef.current.remove();
-                mapInstanceRef.current = null;
-            }
-            const map = window.L.map(mapRef.current).setView([-15.78, -47.93], 4);
-            window.L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OpenStreetMap' }).addTo(map);
-            mapInstanceRef.current = map;
-            const bounds = [];
-            const base = bases.find(b => b.id === baseOrigemId);
-            if (base && base.latitude && base.longitude) {
-                const lat = parseFloat(base.latitude), lng = parseFloat(base.longitude);
-                if (!isNaN(lat) && !isNaN(lng)) {
-                    window.L.marker([lat, lng], { icon: window.L.divIcon({ className: '', html: '<div style="background:#2563eb;color:#fff;border-radius:50%;width:28px;height:28px;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;border:3px solid #fff;box-shadow:0 2px 8px rgba(0,0,0,.3)">🏢</div>', iconSize: [28, 28], iconAnchor: [14, 14] }) }).addTo(map).bindPopup('<b>ORIGEM: ' + base.nome + '</b>');
-                    bounds.push([lat, lng]);
-                }
-            }
-            const coords = [];
-            paradas.forEach(p => {
-                const lat = parseFloat(p.lat), lng = parseFloat(p.lng);
-                if (isNaN(lat) || isNaN(lng)) return;
-                window.L.marker([lat, lng], { icon: window.L.divIcon({ className: '', html: '<div style="background:#10b981;color:#fff;border-radius:50%;width:24px;height:24px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;border:2px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,.3)">' + p.ordem + '</div>', iconSize: [24, 24], iconAnchor: [12, 12] }) }).addTo(map).bindPopup('<b>' + p.ordem + '. ' + p.nome + '</b><br>' + (p.ponto_partida || '') + '<br>' + (p.doses || 0) + ' doses');
-                bounds.push([lat, lng]); coords.push([lat, lng]);
-            });
-            if (coords.length > 1) window.L.polyline(coords, { color: '#2563eb', weight: 3, opacity: 0.7, dashArray: '8,8' }).addTo(map);
-            if (bounds.length > 0) map.fitBounds(bounds, { padding: [30, 30], maxZoom: 12 });
-            setTimeout(() => map.invalidateSize(), 250);
-        } catch (e) {
-            console.warn('MapaRota falhou, mantendo tela aberta:', e);
+        if (mapInstanceRef.current) {
+            mapInstanceRef.current.remove();
+            mapInstanceRef.current = null;
         }
-        return () => { if (mapInstanceRef.current) { mapInstanceRef.current.remove(); mapInstanceRef.current = null; } };
+        if (!mapRef.current)
+            return;
+        const map = L.map(mapRef.current).setView([-15.78, -47.93], 4);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OpenStreetMap' }).addTo(map);
+        mapInstanceRef.current = map;
+        const bounds = [];
+        const base = bases.find(b => b.id === baseOrigemId);
+        if (base === null || base === void 0 ? void 0 : base.latitude) {
+            const lat = parseFloat(base.latitude), lng = parseFloat(base.longitude);
+            L.marker([lat, lng], { icon: L.divIcon({ className: '', html: '<div style="background:#2563eb;color:#fff;border-radius:50%;width:28px;height:28px;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;border:3px solid #fff;box-shadow:0 2px 8px rgba(0,0,0,.3)">🏢</div>', iconSize: [28, 28], iconAnchor: [14, 14] }) }).addTo(map).bindPopup('<b>ORIGEM: ' + base.nome + '</b>');
+            bounds.push([lat, lng]);
+        }
+        const coords = [];
+        paradas.forEach(p => {
+            if (!p.lat || !p.lng)
+                return;
+            L.marker([p.lat, p.lng], { icon: L.divIcon({ className: '', html: '<div style="background:#10b981;color:#fff;border-radius:50%;width:24px;height:24px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;border:2px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,.3)">' + p.ordem + '</div>', iconSize: [24, 24], iconAnchor: [12, 12] }) }).addTo(map).bindPopup('<b>' + p.ordem + '. ' + p.nome + '</b><br>' + p.ponto_partida + '<br>' + p.doses + ' doses · ' + p.tarefas_count + ' tarefas' + (p.status_filtro ? '<br><i>Status: ' + p.status_filtro + '</i>' : ''));
+            bounds.push([p.lat, p.lng]);
+            coords.push([p.lat, p.lng]);
+        });
+        if ((base === null || base === void 0 ? void 0 : base.latitude) && coords.length > 0)
+            L.polyline([[parseFloat(base.latitude), parseFloat(base.longitude)], ...coords], { color: '#2563eb', weight: 3, opacity: 0.7, dashArray: '8,8' }).addTo(map);
+        else if (coords.length > 1)
+            L.polyline(coords, { color: '#2563eb', weight: 3, opacity: 0.7, dashArray: '8,8' }).addTo(map);
+        if (bounds.length > 0)
+            map.fitBounds(bounds, { padding: [30, 30], maxZoom: 12 });
+        return () => { if (mapInstanceRef.current) {
+            mapInstanceRef.current.remove();
+            mapInstanceRef.current = null;
+        } };
     }, [paradas, bases, baseOrigemId]);
-    return React.createElement("div", { ref: mapRef, style: { flex: 1, height: '100%', minHeight: 520, borderRadius: 'var(--radius) var(--radius) 0 0', border: '1px solid var(--border)', borderBottom: 'none', background: 'var(--bg-card)', position: 'relative' } },
-        !window.L && React.createElement("div", { style: { padding: 18, color: 'var(--text-muted)', fontSize: 13 } }, "Mapa não carregado. A roteirização continua funcionando; verifique a conexão com a internet para carregar o mapa."));
+    return React.createElement("div", { ref: mapRef, style: { flex: 1, borderRadius: 'var(--radius) var(--radius) 0 0', border: '1px solid var(--border)', borderBottom: 'none', minHeight: 250 } });
 }
 // Campo de busca de aplicador fora da página para não perder foco a cada renderização
 function AplicadorBuscaCampo({ value, onChange, result, onSelect, placeholder }) {
