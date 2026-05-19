@@ -9254,969 +9254,286 @@ function ClinicaParadaRow({ clinica, jaAdicionada, onAdd }) {
 }
 
 
+
 function RoteirizacaoPage({ onBack }) {
-    var _a;
+    const h = React.createElement;
+    const toast = useContext(ToastContext);
     const [bases, setBases] = useState([]);
+    const [basesTodas, setBasesTodas] = useState([]);
+    const [clinicas, setClinicas] = useState([]);
     const [veiculos, setVeiculos] = useState([]);
     const [motoristas, setMotoristas] = useState([]);
-    const [escalas, setEscalas] = useState([]);
-    const [tutores, setTutores] = useState([]);
-    const [filteredTutores, setFilteredTutores] = useState([]);
+    const [aplicadores, setAplicadores] = useState([]);
     const [paradas, setParadas] = useState([]);
-    const [dragIdx, setDragIdx] = useState(null);
-    const [leftOpen, setLeftOpen] = useState(true);
-    const [rightOpen, setRightOpen] = useState(true);
-    const [expandedTutor, setExpandedTutor] = useState(null);
-    const [infoTutor, setInfoTutor] = useState(null);
+    const [aba, setAba] = useState('aplicadores');
+    const [busca, setBusca] = useState('');
+    const [buscaClinica, setBuscaClinica] = useState('');
     const [baseOrigem, setBaseOrigem] = useState('');
-    const [filterPP, setFilterPP] = useState('');
-    const [filterDateStart, setFilterDateStart] = useState('');
-    const [filterDateEnd, setFilterDateEnd] = useState('');
-    const [filterStatus, setFilterStatus] = useState('');
-    const [showJaRoteirizado, setShowJaRoteirizado] = useState(true);
-    const [searchTarefa, setSearchTarefa] = useState('');
-    const [pontosPartida, setPontosPartida] = useState([]);
-    const [planejamentoByAplicador, setPlanejamentoByAplicador] = useState({});
-    const [manualDosesRota, setManualDosesRota] = useState({});
-    const [selectedTarefasRota, setSelectedTarefasRota] = useState({});
-    const [manualDosesTarefaRota, setManualDosesTarefaRota] = useState({});
-    const [rotaTipo, setRotaTipo] = useState('entrega');
-    const [rotaData, setRotaData] = useState(new Date().toISOString().split('T')[0]);
-    const [abaEsq, setAbaEsq] = useState('aplicadores'); // 'aplicadores' | 'clinicas'
-    const [clinicasRot, setClinicasRot] = useState([]); // bases de clinicas para roteirizar
-    const [clinicaSearch, setClinicaSearch] = useState('');
     const [motoristaId, setMotoristaId] = useState('');
     const [veiculoId, setVeiculoId] = useState('');
+    const [rotaData, setRotaData] = useState(new Date().toISOString().split('T')[0]);
+    const [rotaTipo, setRotaTipo] = useState('entrega');
+    const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
-    const [mapKey, setMapKey] = useState(0);
-    const [geocodeCache, setGeocodeCache] = useState({});
-    const toast = useContext(ToastContext);
+    const [erroTela, setErroTela] = useState('');
+
+    const norm = (v) => String(v || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+    const num = (v) => { const n = Number(v || 0); return Number.isFinite(n) ? n : 0; };
+    const isClinicaLocal = (b) => {
+        try { return isClinicaBaseRoteirizacao(b); }
+        catch(e) {
+            const n = norm((b && b.nome) || '');
+            const t = norm((b && (b.tipo || b.categoria || b.tipo_base)) || '');
+            return n.includes('clinica') || n.includes('rede credenciada') || t.includes('clinica') || t.includes('credenciada');
+        }
+    };
+
     useEffect(() => {
-        sb.from('bases').select('*').eq('ativa', true).order('nome').then(r => {
-            const rows = r.data || [];
-            setBases(rows.filter(b => !isClinicaBaseRoteirizacao(b)));
-            setClinicasRot(rows.filter(isClinicaBaseRoteirizacao));
-        });
-        sb.from('veiculos').select('id, placa, modelo, capacidade_doses, motorista_padrao_id, base_id').eq('ativo', true).order('modelo').then(r => setVeiculos(r.data || []));
-        sb.from('profiles').select('id, nome, base_id').eq('role', 'motorista').eq('ativo', true).order('nome').then(r => setMotoristas(r.data || []));
-        loadEscalas();
-    }, []);
-    const loadEscalas = async () => {
-        const PAGE = 1000;
-        const normalizeRouteCode = (v) => String(v || '')
-            .trim()
-            .toUpperCase()
-            .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-            .replace(/[^A-Z0-9]/g, '');
-        const normalizeStatusKey = (status) => {
-            const raw = String(status || '').trim();
-            if (!raw)
-                return 'aprovada';
-            if (STATUS_MAP[raw])
-                return STATUS_MAP[raw];
-            const key = raw
-                .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-                .toLowerCase()
-                .replace(/ç/g, 'c')
-                .replace(/[^a-z0-9]+/g, '_')
-                .replace(/^_+|_+$/g, '');
-            const aliases = {
-                'em_validacao': 'em_validacao',
-                'em_execucao': 'em_execucao',
-                'pronta_p_faturamento': 'pronta_faturamento',
-                'pronta_fat': 'pronta_faturamento',
-                'pronta_faturamento': 'pronta_faturamento',
-                'aprovada': 'aprovada',
-                'cancelada': 'cancelada'
-            };
-            return aliases[key] || key || 'aprovada';
-        };
-        const fetchPaged = async (table, select, queryBuilder) => {
-            let all = [];
-            for (let page = 0;; page++) {
-                let q = sb.from(table).select(select).range(page * PAGE, (page + 1) * PAGE - 1);
-                if (queryBuilder)
-                    q = queryBuilder(q);
-                const { data, error } = await q;
-                if (error)
-                    throw error;
-                all = all.concat(data || []);
-                if (!data || data.length < PAGE)
-                    break;
-            }
-            return all;
-        };
-        try {
-            // Carregamento principal baseado na própria tabela escalas.
-            // Essa é a mesma fonte da aba Escalas, então não depende de relacionamento ou join para aparecer.
-            let allRows = [];
+        let alive = true;
+        async function load() {
+            setLoading(true);
+            setErroTela('');
             try {
-                allRows = await fetchPaged('escalas', '*', q => q.order('data_inicio', { ascending: true }));
-            }
-            catch (err) {
-                console.warn('Falha no order por data_inicio. Tentando sem order:', err);
-                allRows = await fetchPaged('escalas', '*');
-            }
-            if (!allRows.length) {
-                setEscalas([]);
-                setTutores([]);
-                setFilteredTutores([]);
-                setPontosPartida([]);
-                return;
-            }
-            // Aplicadores em separado, apenas para enriquecer. Se falhar, a escala continua aparecendo.
-            const apIds = [...new Set(allRows.map(e => e.aplicador_id).filter(Boolean))];
-            const apById = {};
-            for (let i = 0; i < apIds.length; i += 500) {
-                const ids = apIds.slice(i, i + 500);
-                try {
-                    const { data: aps } = await sb.from('aplicadores')
-                        .select('id,nome,cpf,cidade,uf,endereco,base_vinculada_id')
-                        .in('id', ids);
-                    (aps || []).forEach(a => { apById[a.id] = a; });
-                }
-                catch (err) {
-                    console.warn('Falha ao buscar aplicadores:', err);
-                }
-            }
-            // Tarefas em separado, apenas para complementar data/status/doses/cliente.
-            let tarefasAll = [];
-            try {
-                tarefasAll = await fetchPaged('tarefas', 'id,codigo,cliente,cidade_campanha,uf_campanha,data_inicio,doses_previstas,status,status_logistica,ponto_partida,base_id,base_nome,vacina_id,semanas', q => q.order('data_inicio', { ascending: true }));
-            }
-            catch (err) {
-                console.warn('Não foi possível carregar tarefas para complementar rotas:', err);
-            }
-            const tarefaByCodigo = {};
-            const tarefaById = {};
-            tarefasAll.forEach(t => {
-                if (t.id)
-                    tarefaById[t.id] = t;
-                const c = normalizeRouteCode(t.codigo);
-                if (c)
-                    tarefaByCodigo[c] = t;
-            });
-            // Remessas ativas: se falhar, apenas não marca como já roteirizado.
-            const apJaRoteirizados = new Set();
-            try {
-                const { data: remessasAtivas } = await sb.from('remessas')
-                    .select('destino_aplicador_id,status')
-                    .not('destino_aplicador_id', 'is', null)
-                    .limit(20000);
-                (remessasAtivas || []).forEach(r => {
-                    const st = String(r.status || '').toLowerCase();
-                    if (!['concluida', 'concluído', 'concluido', 'cancelada', 'entregue'].includes(st)) {
-                        apJaRoteirizados.add(r.destino_aplicador_id);
+                const [rb, rv, rm, re] = await Promise.all([
+                    sb.from('bases').select('*').eq('ativa', true).order('nome'),
+                    sb.from('veiculos').select('*').eq('ativo', true).order('modelo'),
+                    sb.from('profiles').select('*').eq('role', 'motorista').eq('ativo', true).order('nome'),
+                    sb.from('escalas').select('*').limit(5000)
+                ]);
+                if (!alive) return;
+                const todasBases = rb.data || [];
+                setBasesTodas(todasBases);
+                setBases(todasBases.filter(b => !isClinicaLocal(b)));
+                setClinicas(todasBases.filter(b => isClinicaLocal(b)));
+                setVeiculos(rv.data || []);
+                setMotoristas(rm.data || []);
+                const escalas = re.data || [];
+                const ids = [...new Set(escalas.map(e => e.aplicador_id).filter(Boolean))];
+                let aps = [];
+                if (ids.length) {
+                    for (let i = 0; i < ids.length; i += 500) {
+                        const parte = ids.slice(i, i + 500);
+                        const ra = await sb.from('aplicadores').select('*').in('id', parte);
+                        aps = aps.concat(ra.data || []);
                     }
+                }
+                const apById = {};
+                aps.forEach(a => { apById[a.id] = a; });
+                const agrup = {};
+                escalas.forEach(e => {
+                    const ap = apById[e.aplicador_id] || {};
+                    const key = e.aplicador_id || e.cpf || e.aplicador_cpf || e.nome || e.aplicador_nome || e.id;
+                    if (!key) return;
+                    if (!agrup[key]) {
+                        agrup[key] = {
+                            aplicador_id: e.aplicador_id || ap.id || null,
+                            nome: ap.nome || e.aplicador_nome || e.nome || 'Aplicador sem nome',
+                            cpf: ap.cpf || e.cpf || e.aplicador_cpf || '',
+                            cidade: ap.cidade || e.cidade || e.cidade_campanha || '',
+                            uf: ap.uf || e.uf || e.uf_campanha || '',
+                            endereco: ap.endereco || e.endereco || '',
+                            tarefas: [],
+                            doses: 0
+                        };
+                    }
+                    const doses = num(e.doses_previstas || e.doses || e.quantidade || e.qtd_doses || e.total_doses);
+                    agrup[key].doses += doses;
+                    agrup[key].tarefas.push(e);
                 });
-            }
-            catch (err) {
-                console.warn('Falha ao buscar remessas ativas:', err);
-            }
-            // Estoque atual do aplicador.
-            let estoqueAplicadorAll = [];
-            try {
-                estoqueAplicadorAll = await fetchPaged('estoque', 'aplicador_id,vacina_id,quantidade,localizacao_tipo', q => q.eq('localizacao_tipo', 'aplicador'));
-            }
-            catch (err) {
-                console.warn('Falha ao buscar estoque do aplicador:', err);
-            }
-            const estoqueByAplicador = {};
-            const estoqueByAplicadorVacina = {};
-            estoqueAplicadorAll.forEach(s => {
-                if (!s.aplicador_id)
-                    return;
-                const qtd = Number(s.quantidade || 0);
-                estoqueByAplicador[s.aplicador_id] = (estoqueByAplicador[s.aplicador_id] || 0) + qtd;
-                const k = s.aplicador_id + '|' + (s.vacina_id || '');
-                estoqueByAplicadorVacina[k] = (estoqueByAplicadorVacina[k] || 0) + qtd;
-            });
-            let rows = allRows.map(e => {
-                const ap = apById[e.aplicador_id] || {};
-                const t = tarefaById[e.tarefa_id] || tarefaByCodigo[normalizeRouteCode(e.codigo_tarefa)] || {};
-                const statusOriginal = t.status || e.status || 'Aprovada';
-                const statusFinal = normalizeStatusKey(statusOriginal);
-                return {
-                    ...e,
-                    aplicadores: ap,
-                    _tarefa: t,
-                    _data_inicio: String(t.data_inicio || e.data_inicio || '').slice(0, 10),
-                    _status: statusFinal,
-                    _status_original: statusOriginal,
-                    _status_logistica: String(t.status_logistica || e.status_logistica || 'nao_roteirizado').toLowerCase().trim().normalize('NFD').replace(/[\u0300-\u036f]/g, ''),
-                    _doses: Number(t.doses_previstas || e.doses_necessarias || 0),
-                    _ponto_partida: t.ponto_partida || e.ponto_partida || e.base_nome || '',
-                    _base_nome: t.base_nome || e.base_nome || '',
-                    _cliente: t.cliente || '',
-                    _semana: Number(t.semanas || e.semanas || 0) || null,
-                };
-            });
-            setEscalas(rows);
-            // Decisões da Demanda vs Oferta para ajustar quantidade a roteirizar.
-            let planningRows = [];
-            try {
-                const { data: pr, error: prErr } = await sb.from('planejamento_logistico')
-                    .select('aplicador_id,vacina_id,semana,quantidade_sugerida,status,saldo_projetado,demanda_futura,estoque_atual')
-                    .not('aplicador_id', 'is', null)
-                    .limit(20000);
-                if (!prErr)
-                    planningRows = pr || [];
-            }
-            catch (err) {
-                planningRows = [];
-            }
-            const planMap = {};
-            planningRows.forEach(p => {
-                if (!p.aplicador_id)
-                    return;
-                if (!planMap[p.aplicador_id])
-                    planMap[p.aplicador_id] = { quantidade_sugerida: 0, status: p.status, items: [] };
-                planMap[p.aplicador_id].items.push(p);
-                if (p.status === 'nao_enviar_estoque_suficiente') {
-                    planMap[p.aplicador_id].status = p.status;
-                }
-                else if (['envio_sugerido', 'envio_aprovado', 'em_montagem', 'montado', 'carregado', 'em_rota'].includes(p.status)) {
-                    planMap[p.aplicador_id].quantidade_sugerida += Number(p.quantidade_sugerida || 0);
-                    planMap[p.aplicador_id].status = p.status;
-                }
-            });
-            setPlanejamentoByAplicador(planMap);
-            // Agrupar por aplicador/CPF. Mesmo sem aplicador_id, a escala aparece pelo CPF/nome.
-            const groups = {};
-            rows.forEach(e => {
-                var _a;
-                const ap = e.aplicadores || {};
-                const cpfRaw = String(e.tutor_cpf || ap.cpf || '').trim();
-                const cpfNorm = cpfRaw.replace(/\D/g, '');
-                const key = e.aplicador_id || cpfNorm || e.tutor_nome || e.id;
-                if (!groups[key]) {
-                    groups[key] = {
-                        cpf: cpfRaw,
-                        cpfNorm,
-                        nome: (e.tutor_nome || ap.nome || 'Sem nome').trim(),
-                        ponto_partida: e._ponto_partida,
-                        cidade: ap.cidade || '',
-                        uf: ap.uf || '',
-                        endereco: ap.endereco || e.endereco_tarefa || '',
-                        base_nome: e._base_nome,
-                        aplicador_id: e.aplicador_id,
-                        tarefas: [],
-                        total_doses: 0,
-                        statuses: new Set(),
-                        jaRoteirizado: e.aplicador_id ? apJaRoteirizados.has(e.aplicador_id) : false,
-                        estoque_atual: e.aplicador_id ? (estoqueByAplicador[e.aplicador_id] || 0) : 0,
-                        estoque_mesma_vacina: 0,
-                        _vacinasEstoqueComputadas: new Set(),
-                    };
-                }
-                if (!groups[key].ponto_partida && e._ponto_partida)
-                    groups[key].ponto_partida = e._ponto_partida;
-                if (!groups[key].base_nome && e._base_nome)
-                    groups[key].base_nome = e._base_nome;
-                // Deduplicar por codigo_tarefa — só adiciona se ainda não existe
-                const codigoTarefa = e.codigo_tarefa || e._codigo_tarefa || '';
-                const jaExiste = codigoTarefa && groups[key].tarefas.some(t => (t.codigo_tarefa || t._codigo_tarefa || '') === codigoTarefa);
-                if (!jaExiste) {
-                    groups[key].tarefas.push(e);
-                    groups[key].total_doses += Number(e._doses || e.doses_necessarias || 0);
-                }
-                const vacKey = e.vacina_id || ((_a = e._tarefa) === null || _a === void 0 ? void 0 : _a.vacina_id) || '';
-                if (e.aplicador_id && vacKey && !groups[key]._vacinasEstoqueComputadas.has(vacKey)) {
-                    groups[key].estoque_mesma_vacina += Number(estoqueByAplicadorVacina[e.aplicador_id + '|' + vacKey] || 0);
-                    groups[key]._vacinasEstoqueComputadas.add(vacKey);
-                }
-                groups[key].statuses.add(e._status || e.status || 'aprovada');
-            });
-            Object.values(groups).forEach(g => {
-                delete g._vacinasEstoqueComputadas;
-                // Calcular se todas as tarefas estão com status logística concluído
-                const normSL = (v) => String(v || '').toLowerCase().trim()
-                    .normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-                const CONCLUIDOS = ['entregue', 'concluido', 'concluida', 'finalizado', 'finalizada'];
-                g.todasConcluidas = g.tarefas.length > 0 && g.tarefas.every(e => {
-                    var _a;
-                    const sl = normSL(e._status_logistica || ((_a = e._tarefa) === null || _a === void 0 ? void 0 : _a.status_logistica) || e.status_logistica || '');
-                    return CONCLUIDOS.includes(sl);
-                });
-            });
-            const tutorList = Object.values(groups).sort((a, b) => b.total_doses - a.total_doses);
-            setTutores(tutorList);
-            const pps = {};
-            tutorList.forEach(t => { if (t.ponto_partida)
-                pps[t.ponto_partida] = (pps[t.ponto_partida] || 0) + 1; });
-            setPontosPartida(Object.entries(pps).sort((a, b) => a[0].localeCompare(b[0], 'pt-BR')));
-        }
-        catch (err) {
-            console.error('Erro geral ao carregar escalas para rotas:', err);
-            toast('Erro ao carregar escalas para rotas: ' + (err.message || err), 'error');
-            setEscalas([]);
-            setTutores([]);
-            setFilteredTutores([]);
-            setPontosPartida([]);
-        }
-    };
-    useEffect(() => {
-        let f = [...tutores];
-        // Bug fix: não excluir tutor da lista por estar na rota
-        // Se filtro de status ativo, mostrar tutor mesmo que já esteja na rota com outro status
-        // (para poder adicionar tarefas de outro status do mesmo tutor)
-        if (!filterStatus) {
-            // Sem filtro: ocultar tutores já adicionados
-            const addedCPFs = new Set(paradas.map(p => p.cpf));
-            f = f.filter(t => !addedCPFs.has(t.cpf));
-        }
-        // Com filtro: só ocultar se o tutor está na rota COM esse mesmo status
-        if (filterStatus) {
-            const addedCPFsWithStatus = new Set(paradas.filter(p => p.status_filtro === filterStatus).map(p => p.cpf));
-            f = f.filter(t => !addedCPFsWithStatus.has(t.cpf));
-        }
-        // Ocultar já roteirizados por padrão
-        if (!showJaRoteirizado)
-            f = f.filter(t => !t.jaRoteirizado);
-        // Ocultar tutores cujas tarefas estão todas com status logística concluído/entregue
-        f = f.filter(t => !t.todasConcluidas);
-        if (filterPP)
-            f = f.filter(t => t.ponto_partida === filterPP);
-        if (filterStatus)
-            f = f.filter(t => t.statuses ? t.statuses.has(filterStatus) : t.tarefas.some(e => (e._status || e.status) === filterStatus));
-        if (filterDateStart)
-            f = f.filter(t => t.tarefas.some(e => (e._data_inicio || e.data_inicio) >= filterDateStart));
-        if (filterDateEnd)
-            f = f.filter(t => t.tarefas.some(e => (e._data_inicio || e.data_inicio) <= filterDateEnd));
-        if (searchTarefa) {
-            const s = searchTarefa.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-            f = f.filter(t => {
-                const nome = (t.nome || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-                const cpfDigits = (t.cpfNorm || t.cpf || '').replace(/\D/g, '');
-                const searchDigits = s.replace(/\D/g, '');
-                return nome.includes(s) ||
-                    (searchDigits.length >= 3 && cpfDigits.includes(searchDigits)) ||
-                    t.tarefas.some(e => (e.codigo_tarefa || '').toLowerCase().includes(s));
-            });
-        }
-        setFilteredTutores(f);
-    }, [tutores, paradas, filterPP, filterStatus, showJaRoteirizado, filterDateStart, filterDateEnd, searchTarefa]);
-    const motoristasFiltrados = baseOrigem
-        ? motoristas.filter(m => !m.base_id || String(m.base_id) === String(baseOrigem))
-        : motoristas;
-    const veiculosFiltrados = baseOrigem
-        ? veiculos.filter(v => !v.base_id || String(v.base_id) === String(baseOrigem))
-        : veiculos;
-    useEffect(() => {
-        if (!baseOrigem)
-            return;
-        if (motoristaId) {
-            const motoristaAtual = motoristas.find(m => m.id === motoristaId);
-            if ((motoristaAtual === null || motoristaAtual === void 0 ? void 0 : motoristaAtual.base_id) && String(motoristaAtual.base_id) !== String(baseOrigem))
-                setMotoristaId('');
-        }
-        if (veiculoId) {
-            const veiculoAtual = veiculos.find(v => v.id === veiculoId);
-            if ((veiculoAtual === null || veiculoAtual === void 0 ? void 0 : veiculoAtual.base_id) && String(veiculoAtual.base_id) !== String(baseOrigem))
-                setVeiculoId('');
-        }
-    }, [baseOrigem, motoristas, veiculos]);
-    useEffect(() => {
-        if (veiculoId) {
-            const v = veiculos.find(x => x.id === veiculoId);
-            if ((v === null || v === void 0 ? void 0 : v.motorista_padrao_id) && !motoristaId) {
-                const motoristaPadrao = motoristas.find(m => m.id === v.motorista_padrao_id);
-                if (!baseOrigem || !(motoristaPadrao === null || motoristaPadrao === void 0 ? void 0 : motoristaPadrao.base_id) || String(motoristaPadrao.base_id) === String(baseOrigem)) {
-                    setMotoristaId(v.motorista_padrao_id);
-                }
+                if (!alive) return;
+                setAplicadores(Object.values(agrup).sort((a,b) => String(a.nome).localeCompare(String(b.nome))));
+            } catch (err) {
+                console.error('Erro Roteirizacao emergencia:', err);
+                if (alive) setErroTela((err && err.message) ? err.message : String(err));
+            } finally {
+                if (alive) setLoading(false);
             }
         }
-    }, [veiculoId, baseOrigem, motoristas]);
-    const geocode = async (query) => {
-        if (geocodeCache[query])
-            return geocodeCache[query];
-        // Normalizar: "São José Do Rio Preto-sp" → "São José do Rio Preto, SP"
-        const normalizado = query
-            .replace(/-([a-z]{2})$/i, ', $1') // "cidade-uf" → "cidade, uf"
-            .replace(/\b(\w)/g, c => c.toUpperCase()); // Title Case
-        const queries = [
-            normalizado + ', Brasil',
-            query.split('-')[0].trim() + ', Brasil', // só a cidade
-            query + ', Brasil', // original
-        ];
-        for (const q of queries) {
-            try {
-                const res = await fetch('https://nominatim.openstreetmap.org/search?q=' + encodeURIComponent(q) + '&format=json&limit=1&countrycodes=br');
-                const data = await res.json();
-                if (data === null || data === void 0 ? void 0 : data[0]) {
-                    const coords = { lat: parseFloat(data[0].lat), lng: parseFloat(data[0].lon) };
-                    setGeocodeCache(c => ({ ...c, [query]: coords }));
-                    return coords;
-                }
-            }
-            catch (e) { }
-        }
-        return null;
+        load();
+        return () => { alive = false; };
+    }, []);
+
+    const totalDoses = paradas.reduce((s,p) => s + num(p.doses), 0);
+    const filtroAp = aplicadores.filter(a => {
+        const q = norm(busca);
+        if (!q) return true;
+        return norm(a.nome).includes(q) || norm(a.cpf).includes(q) || norm(a.cidade).includes(q);
+    }).slice(0, 250);
+    const filtroCli = clinicas.filter(c => {
+        const q = norm(buscaClinica);
+        if (!q) return true;
+        return norm(c.nome).includes(q) || norm(c.cidade).includes(q) || norm(c.uf).includes(q);
+    }).slice(0, 250);
+
+    const addAplicador = (a) => {
+        const doses = Math.max(1, num(a.doses));
+        setParadas(prev => prev.concat({
+            tipo: 'aplicador', aplicador_id: a.aplicador_id || null, cpf: a.cpf || '', nome: a.nome || 'Aplicador',
+            cidade: a.cidade || '', uf: a.uf || '', endereco: a.endereco || '', doses: doses, doses_originais: doses,
+            tarefas_count: (a.tarefas || []).length, tarefas: a.tarefas || [], lat: null, lng: null, ordem: prev.length + 1
+        }));
     };
-    const tarefaRouteKey = (e) => { var _a; return String(e.id || e.tarefa_id || e.codigo_tarefa || ((_a = e._tarefa) === null || _a === void 0 ? void 0 : _a.codigo) || '').trim(); };
-    const getTarefasRotaTutor = (tutor) => {
-        const CONCL = ['concluido', 'concluida', 'entregue', 'finalizado', 'finalizada'];
-        let tarefas = filterStatus
-            ? tutor.tarefas.filter(e => (e._status || e.status) === filterStatus)
-            : tutor.tarefas;
-        // Excluir tarefas com logística concluída
-        tarefas = tarefas.filter(e => {
-            var _a;
-            const sl = String(e._status_logistica || ((_a = e._tarefa) === null || _a === void 0 ? void 0 : _a.status_logistica) || e.status_logistica || '').toLowerCase().trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-            return !CONCL.includes(sl);
-        });
-        if (filterDateStart)
-            tarefas = tarefas.filter(e => (e._data_inicio || e.data_inicio || '') >= filterDateStart);
-        if (filterDateEnd)
-            tarefas = tarefas.filter(e => (e._data_inicio || e.data_inicio || '') <= filterDateEnd);
-        return tarefas;
+    const addClinica = (c) => {
+        const raw = prompt('Quantidade de doses para ' + (c.nome || 'clínica') + ':', '1');
+        const doses = parseInt(raw || '0', 10);
+        if (!doses || doses < 1) return;
+        setParadas(prev => prev.concat({
+            tipo: 'clinica', base_id: c.id, destino_tipo: 'base', destino_base_id: c.id,
+            nome: c.nome || 'Clínica', cidade: c.cidade || '', uf: c.uf || '', endereco: c.endereco || '',
+            doses: doses, doses_originais: doses, tarefas_count: 0, tarefas: [],
+            lat: c.latitude ? parseFloat(c.latitude) : null, lng: c.longitude ? parseFloat(c.longitude) : null, ordem: prev.length + 1
+        }));
     };
-    const isTarefaRotaSelecionada = (e) => {
-        const key = tarefaRouteKey(e);
-        return selectedTarefasRota[key] !== false;
-    };
-    const getDoseTarefaRota = (e) => {
-        const key = tarefaRouteKey(e);
-        if (manualDosesTarefaRota[key] !== undefined && manualDosesTarefaRota[key] !== '') {
-            return Math.max(0, Number(manualDosesTarefaRota[key]) || 0);
-        }
-        return Number(e._doses || e.doses_necessarias || 0);
-    };
-    const calcDosesRotaTutor = (tutor) => {
-        const tarefasFiltradas = getTarefasRotaTutor(tutor).filter(isTarefaRotaSelecionada);
-        const original = tarefasFiltradas.reduce((s, e) => s + getDoseTarefaRota(e), 0);
-        const manualKey = tutor.cpfNorm || tutor.cpf || tutor.aplicador_id;
-        if (manualDosesRota[manualKey] !== undefined && manualDosesRota[manualKey] !== '') {
-            return Math.max(0, Number(manualDosesRota[manualKey]) || 0);
-        }
-        const plan = planejamentoByAplicador[tutor.aplicador_id];
-        if ((plan === null || plan === void 0 ? void 0 : plan.status) === 'nao_enviar_estoque_suficiente')
-            return 0;
-        if ((plan === null || plan === void 0 ? void 0 : plan.quantidade_sugerida) > 0)
-            return Math.min(Number(plan.quantidade_sugerida || 0), original || Number(plan.quantidade_sugerida || 0));
-        return original;
-    };
-    const statusDemandaTutor = (tutor) => {
-        const plan = planejamentoByAplicador[tutor.aplicador_id];
-        if (!plan)
-            return 'Sem decisão DvO';
-        if (plan.status === 'nao_enviar_estoque_suficiente')
-            return 'DvO: não enviar';
-        if (plan.quantidade_sugerida > 0)
-            return `DvO: enviar ${Number(plan.quantidade_sugerida || 0).toLocaleString('pt-BR')}`;
-        return 'DvO: revisar';
-    };
-    const addTutor = async (tutor) => {
-        toast('Buscando coordenadas para ' + (tutor.ponto_partida || tutor.cidade) + '...', 'info');
-        const query = tutor.ponto_partida || (tutor.cidade + ', ' + tutor.uf);
-        const coords = await geocode(query);
-        if (!coords)
-            toast('⚠ Coordenadas não encontradas para "' + query + '" — parada adicionada sem pin no mapa', 'error');
-        // Filtrar tarefas pelo status/data e manter somente as selecionadas para esta rota.
-        const tarefasFiltradasBase = getTarefasRotaTutor(tutor);
-        const tarefasFiltradas = tarefasFiltradasBase
-            .filter(isTarefaRotaSelecionada)
-            .map(e => ({ ...e, _doses_rota: getDoseTarefaRota(e), _selecionada_rota: true }));
-        const dosesOriginais = tarefasFiltradasBase.reduce((s, e) => s + (e._doses || e.doses_necessarias || 0), 0);
-        const dosesFiltradas = calcDosesRotaTutor(tutor);
-        if (tarefasFiltradas.length === 0 || dosesFiltradas <= 0) {
-            if (!confirm('Nenhuma tarefa/dose selecionada para este aplicador. Adicionar mesmo assim?'))
-                return;
-        }
-        const parada = {
-            cpf: tutor.cpf,
-            nome: tutor.nome,
-            ponto_partida: tutor.ponto_partida,
-            cidade: tutor.cidade,
-            uf: tutor.uf,
-            doses: dosesFiltradas,
-            doses_originais: dosesOriginais,
-            decisao_demanda_oferta: statusDemandaTutor(tutor),
-            tarefas_count: tarefasFiltradas.length,
-            tarefas: tarefasFiltradas,
-            status_filtro: filterStatus || null,
-            lat: (coords === null || coords === void 0 ? void 0 : coords.lat) || null,
-            lng: (coords === null || coords === void 0 ? void 0 : coords.lng) || null,
-            ordem: paradas.length + 1
-        };
-        setParadas(p => [...p, parada]);
-        setMapKey(k => k + 1);
-        if (coords)
-            toast(tutor.nome + ' adicionado(a) ✓ (' + tarefasFiltradas.length + ' tarefas · ' + dosesFiltradas + ' doses para enviar)', 'success');
-    };
-    const addClinica = async (clinica, doses) => {
-        if (!doses || doses <= 0) { toast('Informe a quantidade de doses para esta clínica', 'error'); return; }
-        const jaAdicionada = paradas.find(p => p.tipo === 'clinica' && p.base_id === clinica.id);
-        if (jaAdicionada) { toast('Esta clínica já está na rota', 'error'); return; }
-        const query = clinica.cidade ? (clinica.cidade + ', ' + clinica.uf) : clinica.nome;
-        const coords = await geocode(query);
-        const parada = {
-            tipo: 'clinica',
-            base_id: clinica.id,
-            cpf: 'clinica_' + clinica.id, // key única
-            nome: String(clinica.nome || 'Clínica sem nome').replace(/^Clínica - /i, ''),
-            nome_completo: String(clinica.nome || 'Clínica sem nome'),
-            cidade: clinica.cidade || '',
-            uf: clinica.uf || '',
-            ponto_partida: clinica.cidade || clinica.nome,
-            doses: Number(doses),
-            doses_originais: Number(doses),
-            tarefas_count: 0,
-            tarefas: [],
-            lat: coords?.lat || null,
-            lng: coords?.lng || null,
-            ordem: paradas.length + 1
-        };
-        setParadas(p => [...p, parada]);
-        setMapKey(k => k + 1);
-        toast(parada.nome + ' adicionada ✓ (' + doses + ' doses)', 'success');
-    };
-    const removeParada = (idx) => {
-        setParadas(p => p.filter((_, i) => i !== idx).map((x, i) => ({ ...x, ordem: i + 1 })));
-        setMapKey(k => k + 1);
-    };
-    const onDragStart = (idx) => setDragIdx(idx);
-    const onDragOver = (e) => e.preventDefault();
-    const onDrop = (e, dropIdx) => {
-        e.preventDefault();
-        if (dragIdx === null || dragIdx === dropIdx)
-            return;
-        const n = [...paradas];
-        const [m] = n.splice(dragIdx, 1);
-        n.splice(dropIdx, 0, m);
-        setParadas(n.map((p, i) => ({ ...p, ordem: i + 1 })));
-        setDragIdx(null);
-        setMapKey(k => k + 1);
-    };
-    const otimizarRota = () => {
-        const withCoord = paradas.filter(p => p.lat && p.lng);
-        const noCoord = paradas.filter(p => !p.lat || !p.lng);
-        if (withCoord.length < 2) {
-            toast('Precisa de pelo menos 2 paradas com coordenadas', 'error');
-            return;
-        }
-        const base = bases.find(b => b.id === baseOrigem);
-        let cur = { lat: parseFloat(base === null || base === void 0 ? void 0 : base.latitude) || withCoord[0].lat, lng: parseFloat(base === null || base === void 0 ? void 0 : base.longitude) || withCoord[0].lng };
-        const rem = [...withCoord];
-        const ordered = [];
-        while (rem.length > 0) {
-            let ni = 0, nd = Infinity;
-            rem.forEach((p, i) => { const d = Math.sqrt((cur.lat - p.lat) ** 2 + (cur.lng - p.lng) ** 2); if (d < nd) {
-                nd = d;
-                ni = i;
-            } });
-            const next = rem.splice(ni, 1)[0];
-            ordered.push(next);
-            cur = next;
-        }
-        setParadas([...ordered, ...noCoord].map((p, i) => ({ ...p, ordem: i + 1 })));
-        setMapKey(k => k + 1);
-        toast('Rota otimizada!', 'success');
-    };
-    const distTotal = () => {
-        const c = paradas.filter(p => p.lat && p.lng);
-        if (c.length < 2)
-            return 0;
-        let t = 0;
-        const base = bases.find(b => b.id === baseOrigem);
-        const pts = (base === null || base === void 0 ? void 0 : base.latitude) ? [{ lat: parseFloat(base.latitude), lng: parseFloat(base.longitude) }, ...c] : c;
-        for (let i = 1; i < pts.length; i++) {
-            const R = 6371, dLat = (pts[i].lat - pts[i - 1].lat) * Math.PI / 180, dLon = (pts[i].lng - pts[i - 1].lng) * Math.PI / 180;
-            const a = Math.sin(dLat / 2) ** 2 + Math.cos(pts[i - 1].lat * Math.PI / 180) * Math.cos(pts[i].lat * Math.PI / 180) * Math.sin(dLon / 2) ** 2;
-            t += R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-        }
-        return t;
-    };
+    const removeParada = (idx) => setParadas(prev => prev.filter((_,i) => i !== idx).map((p,i) => ({...p, ordem:i+1})));
+
     const salvarRota = async () => {
-        if (!baseOrigem) {
-            toast('Selecione base de origem', 'error');
-            return;
-        }
-        if (paradas.length === 0) {
-            toast('Adicione paradas', 'error');
-            return;
-        }
-        if (!motoristaId) {
-            toast('Selecione motorista', 'error');
-            return;
-        }
+        if (!baseOrigem) { toast('Selecione a base de origem', 'error'); return; }
+        if (!motoristaId) { toast('Selecione o motorista', 'error'); return; }
+        if (!paradas.length) { toast('Adicione pelo menos uma parada', 'error'); return; }
         setSaving(true);
-        const userId = (await sb.auth.getUser()).data.user.id;
-        const veiculo = veiculos.find(v => v.id === veiculoId);
-        // Criar rota
-        const { data: rota, error: re } = await sb.from('rotas').insert({
-            base_origem_id: baseOrigem, data_prevista: rotaData, tipo: rotaTipo,
-            motorista_id: motoristaId, veiculo: veiculo ? veiculo.modelo + ' - ' + veiculo.placa : null,
-            veiculo_id: veiculoId || null, criado_por: userId, codigo: ''
-        }).select().single();
-        if (re) {
-            toast(re.message, 'error');
-            setSaving(false);
-            return;
-        }
-        // Buscar aplicadores por CPF para resolver os IDs
-        const cpfs = paradas.map(p => p.cpf).filter(Boolean);
-        let apMap = {};
-        if (cpfs.length > 0) {
-            const { data: aps } = await sb.from('aplicadores').select('id, cpf').in('cpf', cpfs);
-            (aps || []).forEach(a => { apMap[a.cpf] = a.id; });
-        }
-        let errs = 0;
-        for (const p of paradas) {
-            // Clínica parceira: destino é a base da clínica
-            if (p.tipo === 'clinica') {
-                const obsClinica = (p.nome_completo || p.nome) + ' | ' + p.doses + ' doses | ' + (p.cidade || '') + '/' + (p.uf || '');
-                const { error: ercl } = await sb.from('remessas').insert({
-                    rota_id: rota.id, tipo: 'entrega',
-                    destino_tipo: 'base', destino_base_id: p.base_id, destino_aplicador_id: null,
-                    ordem_entrega: p.ordem, observacao: obsClinica, codigo_rastreio: ''
-                });
-                if (ercl) errs++;
-                continue;
+        try {
+            const userRes = await sb.auth.getUser();
+            const userId = userRes && userRes.data && userRes.data.user ? userRes.data.user.id : null;
+            const veiculo = veiculos.find(v => String(v.id) === String(veiculoId));
+            const { data: rota, error: re } = await sb.from('rotas').insert({
+                base_origem_id: baseOrigem,
+                data_prevista: rotaData,
+                tipo: rotaTipo,
+                motorista_id: motoristaId,
+                veiculo: veiculo ? ((veiculo.modelo || '') + ' - ' + (veiculo.placa || '')).trim() : null,
+                veiculo_id: veiculoId || null,
+                criado_por: userId,
+                codigo: ''
+            }).select().single();
+            if (re) throw re;
+            let errs = 0;
+            for (const p of paradas) {
+                const obs = (p.nome || '') + ' | ' + num(p.doses) + ' doses | ' + (p.cidade || '') + '/' + (p.uf || '');
+                const row = {
+                    rota_id: rota.id,
+                    tipo: rotaTipo === 'coleta' ? 'coleta' : 'entrega',
+                    destino_tipo: p.tipo === 'clinica' ? 'base' : (p.aplicador_id ? 'aplicador' : 'base'),
+                    destino_aplicador_id: p.tipo === 'clinica' ? null : (p.aplicador_id || null),
+                    destino_base_id: p.tipo === 'clinica' ? p.base_id : (p.aplicador_id ? null : baseOrigem),
+                    ordem_entrega: p.ordem,
+                    observacao: obs,
+                    codigo_rastreio: ''
+                };
+                const { error } = await sb.from('remessas').insert(row);
+                if (error) { console.error('Erro remessa', error); errs++; }
             }
-            const aplicadorId = apMap[p.cpf] || null;
-            const obs = p.nome + ' (' + p.cpf + ') | ' + p.doses + ' doses para enviar | original ' + (p.doses_originais || p.doses) + ' | ' + (p.decisao_demanda_oferta || '') + ' | ' + p.tarefas.map(t => { var _a; return t.codigo_tarefa || ((_a = t._tarefa) === null || _a === void 0 ? void 0 : _a.codigo); }).join(', ');
-            const { error } = await sb.from('remessas').insert({
-                rota_id: rota.id,
-                tipo: rotaTipo === 'coleta' ? 'coleta' : 'entrega',
-                // Se tiver aplicador vinculado, destino é o aplicador; senão usa base
-                destino_tipo: aplicadorId ? 'aplicador' : 'base',
-                destino_aplicador_id: aplicadorId || null,
-                destino_base_id: aplicadorId ? null : baseOrigem,
-                ordem_entrega: p.ordem,
-                observacao: obs,
-                codigo_rastreio: ''
-            });
-            if (error)
-                errs++;
-        }
-        // Atualizar status_logistica das tarefas vinculadas → roteirizado
-        const tarefaIdsRot = [...new Set(paradas.flatMap(p => (p.tarefas || []).map(t => t.tarefa_id).filter(Boolean)))];
-        if (tarefaIdsRot.length > 0) {
-            await sb.from('tarefas').update({ status_logistica: 'roteirizado' }).in('id', tarefaIdsRot);
-        }
-        setSaving(false);
-        if (errs > 0)
-            toast('Rota ' + rota.codigo + ' criada com ' + errs + ' erros em remessas', 'error');
-        else
-            toast('Rota ' + rota.codigo + ' criada com ' + paradas.length + ' paradas!', 'success');
-        onBack();
+            const tarefaIds = [...new Set(paradas.flatMap(p => (p.tarefas || []).map(t => t.tarefa_id || t.id).filter(Boolean)))];
+            if (tarefaIds.length) await sb.from('tarefas').update({ status_logistica: 'roteirizado' }).in('id', tarefaIds);
+            toast('Rota criada com ' + paradas.length + ' paradas' + (errs ? ' ('+errs+' erros em remessas)' : ''), errs ? 'error' : 'success');
+            onBack();
+        } catch (err) {
+            console.error(err);
+            toast((err && err.message) ? err.message : String(err), 'error');
+        } finally { setSaving(false); }
     };
-    const totalDoses = paradas.reduce((s, p) => s + (p.doses || 0), 0);
-    const veiculoSel = veiculos.find(v => v.id === veiculoId);
-    const motoristaSel = motoristas.find(m => m.id === motoristaId);
-    const km = distTotal();
-    return (React.createElement("div", { style: { display: 'flex', flexDirection: 'column', height: 'calc(100vh - 48px)' } },
-        React.createElement("div", { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid var(--border)', marginBottom: 8, gap: 8, flexWrap: 'wrap' } },
-            React.createElement("div", { style: { display: 'flex', alignItems: 'center', gap: 8 } },
-                React.createElement("button", { className: "btn btn-secondary btn-sm", onClick: onBack }, "\u2190 Voltar"),
-                React.createElement("span", { style: { fontSize: 18, fontWeight: 700 } }, "Roteiriza\u00E7\u00E3o"),
-                paradas.length > 0 && React.createElement("span", { className: "badge badge-blue" },
-                    paradas.length,
-                    " paradas \u00B7 ",
-                    totalDoses.toLocaleString('pt-BR'),
-                    " doses")),
-            React.createElement("div", { style: { display: 'flex', gap: 6 } },
-                React.createElement("button", { className: "btn btn-secondary btn-sm", onClick: () => setLeftOpen(!leftOpen) }, leftOpen ? '◀ Ocultar filtros' : '▶ Filtros'),
-                React.createElement("button", { className: "btn btn-secondary btn-sm", onClick: () => setRightOpen(!rightOpen) }, rightOpen ? 'Ocultar rota ▶' : '◀ Rota'),
-                React.createElement("button", { className: "btn btn-success btn-sm", onClick: otimizarRota, disabled: paradas.length < 2 }, "\u26A1 Otimizar"),
-                React.createElement("button", { className: "btn btn-primary", onClick: salvarRota, disabled: saving || paradas.length === 0 }, saving ? 'Salvando...' : '💾 Salvar'))),
-        React.createElement("div", { style: { display: 'flex', gap: 8, flex: 1, minHeight: 0, overflow: 'hidden' } },
-            leftOpen && (React.createElement("div", { style: { width: 300, flexShrink: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' } },
-                React.createElement("div", { className: "card", style: { padding: 10, marginBottom: 6, flexShrink: 0 } },
-                    React.createElement("div", { style: { fontSize: 12, fontWeight: 600, marginBottom: 6 } }, "Config. da Rota"),
-                    React.createElement("div", { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 } },
-                        React.createElement("div", { className: "form-group" },
-                            React.createElement("label", { className: "form-label", style: { fontSize: 10 } }, "Base Origem"),
-                            React.createElement("select", { className: "form-select", style: { padding: '5px 6px', fontSize: 11 }, value: baseOrigem, onChange: e => setBaseOrigem(e.target.value) },
-                                React.createElement("option", { value: "" }, "Selecione"),
-                                bases.map(b => React.createElement("option", { key: b.id, value: b.id }, b.nome)))),
-                        React.createElement("div", { className: "form-group" },
-                            React.createElement("label", { className: "form-label", style: { fontSize: 10 } }, "Data"),
-                            React.createElement("input", { className: "form-input", style: { padding: '5px 6px', fontSize: 11 }, type: "date", onClick: openDatePicker, onFocus: openDatePicker, value: rotaData, onChange: e => setRotaData(e.target.value) })),
-                        React.createElement("div", { className: "form-group" },
-                            React.createElement("label", { className: "form-label", style: { fontSize: 10 } }, "Motorista"),
-                            React.createElement("select", { className: "form-select", style: { padding: '5px 6px', fontSize: 11 }, value: motoristaId, onChange: e => setMotoristaId(e.target.value), disabled: !baseOrigem },
-                                React.createElement("option", { value: "" }, baseOrigem ? 'Selecione' : 'Escolha a base primeiro'),
-                                motoristasFiltrados.map(m => React.createElement("option", { key: m.id, value: m.id }, m.nome)))),
-                        React.createElement("div", { className: "form-group" },
-                            React.createElement("label", { className: "form-label", style: { fontSize: 10 } }, "Ve\u00EDculo"),
-                            React.createElement("select", { className: "form-select", style: { padding: '5px 6px', fontSize: 11 }, value: veiculoId, onChange: e => setVeiculoId(e.target.value), disabled: !baseOrigem },
-                                React.createElement("option", { value: "" }, baseOrigem ? 'Selecione' : 'Escolha a base primeiro'),
-                                veiculosFiltrados.map(v => React.createElement("option", { key: v.id, value: v.id },
-                                    v.modelo,
-                                    " ",
-                                    v.placa)))))),
-                React.createElement("div", { style: { display:'flex', gap:4, marginBottom:6, flexShrink:0 } },
-                    React.createElement("button", { className: `btn btn-sm ${abaEsq==='aplicadores'?'btn-primary':'btn-secondary'}`, style:{flex:1,fontSize:11}, onClick: ()=>setAbaEsq('aplicadores') }, "👤 Aplicadores"),
-                    React.createElement("button", { className: `btn btn-sm ${abaEsq==='clinicas'?'btn-primary':'btn-secondary'}`, style:{flex:1,fontSize:11}, onClick: ()=>setAbaEsq('clinicas') }, "🏥 Clínicas")),
-                React.createElement("div", { style:{fontSize:9,color:'var(--success)',marginBottom:4,flexShrink:0} }, "DEBUG v6 OK · bases ", bases.length, " · clínicas ", clinicasRot.length),
-                React.createElement("div", { className: "card", style: { padding: 10, marginBottom: 6, flexShrink: 0 } },
-                    React.createElement("div", { style: { fontSize: 12, fontWeight: 600, marginBottom: 6 } }, "Filtros"),
-                    React.createElement("input", { className: "form-input", style: { padding: '5px 8px', fontSize: 11, marginBottom: 4 }, value: searchTarefa, onChange: e => setSearchTarefa(e.target.value), placeholder: "\uD83D\uDD0D Nome, CPF, c\u00F3digo..." }),
-                    React.createElement("div", { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 4, marginBottom: 4 } },
-                        React.createElement("input", { className: "form-input", style: { padding: '5px 6px', fontSize: 11 }, type: "date", onClick: openDatePicker, onFocus: openDatePicker, value: filterDateStart, onChange: e => setFilterDateStart(e.target.value) }),
-                        React.createElement("input", { className: "form-input", style: { padding: '5px 6px', fontSize: 11 }, type: "date", onClick: openDatePicker, onFocus: openDatePicker, value: filterDateEnd, onChange: e => setFilterDateEnd(e.target.value) })),
-                    React.createElement("select", { className: "form-select", style: { padding: '5px 6px', fontSize: 11, width: '100%' }, value: filterPP, onChange: e => setFilterPP(e.target.value) },
-                        React.createElement("option", { value: "" }, "Todos pontos de partida"),
-                        pontosPartida.map(([pp, c]) => React.createElement("option", { key: pp, value: pp },
-                            pp,
-                            " (",
-                            c,
-                            ")"))),
-                    React.createElement("div", { style: { marginTop: 4 } },
-                        React.createElement("div", { style: { fontSize: 10, color: 'var(--text-muted)', marginBottom: 3, fontWeight: 600 } }, "STATUS"),
-                        React.createElement("div", { style: { display: 'flex', flexWrap: 'wrap', gap: 4 } },
-                            [
-                                { v: 'aprovada', label: 'Aprovada', color: 'var(--success)' },
-                                { v: 'em_validacao', label: 'Em Valid.', color: 'var(--warning)' },
-                                { v: 'em_execucao', label: 'Em Exec.', color: 'var(--accent)' },
-                                { v: 'pronta_faturamento', label: 'Pronta Fat.', color: 'var(--info)' },
-                            ].map(opt => (React.createElement("label", { key: opt.v, style: { display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer', fontSize: 10, padding: '3px 7px', borderRadius: 4, border: `1px solid ${filterStatus === opt.v ? opt.color : 'var(--border)'}`, background: filterStatus === opt.v ? `${opt.color}22` : 'transparent', transition: 'all 0.15s' } },
-                                React.createElement("input", { type: "radio", name: "filterStatus", value: opt.v, checked: filterStatus === opt.v, onChange: () => setFilterStatus(filterStatus === opt.v ? '' : opt.v), style: { display: 'none' } }),
-                                React.createElement("span", { style: { color: filterStatus === opt.v ? opt.color : 'var(--text-muted)', fontWeight: filterStatus === opt.v ? 600 : 400 } },
-                                    filterStatus === opt.v ? '✓ ' : '',
-                                    opt.label)))),
-                            filterStatus && (React.createElement("button", { onClick: () => setFilterStatus(''), style: { fontSize: 10, padding: '3px 6px', background: 'none', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text-muted)', cursor: 'pointer' } }, "\u2715 Limpar")))),
-                    React.createElement("div", { style: { fontSize: 10, color: 'var(--text-muted)', marginTop: 4, display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' } },
-                        React.createElement("span", { className: "badge badge-blue", style: { fontSize: 10 } },
-                            "Dispon\u00EDveis ",
-                            filteredTutores.length),
-                        React.createElement("span", { className: "badge badge-green", style: { fontSize: 10 } },
-                            "Na rota ",
-                            paradas.length),
-                        React.createElement("span", { className: "badge badge-gray", style: { fontSize: 10 } },
-                            "J\u00E1 roteirizados ",
-                            tutores.filter(t => t.jaRoteirizado).length),
-                        React.createElement("button", { className: "btn btn-secondary btn-sm", style: { fontSize: 9, padding: '2px 6px' }, onClick: () => setShowJaRoteirizado(s => !s) }, showJaRoteirizado ? '🙈 Ocultar roteirizados' : '👁 Ver roteirizados'),
-                        React.createElement("button", { className: "btn btn-secondary btn-sm", style: { fontSize: 9, padding: '2px 6px' }, onClick: () => { setFilterDateStart(''); setFilterDateEnd(''); setFilterPP(''); setFilterStatus(''); setSearchTarefa(''); } }, "\uD83E\uDDF9 Limpar filtros"))),
-                React.createElement("div", { style: { flex: 1, overflow: 'auto', border: '1px solid var(--border)', borderRadius: 'var(--radius)', background: 'var(--bg-card)', display: abaEsq === 'aplicadores' ? 'block' : 'none' } },
-                    filteredTutores.length === 0 && React.createElement("div", { style: { padding: 20, textAlign: 'center', color: 'var(--text-muted)', fontSize: 12 } }, tutores.length === 0 ? 'Nenhuma escala encontrada. A tela de Escalas tem registros, então clique em Atualizar ou limpe os filtros.' : 'Nenhum resultado para os filtros selecionados. Use Limpar filtros para voltar a listar as escalas.'),
-                    filteredTutores.slice(0, 80).map(t => {
-                        var _a;
-                        const isExpanded = expandedTutor === t.cpf;
-                        const statusCounts = t.tarefas.reduce((acc, e) => { const st = e._status || e.status; acc[st] = (acc[st] || 0) + 1; return acc; }, {});
-                        return (React.createElement("div", { key: t.cpf, style: { borderBottom: '1px solid var(--border)', opacity: t.jaRoteirizado ? 0.65 : 1 } },
-                            React.createElement("div", { style: { padding: '7px 10px', fontSize: 11, display: 'flex', justifyContent: 'space-between', alignItems: 'center', transition: 'background 0.1s', gap: 4, background: t.jaRoteirizado ? 'rgba(245,158,11,0.06)' : 'transparent' }, onMouseEnter: e => e.currentTarget.style.background = 'var(--bg-card-hover)', onMouseLeave: e => e.currentTarget.style.background = t.jaRoteirizado ? 'rgba(245,158,11,0.06)' : 'transparent' },
-                                React.createElement("div", { style: { flex: 1, minWidth: 0, cursor: 'pointer' }, onClick: () => setExpandedTutor(isExpanded ? null : t.cpf) },
-                                    React.createElement("div", { style: { display: 'flex', alignItems: 'center', gap: 4 } },
-                                        React.createElement("span", { style: { fontSize: 9, color: 'var(--text-muted)' } }, isExpanded ? '▼' : '▶'),
-                                        React.createElement("span", { style: { fontWeight: 600, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, t.nome),
-                                        t.jaRoteirizado && React.createElement("span", { style: { fontSize: 9, color: 'var(--warning)', flexShrink: 0 } }, "\uD83D\uDE9A em rota"),
-                                        React.createElement("button", { onClick: ev => { ev.stopPropagation(); setInfoTutor(t); }, style: { background: 'none', border: '1px solid var(--border)', borderRadius: '50%', width: 16, height: 16, cursor: 'pointer', fontSize: 9, color: 'var(--text-muted)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, padding: 0 }, title: "Ver informa\u00E7\u00F5es" }, "\u24D8")),
-                                    React.createElement("div", { style: { color: 'var(--text-muted)', fontSize: 10, marginLeft: 12 } },
-                                        t.ponto_partida || t.cidade,
-                                        " \u00B7 ",
-                                        filterStatus ? t.tarefas.filter(e => (e._status || e.status) === filterStatus).length : t.tarefas.length,
-                                        " tar.",
-                                        statusCounts['aprovada'] && React.createElement("span", { style: { color: 'var(--success)', marginLeft: 4 } },
-                                            "\u2713",
-                                            statusCounts['aprovada']),
-                                        statusCounts['pronta_faturamento'] && React.createElement("span", { style: { color: 'var(--info)', marginLeft: 4 } },
-                                            "\uD83D\uDCB0",
-                                            statusCounts['pronta_faturamento']),
-                                        statusCounts['em_execucao'] && React.createElement("span", { style: { color: 'var(--accent)', marginLeft: 4 } },
-                                            "\u25B6",
-                                            statusCounts['em_execucao']),
-                                        [...new Set(t.tarefas.map(e => {
-                                                var _a;
-                                                const raw = e.tipo_vacina || e._vacina_nome || e.vacina_nome || ((_a = e._tarefa) === null || _a === void 0 ? void 0 : _a.vacina) || '';
-                                                const s = raw.trim().toLowerCase();
-                                                if (!s || s === 'gripe' || s.includes('tetrav'))
-                                                    return 'Influenza Tetravalente';
-                                                if (s.includes('triv') || s === 'gripe trivalente')
-                                                    return 'Influenza Trivalente';
-                                                return raw;
-                                            }).filter(Boolean))].map(v => (React.createElement("span", { key: v, style: { marginLeft: 4, fontSize: 9, fontWeight: 600, padding: '1px 4px', borderRadius: 3,
-                                                background: v.includes('Tetrav') ? 'rgba(37,99,235,0.2)' : 'rgba(16,185,129,0.2)',
-                                                color: v.includes('Tetrav') ? 'var(--accent)' : 'var(--success)'
-                                            } },
-                                            "\uD83D\uDC89",
-                                            v.replace('Influenza ', '')))))),
-                                React.createElement("div", { style: { display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 } },
-                                    React.createElement("span", { className: "badge badge-green", title: "Estoque atual do aplicador", style: { fontSize: 10 } },
-                                        "Est. ",
-                                        (t.estoque_atual || 0).toLocaleString('pt-BR')),
-                                    React.createElement("span", { className: "badge badge-cyan", title: "Doses selecionadas para esta rota", style: { fontSize: 10 } },
-                                        "Enviar ",
-                                        calcDosesRotaTutor(t).toLocaleString('pt-BR')),
-                                    React.createElement("button", { className: "btn btn-primary btn-sm", style: { padding: '3px 8px', fontSize: 10 }, onClick: (e) => { e.stopPropagation(); addTutor(t); } }, "+"))),
-                            isExpanded && (React.createElement("div", { style: { padding: '4px 10px 8px', background: 'var(--bg-input)' } },
-                                React.createElement("div", { style: { fontSize: 10, color: 'var(--text-muted)', marginBottom: 4 } },
-                                    "CPF: ",
-                                    t.cpf,
-                                    " \u00B7 Base: ",
-                                    t.base_nome,
-                                    " \u00B7 Estoque aplicador: ",
-                                    React.createElement("strong", { style: { color: 'var(--success)' } }, (t.estoque_atual || 0).toLocaleString('pt-BR')),
-                                    " \u00B7 Estoque mesma vacina: ",
-                                    React.createElement("strong", { style: { color: 'var(--info)' } }, (t.estoque_mesma_vacina || 0).toLocaleString('pt-BR')),
-                                    " \u00B7 ",
-                                    React.createElement("span", { style: { color: 'var(--info)' } }, statusDemandaTutor(t)),
-                                    filterStatus && React.createElement("span", { style: { marginLeft: 6, color: 'var(--warning)' } },
-                                        "\u26A0 Mostrando s\u00F3: ",
-                                        STATUS_LABELS[filterStatus])),
-                                React.createElement("div", { style: { display: 'grid', gridTemplateColumns: '1fr 90px', gap: 6, alignItems: 'end', marginBottom: 6 } },
-                                    React.createElement("div", { style: { fontSize: 10, color: 'var(--text-muted)' } },
-                                        "Selecione as tarefas que entram nesta rota. A quantidade pode ser parcial por tarefa.",
-                                        React.createElement("br", null),
-                                        "Selecionadas: ",
-                                        getTarefasRotaTutor(t).filter(isTarefaRotaSelecionada).length,
-                                        " \u00B7 Doses: ",
-                                        React.createElement("strong", { style: { color: 'var(--info)' } }, calcDosesRotaTutor(t).toLocaleString('pt-BR'))),
-                                    React.createElement("input", { className: "form-input", type: "number", min: "0", style: { padding: '4px 6px', fontSize: 10 }, title: "Sobrescreve o total do aplicador nesta rota", value: (_a = manualDosesRota[t.cpfNorm || t.cpf || t.aplicador_id]) !== null && _a !== void 0 ? _a : calcDosesRotaTutor(t), onChange: ev => setManualDosesRota(m => ({ ...m, [t.cpfNorm || t.cpf || t.aplicador_id]: ev.target.value })) })),
-                                React.createElement("div", { style: { display: 'flex', gap: 6, marginBottom: 5 } },
-                                    React.createElement("button", { className: "btn btn-secondary btn-sm", style: { fontSize: 9, padding: '3px 6px' }, onClick: () => {
-                                            const updates = {};
-                                            getTarefasRotaTutor(t).forEach(e => { updates[tarefaRouteKey(e)] = true; });
-                                            setSelectedTarefasRota(m => ({ ...m, ...updates }));
-                                        } }, "Selecionar todas"),
-                                    React.createElement("button", { className: "btn btn-secondary btn-sm", style: { fontSize: 9, padding: '3px 6px' }, onClick: () => {
-                                            const updates = {};
-                                            getTarefasRotaTutor(t).forEach(e => { updates[tarefaRouteKey(e)] = false; });
-                                            setSelectedTarefasRota(m => ({ ...m, ...updates }));
-                                        } }, "Limpar")),
-                                getTarefasRotaTutor(t).slice(0, 20).map(e => {
-                                    var _a, _b, _c;
-                                    const tk = tarefaRouteKey(e);
-                                    const selected = isTarefaRotaSelecionada(e);
-                                    const originalDose = Number(e._doses || e.doses_necessarias || 0);
-                                    const doseRota = getDoseTarefaRota(e);
-                                    return (React.createElement("div", { key: tk || e.id, style: { fontSize: 10, color: selected ? 'var(--text-secondary)' : 'var(--text-muted)', padding: '4px 0', borderBottom: '1px solid var(--border)', display: 'grid', gridTemplateColumns: '18px 1fr 54px', gap: 6, alignItems: 'center', opacity: selected ? 1 : 0.55 } },
-                                        React.createElement("input", { type: "checkbox", checked: selected, onChange: ev => setSelectedTarefasRota(m => ({ ...m, [tk]: ev.target.checked })) }),
-                                        React.createElement("div", { style: { minWidth: 0 } },
-                                            React.createElement("div", { style: { fontFamily: 'JetBrains Mono', fontSize: 9, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, e.codigo_tarefa || ((_a = e._tarefa) === null || _a === void 0 ? void 0 : _a.codigo)),
-                                            React.createElement("div", { style: { display: 'flex', gap: 4, alignItems: 'center', marginTop: 2, flexWrap: 'wrap' } },
-                                                React.createElement("span", { className: `badge ${STATUS_BADGES[e._status || e.status] || 'badge-gray'}`, style: { fontSize: 9, padding: '1px 5px' } }, STATUS_LABELS[e._status || e.status] || (e._status || e.status)),
-                                                (e.tipo_vacina || e._vacina_nome || e.vacina_nome || ((_b = e._tarefa) === null || _b === void 0 ? void 0 : _b.vacina)) && (() => {
-                                                    var _a;
-                                                    const raw = e.tipo_vacina || e._vacina_nome || e.vacina_nome || ((_a = e._tarefa) === null || _a === void 0 ? void 0 : _a.vacina) || '';
-                                                    const s = raw.trim().toLowerCase();
-                                                    const nome = (!s || s === 'gripe' || s.includes('tetrav')) ? 'Influenza Tetravalente' : (s.includes('triv') || s === 'gripe trivalente') ? 'Influenza Trivalente' : raw;
-                                                    const isTetrav = nome.includes('Tetrav');
-                                                    return React.createElement("span", { style: { fontSize: 9, fontWeight: 600, padding: '1px 5px', borderRadius: 3,
-                                                            background: isTetrav ? 'rgba(37,99,235,0.2)' : 'rgba(16,185,129,0.2)',
-                                                            color: isTetrav ? 'var(--accent)' : 'var(--success)'
-                                                        } },
-                                                        "\uD83D\uDC89",
-                                                        nome.replace('Influenza ', ''));
-                                                })(),
-                                                doseRota < originalDose && React.createElement("span", { style: { color: 'var(--warning)', fontSize: 9 } },
-                                                    "Parcial: falta ",
-                                                    originalDose - doseRota))),
-                                        React.createElement("input", { className: "form-input", type: "number", min: "0", max: originalDose, disabled: !selected, style: { padding: '3px 5px', fontSize: 10, textAlign: 'right' }, value: (_c = manualDosesTarefaRota[tk]) !== null && _c !== void 0 ? _c : originalDose, onChange: ev => setManualDosesTarefaRota(m => ({ ...m, [tk]: ev.target.value })) })));
-                                }),
-                                getTarefasRotaTutor(t).length > 20 && React.createElement("div", { style: { fontSize: 10, color: 'var(--text-muted)', marginTop: 3 } },
-                                    "+",
-                                    getTarefasRotaTutor(t).length - 20,
-                                    " tarefas...")))))
-                    })
-                    ),
-                    React.createElement("div", { style: { flex: 1, overflow: 'auto', border: '1px solid var(--border)', borderRadius: 'var(--radius)', background: 'var(--bg-card)', display: abaEsq === 'clinicas' ? 'block' : 'none' } },
-                        React.createElement("div", { style: { padding: '8px 10px', borderBottom: '1px solid var(--border)' } },
-                            React.createElement("input", { className: "form-input", style: { padding: '5px 8px', fontSize: 11, width: '100%' }, placeholder: "Buscar clínica ou cidade...", value: clinicaSearch, onChange: e => setClinicaSearch(e.target.value) })
-                        ),
-                        clinicasRot.length === 0 && React.createElement("div", { style: { padding: 20, textAlign: 'center', color: 'var(--text-muted)', fontSize: 11 } }, "Nenhuma clínica parceira encontrada."),
-                        clinicasRot.filter(c => !clinicaSearch || String(c.nome||'').toLowerCase().includes(clinicaSearch.toLowerCase()) || String(c.cidade||'').toLowerCase().includes(clinicaSearch.toLowerCase())).map(c => {
-                            const jaAdicionada = paradas.find(p => p.tipo === 'clinica' && p.base_id === c.id);
-                            const [dosesInput, setDosesInput] = [null, null]; // placeholder
-                            return React.createElement(ClinicaParadaRow, { key: c.id, clinica: c, jaAdicionada: !!jaAdicionada, onAdd: (doses) => addClinica(c, doses) });
-                        })
-                    )),
-            React.createElement("div", { style: { flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 } },
-                React.createElement(MapaRota, { key: mapKey, paradas: paradas, bases: bases, baseOrigemId: baseOrigem }),
-                React.createElement("div", { style: { display: 'flex', gap: 12, padding: '8px 12px', background: 'var(--bg-card)', border: '1px solid var(--border)', borderTop: 'none', borderRadius: '0 0 var(--radius) var(--radius)', flexWrap: 'wrap', fontSize: 12 } },
-                    React.createElement("div", null,
-                        React.createElement("span", { style: { fontSize: 10, color: 'var(--text-muted)' } }, "ORIGEM"),
-                        React.createElement("br", null),
-                        React.createElement("strong", null, ((_a = bases.find(b => b.id === baseOrigem)) === null || _a === void 0 ? void 0 : _a.nome) || '—')),
-                    React.createElement("div", null,
-                        React.createElement("span", { style: { fontSize: 10, color: 'var(--text-muted)' } }, "PARADAS"),
-                        React.createElement("br", null),
-                        React.createElement("strong", null, paradas.length)),
-                    React.createElement("div", null,
-                        React.createElement("span", { style: { fontSize: 10, color: 'var(--text-muted)' } }, "DOSES"),
-                        React.createElement("br", null),
-                        React.createElement("strong", null, totalDoses.toLocaleString('pt-BR'))),
-                    React.createElement("div", null,
-                        React.createElement("span", { style: { fontSize: 10, color: 'var(--text-muted)' } }, "DIST\u00C2NCIA"),
-                        React.createElement("br", null),
-                        React.createElement("strong", null, km > 0 ? km.toFixed(0) + ' km' : '—')),
-                    veiculoSel && React.createElement("div", null,
-                        React.createElement("span", { style: { fontSize: 10, color: 'var(--text-muted)' } }, "CAPACIDADE"),
-                        React.createElement("br", null),
-                        React.createElement("strong", { style: { color: totalDoses > veiculoSel.capacidade_doses ? 'var(--danger)' : 'inherit' } },
-                            totalDoses,
-                            "/",
-                            veiculoSel.capacidade_doses)))),
-            rightOpen && (React.createElement("div", { style: { width: 280, flexShrink: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' } },
-                React.createElement("div", { style: { display: 'flex', gap: 4, marginBottom: 6, flexShrink: 0 } },
-                    React.createElement("button", { className: "btn btn-secondary btn-sm", style: { flex: 1, fontSize: 10 }, onClick: otimizarRota, disabled: paradas.length < 2 }, "\u26A1 Otimizar"),
-                    React.createElement("button", { className: "btn btn-danger btn-sm", style: { flex: 1, fontSize: 10 }, onClick: () => { if (confirm('Limpar?')) {
-                            setParadas([]);
-                            setMapKey(k => k + 1);
-                        } }, disabled: paradas.length === 0 }, "\u2715 Limpar")),
-                React.createElement("div", { style: { flex: 1, overflow: 'auto', border: '1px solid var(--border)', borderRadius: 'var(--radius)', background: 'var(--bg-card)' } },
-                    React.createElement("div", { style: { padding: '6px 10px', fontSize: 10, color: 'var(--text-muted)', borderBottom: '1px solid var(--border)', fontWeight: 600 } }, "ARRASTE PARA REORDENAR"),
-                    paradas.length === 0 && React.createElement("div", { style: { padding: 24, textAlign: 'center', color: 'var(--text-muted)', fontSize: 12 } }, "Clique + nos aplicadores \u00E0 esquerda"),
-                    paradas.map((p, idx) => (React.createElement("div", { key: p.tipo === 'clinica' ? ('cl_' + p.base_id) : p.cpf, draggable: true, onDragStart: () => onDragStart(idx), onDragOver: onDragOver, onDrop: e => onDrop(e, idx), style: { padding: '8px 10px', borderBottom: '1px solid var(--border)', cursor: 'grab', background: dragIdx === idx ? 'var(--accent-subtle)' : 'transparent' } },
-                        React.createElement("div", { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' } },
-                            React.createElement("div", { style: { display: 'flex', gap: 6, alignItems: 'flex-start', flex: 1 } },
-                                React.createElement("div", { style: { width: 20, height: 20, borderRadius: '50%', background: 'var(--accent)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10, fontWeight: 700, flexShrink: 0 } }, p.ordem),
-                                React.createElement("div", { style: { flex: 1, minWidth: 0 } },
-                                    React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, p.nome),
-                                    React.createElement("div", { style: { fontSize: 10, color: 'var(--text-muted)' } },
-                                        p.ponto_partida || p.cidade,
-                                        " \u00B7 ",
-                                        p.doses,
-                                        " doses",
-                                        p.tipo !== 'clinica' && React.createElement(React.Fragment, null, " \u00B7 ", p.tarefas_count, " tarefas selecionadas"),
-                                        p.tipo === 'clinica' && React.createElement("span", { style: { marginLeft: 4, fontSize: 9, color: 'var(--info)', fontWeight: 600 } }, "\uD83C\uDFE5 Cl\u00EDnica"),
-                                        !p.lat && React.createElement("span", { style: { color: 'var(--danger)', marginLeft: 3 } }, "\u26A0")))),
-                            React.createElement("button", { style: { background: 'none', border: 'none', color: 'var(--danger)', cursor: 'pointer', fontSize: 12, padding: 2 }, onClick: e => { e.stopPropagation(); removeParada(idx); } }, "\u2715"))))))),
-        infoTutor && React.createElement(TutorInfoModal, { tutor: infoTutor, onClose: () => setInfoTutor(null) }))))));
+
+    const cardLista = (titulo, children) => h('div', {className:'card', style:{padding:10, marginBottom:8}},
+        h('div', {style:{fontSize:12,fontWeight:700,marginBottom:8}}, titulo), children);
+
+    return h('div', {style:{display:'flex',flexDirection:'column',height:'calc(100vh - 48px)',gap:8}},
+        h('div', {style:{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'8px 0',borderBottom:'1px solid var(--border)',gap:8}},
+            h('div', {style:{display:'flex',alignItems:'center',gap:8}},
+                h('button', {className:'btn btn-secondary btn-sm', onClick:onBack}, '← Voltar'),
+                h('strong', null, 'Roteirização'),
+                h('span', {className:'badge badge-green'}, 'EMERGÊNCIA OK'),
+                h('span', {style:{fontSize:11,color:'var(--text-muted)'}}, loading ? 'Carregando...' : (aplicadores.length+' aplicadores · '+clinicas.length+' clínicas'))),
+            h('div', {style:{display:'flex',gap:6}},
+                h('button', {className:'btn btn-success btn-sm', onClick:()=>setParadas(prev=>prev.slice().sort((a,b)=>(b.lat?1:0)-(a.lat?1:0)).map((p,i)=>({...p,ordem:i+1})))}, '⚡ Otimizar'),
+                h('button', {className:'btn btn-primary btn-sm', onClick:salvarRota, disabled:saving||!paradas.length}, saving ? 'Salvando...' : '💾 Salvar'))),
+        erroTela && h('div', {className:'card', style:{borderColor:'var(--danger)',color:'var(--danger)',padding:10,fontSize:12}}, 'Erro ao carregar dados: ', erroTela),
+        h('div', {style:{display:'flex',gap:8,flex:1,minHeight:0}},
+            h('div', {style:{width:300,display:'flex',flexDirection:'column',minHeight:0,flexShrink:0}},
+                cardLista('Config. da Rota', h(React.Fragment, null,
+                    h('label',{className:'form-label'},'Base Origem'),
+                    h('select',{className:'form-select',style:{width:'100%',marginBottom:8},value:baseOrigem,onChange:e=>setBaseOrigem(e.target.value)},
+                        h('option',{value:''},'Selecione'), bases.map(b=>h('option',{key:b.id,value:b.id},b.nome))),
+                    h('label',{className:'form-label'},'Data'),
+                    h('input',{className:'form-input',style:{width:'100%',marginBottom:8},type:'date',value:rotaData,onChange:e=>setRotaData(e.target.value)}),
+                    h('label',{className:'form-label'},'Motorista'),
+                    h('select',{className:'form-select',style:{width:'100%',marginBottom:8},value:motoristaId,onChange:e=>setMotoristaId(e.target.value)},
+                        h('option',{value:''},'Selecione'), motoristas.map(m=>h('option',{key:m.id,value:m.id},m.nome || m.email || m.id))),
+                    h('label',{className:'form-label'},'Veículo'),
+                    h('select',{className:'form-select',style:{width:'100%'},value:veiculoId,onChange:e=>setVeiculoId(e.target.value)},
+                        h('option',{value:''},'Opcional'), veiculos.map(v=>h('option',{key:v.id,value:v.id},(v.modelo||'Veículo')+' · '+(v.placa||''))))
+                )),
+                h('div',{style:{display:'flex',gap:4,marginBottom:8}},
+                    h('button',{className:aba==='aplicadores'?'btn btn-primary btn-sm':'btn btn-secondary btn-sm',style:{flex:1},onClick:()=>setAba('aplicadores')},'👤 Aplicadores'),
+                    h('button',{className:aba==='clinicas'?'btn btn-primary btn-sm':'btn btn-secondary btn-sm',style:{flex:1},onClick:()=>setAba('clinicas')},'🏥 Clínicas')),
+                aba==='aplicadores' && h(React.Fragment,null,
+                    h('input',{className:'form-input',placeholder:'Buscar aplicador...',value:busca,onChange:e=>setBusca(e.target.value),style:{marginBottom:8}}),
+                    h('div',{style:{flex:1,overflow:'auto',border:'1px solid var(--border)',borderRadius:'var(--radius)',background:'var(--bg-card)'}},
+                        filtroAp.length===0 && h('div',{style:{padding:20,textAlign:'center',color:'var(--text-muted)',fontSize:12}},loading?'Carregando aplicadores...':'Nenhum aplicador encontrado'),
+                        filtroAp.map(a=>h('div',{key:(a.aplicador_id||a.cpf||a.nome),style:{padding:8,borderBottom:'1px solid var(--border)',fontSize:12,display:'flex',justifyContent:'space-between',gap:6}},
+                            h('div',{style:{minWidth:0}}, h('div',{style:{fontWeight:700,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}},a.nome), h('div',{style:{color:'var(--text-muted)',fontSize:11}},(a.cidade||'')+' '+(a.uf||''),' · ',num(a.doses),' doses')),
+                            h('button',{className:'btn btn-success btn-sm',onClick:()=>addAplicador(a)},'+Add'))))
+                ),
+                aba==='clinicas' && h(React.Fragment,null,
+                    h('input',{className:'form-input',placeholder:'Buscar clínica...',value:buscaClinica,onChange:e=>setBuscaClinica(e.target.value),style:{marginBottom:8}}),
+                    h('div',{style:{flex:1,overflow:'auto',border:'1px solid var(--border)',borderRadius:'var(--radius)',background:'var(--bg-card)'}},
+                        filtroCli.length===0 && h('div',{style:{padding:20,textAlign:'center',color:'var(--text-muted)',fontSize:12}},loading?'Carregando clínicas...':'Nenhuma clínica encontrada. Cadastre a base com nome contendo Clínica ou tipo Clínica.'),
+                        filtroCli.map(c=>h('div',{key:c.id,style:{padding:8,borderBottom:'1px solid var(--border)',fontSize:12,display:'flex',justifyContent:'space-between',gap:6}},
+                            h('div',{style:{minWidth:0}}, h('div',{style:{fontWeight:700,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}},c.nome), h('div',{style:{color:'var(--text-muted)',fontSize:11}},(c.cidade||'')+' '+(c.uf||''))),
+                            h('button',{className:'btn btn-success btn-sm',onClick:()=>addClinica(c)},'+Add'))))
+                )
+            ),
+            h('div',{style:{flex:1,display:'flex',flexDirection:'column',minWidth:0,minHeight:0}},
+                h(MapaRota,{paradas:paradas,bases:basesTodas.length?basesTodas:bases,baseOrigemId:baseOrigem}),
+                h('div',{style:{padding:8,border:'1px solid var(--border)',borderTop:'none',background:'var(--bg-card)',display:'flex',gap:14,fontSize:12}},
+                    h('strong',null,paradas.length,' paradas'), h('strong',null,totalDoses,' doses'))),
+            h('div',{style:{width:300,display:'flex',flexDirection:'column',minHeight:0,flexShrink:0}},
+                h('div',{className:'card',style:{padding:10,marginBottom:8}},
+                    h('div',{style:{fontWeight:700}},'Paradas da rota'),
+                    h('div',{style:{fontSize:12,color:'var(--text-muted)'}},paradas.length,' paradas · ',totalDoses,' doses')),
+                h('div',{style:{flex:1,overflow:'auto',border:'1px solid var(--border)',borderRadius:'var(--radius)',background:'var(--bg-card)'}},
+                    paradas.length===0 && h('div',{style:{padding:24,textAlign:'center',color:'var(--text-muted)',fontSize:12}},'Adicione aplicadores ou clínicas à esquerda'),
+                    paradas.map((p,idx)=>h('div',{key:idx+'_'+(p.base_id||p.aplicador_id||p.cpf||p.nome),style:{padding:10,borderBottom:'1px solid var(--border)',fontSize:12}},
+                        h('div',{style:{display:'flex',justifyContent:'space-between',gap:8}},
+                            h('div',{style:{minWidth:0}},
+                                h('div',{style:{fontWeight:700,color:'var(--text-primary)',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}},idx+1,'. ',p.nome),
+                                h('div',{style:{fontSize:11,color:'var(--text-muted)'}},p.tipo==='clinica'?'🏥 Clínica':'👤 Aplicador',' · ',p.doses,' doses')),
+                            h('button',{className:'btn btn-danger btn-sm',onClick:()=>removeParada(idx)},'×'))))))
+        )
+    );
 }
+
 function MapaRota({ paradas, bases, baseOrigemId }) {
     const mapRef = useRef(null);
     const mapInstanceRef = useRef(null);
     useEffect(() => {
-        if (mapInstanceRef.current) {
-            mapInstanceRef.current.remove();
-            mapInstanceRef.current = null;
-        }
-        if (!mapRef.current)
-            return;
-        const map = L.map(mapRef.current).setView([-15.78, -47.93], 4);
-        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OpenStreetMap' }).addTo(map);
-        mapInstanceRef.current = map;
-        const bounds = [];
-        const base = bases.find(b => b.id === baseOrigemId);
-        if (base === null || base === void 0 ? void 0 : base.latitude) {
-            const lat = parseFloat(base.latitude), lng = parseFloat(base.longitude);
-            L.marker([lat, lng], { icon: L.divIcon({ className: '', html: '<div style="background:#2563eb;color:#fff;border-radius:50%;width:28px;height:28px;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;border:3px solid #fff;box-shadow:0 2px 8px rgba(0,0,0,.3)">🏢</div>', iconSize: [28, 28], iconAnchor: [14, 14] }) }).addTo(map).bindPopup('<b>ORIGEM: ' + base.nome + '</b>');
-            bounds.push([lat, lng]);
-        }
-        const coords = [];
-        paradas.forEach(p => {
-            if (!p.lat || !p.lng)
-                return;
-            L.marker([p.lat, p.lng], { icon: L.divIcon({ className: '', html: '<div style="background:#10b981;color:#fff;border-radius:50%;width:24px;height:24px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;border:2px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,.3)">' + p.ordem + '</div>', iconSize: [24, 24], iconAnchor: [12, 12] }) }).addTo(map).bindPopup('<b>' + p.ordem + '. ' + p.nome + '</b><br>' + p.ponto_partida + '<br>' + p.doses + ' doses · ' + p.tarefas_count + ' tarefas' + (p.status_filtro ? '<br><i>Status: ' + p.status_filtro + '</i>' : ''));
-            bounds.push([p.lat, p.lng]);
-            coords.push([p.lat, p.lng]);
-        });
-        if ((base === null || base === void 0 ? void 0 : base.latitude) && coords.length > 0)
-            L.polyline([[parseFloat(base.latitude), parseFloat(base.longitude)], ...coords], { color: '#2563eb', weight: 3, opacity: 0.7, dashArray: '8,8' }).addTo(map);
-        else if (coords.length > 1)
-            L.polyline(coords, { color: '#2563eb', weight: 3, opacity: 0.7, dashArray: '8,8' }).addTo(map);
-        if (bounds.length > 0)
-            map.fitBounds(bounds, { padding: [30, 30], maxZoom: 12 });
-        return () => { if (mapInstanceRef.current) {
-            mapInstanceRef.current.remove();
-            mapInstanceRef.current = null;
-        } };
+        if (typeof L === 'undefined') return;
+        try {
+            if (mapInstanceRef.current) { mapInstanceRef.current.remove(); mapInstanceRef.current = null; }
+            if (!mapRef.current) return;
+            const map = L.map(mapRef.current).setView([-15.78, -47.93], 4);
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OpenStreetMap' }).addTo(map);
+            mapInstanceRef.current = map;
+            const bounds = [];
+            const base = (bases || []).find(b => String(b.id) === String(baseOrigemId));
+            if (base && base.latitude && base.longitude) {
+                const lat = parseFloat(base.latitude), lng = parseFloat(base.longitude);
+                if (Number.isFinite(lat) && Number.isFinite(lng)) {
+                    L.marker([lat,lng]).addTo(map).bindPopup('<b>Base origem</b><br>'+String(base.nome||''));
+                    bounds.push([lat,lng]);
+                }
+            }
+            (paradas || []).forEach((p,i) => {
+                const lat = parseFloat(p.lat), lng = parseFloat(p.lng);
+                if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+                L.marker([lat,lng]).addTo(map).bindPopup('<b>'+(i+1)+'. '+String(p.nome||'')+'</b><br>'+String(p.doses||0)+' doses');
+                bounds.push([lat,lng]);
+            });
+            if (bounds.length) map.fitBounds(bounds, { padding:[30,30], maxZoom:12 });
+            return () => { if (mapInstanceRef.current) { mapInstanceRef.current.remove(); mapInstanceRef.current = null; } };
+        } catch (err) { console.error('Erro mapa roteirizacao:', err); }
     }, [paradas, bases, baseOrigemId]);
-    return React.createElement("div", { ref: mapRef, style: { flex: 1, borderRadius: 'var(--radius) var(--radius) 0 0', border: '1px solid var(--border)', borderBottom: 'none', minHeight: 250 } });
+    return React.createElement('div', { ref: mapRef, style:{ flex:1, minHeight:280, border:'1px solid var(--border)', borderBottom:'none', borderRadius:'var(--radius) var(--radius) 0 0', background:'var(--bg-card)' } });
 }
+
 // Campo de busca de aplicador fora da página para não perder foco a cada renderização
 function AplicadorBuscaCampo({ value, onChange, result, onSelect, placeholder }) {
     return (React.createElement("div", null,
