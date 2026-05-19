@@ -9133,11 +9133,36 @@ function RotasListPage({ onOpenRoteirizacao }) {
                                         r.status === 'em_transito' && React.createElement("span", { style: { fontSize: 10, color: 'var(--success)' } }, "\uD83D\uDFE2 ao vivo")))));
                         })))))));
 }
+
+function isClinicaBaseRoteirizacao(b) {
+    const nome = String((b && b.nome) || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+    const tipo = String((b && (b.tipo || b.categoria || b.tipo_base)) || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+    return nome.includes('clinica') || nome.includes('rede credenciada') || tipo.includes('clinica') || tipo.includes('credenciada');
+}
+function ErrorBoundaryRoteirizacao(props) {
+    const [err, setErr] = React.useState(null);
+    React.useEffect(() => {
+        const onErr = (e) => setErr(e.error || e.message || 'Erro desconhecido');
+        const onRej = (e) => setErr(e.reason || 'Erro assíncrono desconhecido');
+        window.addEventListener('error', onErr);
+        window.addEventListener('unhandledrejection', onRej);
+        return () => { window.removeEventListener('error', onErr); window.removeEventListener('unhandledrejection', onRej); };
+    }, []);
+    if (err) {
+        const msg = (err && err.stack) ? err.stack : String((err && err.message) || err);
+        return React.createElement('div', { className:'card', style:{ margin:16, padding:20, borderColor:'var(--danger)', color:'var(--danger)' } },
+            React.createElement('div', { style:{fontSize:18,fontWeight:700,marginBottom:10} }, '⚠ Erro na Roteirização'),
+            React.createElement('pre', { style:{whiteSpace:'pre-wrap', fontSize:12, color:'var(--text-primary)'} }, msg));
+    }
+    try { return props.children; }
+    catch (e) { setTimeout(() => setErr(e), 0); return null; }
+}
+
 // ── Roteirização principal (3 painéis) ──
 function RotasPage() {
     const [mode, setMode] = useState('list'); // 'list' ou 'roteirizacao'
     if (mode === 'roteirizacao')
-        return React.createElement(RoteirizacaoPage, { onBack: () => setMode('list') });
+        return React.createElement(ErrorBoundaryRoteirizacao, null, React.createElement(RoteirizacaoPage, { onBack: () => setMode('list') }));
     return React.createElement(RotasListPage, { onOpenRoteirizacao: () => setMode('roteirizacao') });
 }
 // ─── Helper: atualiza status_logistica das tarefas vinculadas a uma rota ───
@@ -9205,7 +9230,7 @@ async function atualizarTarefasDaRota(rotaId, novoStatusLogistica) {
 }
 function ClinicaParadaRow({ clinica, jaAdicionada, onAdd }) {
     const [doses, setDoses] = React.useState('');
-    const nome = clinica.nome.replace(/^Clínica - /i, '').replace(/^Rede Credenciada - /i, '');
+    const nome = String(clinica.nome || 'Clínica sem nome').replace(/^Clínica - /i, '').replace(/^Rede Credenciada - /i, '');
     return React.createElement("div", { style: {
         borderBottom: '1px solid var(--border)',
         opacity: jaAdicionada ? 0.5 : 1,
@@ -9229,10 +9254,6 @@ function ClinicaParadaRow({ clinica, jaAdicionada, onAdd }) {
 }
 
 
-function isBaseClinicaParceiraRoteirizacao(base) {
-    const nome = String((base && base.nome) || '');
-    return /cl[ií]nica|rede credenciada/i.test(nome);
-}
 function RoteirizacaoPage({ onBack }) {
     var _a;
     const [bases, setBases] = useState([]);
@@ -9271,18 +9292,11 @@ function RoteirizacaoPage({ onBack }) {
     const [geocodeCache, setGeocodeCache] = useState({});
     const toast = useContext(ToastContext);
     useEffect(() => {
-        // Carrega as bases uma única vez e separa:
-        // - bases operacionais: aparecem em Base Origem
-        // - clínicas parceiras: aparecem somente na aba 🏥 Clínicas
-        sb.from('bases')
-            .select('id, nome, cidade, uf, latitude, longitude')
-            .eq('ativa', true)
-            .order('nome')
-            .then(r => {
-                const todas = r.data || [];
-                setBases(todas.filter(b => !isBaseClinicaParceiraRoteirizacao(b)));
-                setClinicasRot(todas.filter(isBaseClinicaParceiraRoteirizacao));
-            });
+        sb.from('bases').select('*').eq('ativa', true).order('nome').then(r => {
+            const rows = r.data || [];
+            setBases(rows.filter(b => !isClinicaBaseRoteirizacao(b)));
+            setClinicasRot(rows.filter(isClinicaBaseRoteirizacao));
+        });
         sb.from('veiculos').select('id, placa, modelo, capacidade_doses, motorista_padrao_id, base_id').eq('ativo', true).order('modelo').then(r => setVeiculos(r.data || []));
         sb.from('profiles').select('id, nome, base_id').eq('role', 'motorista').eq('ativo', true).order('nome').then(r => setMotoristas(r.data || []));
         loadEscalas();
@@ -9740,8 +9754,8 @@ function RoteirizacaoPage({ onBack }) {
             tipo: 'clinica',
             base_id: clinica.id,
             cpf: 'clinica_' + clinica.id, // key única
-            nome: clinica.nome.replace(/^Clínica - /i, ''),
-            nome_completo: clinica.nome,
+            nome: String(clinica.nome || 'Clínica sem nome').replace(/^Clínica - /i, ''),
+            nome_completo: String(clinica.nome || 'Clínica sem nome'),
             cidade: clinica.cidade || '',
             uf: clinica.uf || '',
             ponto_partida: clinica.cidade || clinica.nome,
@@ -9936,6 +9950,7 @@ function RoteirizacaoPage({ onBack }) {
                 React.createElement("div", { style: { display:'flex', gap:4, marginBottom:6, flexShrink:0 } },
                     React.createElement("button", { className: `btn btn-sm ${abaEsq==='aplicadores'?'btn-primary':'btn-secondary'}`, style:{flex:1,fontSize:11}, onClick: ()=>setAbaEsq('aplicadores') }, "👤 Aplicadores"),
                     React.createElement("button", { className: `btn btn-sm ${abaEsq==='clinicas'?'btn-primary':'btn-secondary'}`, style:{flex:1,fontSize:11}, onClick: ()=>setAbaEsq('clinicas') }, "🏥 Clínicas")),
+                React.createElement("div", { style:{fontSize:9,color:'var(--success)',marginBottom:4,flexShrink:0} }, "DEBUG v6 OK · bases ", bases.length, " · clínicas ", clinicasRot.length),
                 React.createElement("div", { className: "card", style: { padding: 10, marginBottom: 6, flexShrink: 0 } },
                     React.createElement("div", { style: { fontSize: 12, fontWeight: 600, marginBottom: 6 } }, "Filtros"),
                     React.createElement("input", { className: "form-input", style: { padding: '5px 8px', fontSize: 11, marginBottom: 4 }, value: searchTarefa, onChange: e => setSearchTarefa(e.target.value), placeholder: "\uD83D\uDD0D Nome, CPF, c\u00F3digo..." }),
@@ -10099,11 +10114,10 @@ function RoteirizacaoPage({ onBack }) {
                     ),
                     React.createElement("div", { style: { flex: 1, overflow: 'auto', border: '1px solid var(--border)', borderRadius: 'var(--radius)', background: 'var(--bg-card)', display: abaEsq === 'clinicas' ? 'block' : 'none' } },
                         React.createElement("div", { style: { padding: '8px 10px', borderBottom: '1px solid var(--border)' } },
-                            React.createElement("div", { style: { fontSize: 11, fontWeight: 700, marginBottom: 6, color: 'var(--text-primary)' } }, "🏥 Clínicas parceiras para entrega"),
                             React.createElement("input", { className: "form-input", style: { padding: '5px 8px', fontSize: 11, width: '100%' }, placeholder: "Buscar clínica ou cidade...", value: clinicaSearch, onChange: e => setClinicaSearch(e.target.value) })
                         ),
-                        clinicasRot.length === 0 && React.createElement("div", { style: { padding: 20, textAlign: 'center', color: 'var(--text-muted)', fontSize: 11 } }, "Nenhuma clínica parceira encontrada. As clínicas precisam estar cadastradas em Bases com nome começando por 'Clínica -' ou 'Rede Credenciada -'."),
-                        clinicasRot.filter(c => !clinicaSearch || c.nome.toLowerCase().includes(clinicaSearch.toLowerCase()) || (c.cidade||'').toLowerCase().includes(clinicaSearch.toLowerCase())).map(c => {
+                        clinicasRot.length === 0 && React.createElement("div", { style: { padding: 20, textAlign: 'center', color: 'var(--text-muted)', fontSize: 11 } }, "Nenhuma clínica parceira encontrada."),
+                        clinicasRot.filter(c => !clinicaSearch || String(c.nome||'').toLowerCase().includes(clinicaSearch.toLowerCase()) || String(c.cidade||'').toLowerCase().includes(clinicaSearch.toLowerCase())).map(c => {
                             const jaAdicionada = paradas.find(p => p.tipo === 'clinica' && p.base_id === c.id);
                             const [dosesInput, setDosesInput] = [null, null]; // placeholder
                             return React.createElement(ClinicaParadaRow, { key: c.id, clinica: c, jaAdicionada: !!jaAdicionada, onAdd: (doses) => addClinica(c, doses) });
@@ -10144,7 +10158,7 @@ function RoteirizacaoPage({ onBack }) {
                         } }, disabled: paradas.length === 0 }, "\u2715 Limpar")),
                 React.createElement("div", { style: { flex: 1, overflow: 'auto', border: '1px solid var(--border)', borderRadius: 'var(--radius)', background: 'var(--bg-card)' } },
                     React.createElement("div", { style: { padding: '6px 10px', fontSize: 10, color: 'var(--text-muted)', borderBottom: '1px solid var(--border)', fontWeight: 600 } }, "ARRASTE PARA REORDENAR"),
-                    paradas.length === 0 && React.createElement("div", { style: { padding: 24, textAlign: 'center', color: 'var(--text-muted)', fontSize: 12 } }, "Clique + nos aplicadores ou adicione uma clínica na aba 🏥 Clínicas"),
+                    paradas.length === 0 && React.createElement("div", { style: { padding: 24, textAlign: 'center', color: 'var(--text-muted)', fontSize: 12 } }, "Clique + nos aplicadores \u00E0 esquerda"),
                     paradas.map((p, idx) => (React.createElement("div", { key: p.tipo === 'clinica' ? ('cl_' + p.base_id) : p.cpf, draggable: true, onDragStart: () => onDragStart(idx), onDragOver: onDragOver, onDrop: e => onDrop(e, idx), style: { padding: '8px 10px', borderBottom: '1px solid var(--border)', cursor: 'grab', background: dragIdx === idx ? 'var(--accent-subtle)' : 'transparent' } },
                         React.createElement("div", { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' } },
                             React.createElement("div", { style: { display: 'flex', gap: 6, alignItems: 'flex-start', flex: 1 } },
