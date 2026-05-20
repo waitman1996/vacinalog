@@ -10790,6 +10790,10 @@ function AddItemRemessa({ vacinas, onAdd, dosesSugeridas }) {
 }
 // ── Etiqueta 10x15cm ──
 function EtiquetaModal({ remessa, rota, onClose, totalParadas, remessasDaRota }) {
+    remessa = remessa || {};
+    rota = rota || {};
+    totalParadas = totalParadas || 1;
+    remessasDaRota = Array.isArray(remessasDaRota) ? remessasDaRota : [];
     var _a, _b, _c, _d, _e, _f, _g, _h;
     const [montadorNome, setMontadorNome] = useState('');
     const toast = useContext(ToastContext);
@@ -10913,6 +10917,10 @@ function EtiquetaModal({ remessa, rota, onClose, totalParadas, remessasDaRota })
             + '</div>'
             + '</body></html>';
         const w = window.open('', '_blank', 'width=420,height=650');
+        if (!w) {
+            toast('Pop-up bloqueado. Permita pop-ups para imprimir a etiqueta.', 'error');
+            return;
+        }
         w.document.write(html);
         w.document.close();
         w.focus();
@@ -11028,14 +11036,30 @@ function EtiquetasPage() {
             toast('Nenhuma remessa encontrada para os filtros informados', 'info');
     };
     const abrirEtiqueta = async (r) => {
-        setRemessa(r);
-        setRota(r.rotas);
-        const { data: caixas, count } = await sb.from('remessas')
-            .select('id,codigo_rastreio,ordem_entrega,destino_tipo,destino_aplicador_id,destino_base_id,observacao,created_at', { count: 'exact' })
-            .eq('rota_id', r.rota_id)
-            .order('ordem_entrega', { ascending: true });
-        setTotalParadas(count || (caixas || []).length || 0);
-        setRemessasRota(caixas || [r]);
+        try {
+            setRemessa(r);
+            let rotaEtiqueta = r.rotas || null;
+            if (!rotaEtiqueta && r.rota_id) {
+                const { data: rotaDb } = await sb.from('rotas')
+                    .select('id,codigo,data_prevista,veiculo,base_origem_id,bases!rotas_base_origem_id_fkey(nome),profiles!rotas_motorista_id_fkey(nome)')
+                    .eq('id', r.rota_id)
+                    .maybeSingle();
+                rotaEtiqueta = rotaDb;
+            }
+            setRota(rotaEtiqueta || { codigo: '—', data_prevista: null, bases: null, profiles: null });
+            const { data: caixas, count, error: errCaixas } = await sb.from('remessas')
+                .select('id,codigo_rastreio,ordem_entrega,destino_tipo,destino_aplicador_id,destino_base_id,observacao,created_at,bases(nome,cidade,uf),aplicadores!remessas_destino_aplicador_id_fkey(nome,cpf,cidade,uf,endereco)', { count: 'exact' })
+                .eq('rota_id', r.rota_id)
+                .order('ordem_entrega', { ascending: true });
+            if (errCaixas) throw errCaixas;
+            setTotalParadas(count || (caixas || []).length || 1);
+            setRemessasRota((caixas && caixas.length) ? caixas : [r]);
+        } catch (err) {
+            console.error('Erro ao abrir etiqueta:', err);
+            toast('Erro ao abrir etiqueta: ' + (err.message || err), 'error');
+            setRemessa(null);
+            setRota(null);
+        }
     };
     const imprimirRecibo = (rem) => {
         var _a, _b, _c, _d;
@@ -11081,6 +11105,10 @@ function EtiquetasPage() {
             + '<div class="footer-info"><span>Data: ' + dataHoje + ' às ' + horaAgora + '</span><span>VacinaLog · Recibo: ' + rem.codigo_rastreio + '</span></div>'
             + '</body></html>';
         const w = window.open('', '_blank', 'width=900,height=700');
+        if (!w) {
+            toast('Pop-up bloqueado. Permita pop-ups para imprimir o recibo.', 'error');
+            return;
+        }
         w.document.write(html);
         w.document.close();
         w.focus();
