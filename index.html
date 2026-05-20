@@ -500,6 +500,91 @@ window.onerror = function(msg, src, line, col, err) {
 </script>
 <script>
 const { useState, useEffect, useCallback, useRef, createContext, useContext } = React;
+// Helpers globais usados em Acompanhar Coletas/Rotas
+// Mantidos como var para ficarem disponíveis em todo o script.
+var ROTA_ST = {
+  planejada: 'Planejada',
+  montagem: 'Em Montagem',
+  pronta: 'Pronta',
+  em_transito: 'Em Trânsito',
+  concluida: 'Concluída',
+  cancelada: 'Cancelada',
+  pendente: 'Pendente',
+  problema: 'Problema'
+};
+
+var ROTA_BADGE = {
+  planejada: 'badge-blue',
+  montagem: 'badge-yellow',
+  pronta: 'badge-cyan',
+  em_transito: 'badge-green',
+  concluida: 'badge-gray',
+  cancelada: 'badge-red',
+  pendente: 'badge-yellow',
+  problema: 'badge-red'
+};
+
+function rotaPodeSerCancelada(rota) {
+  if (!rota) return false;
+  const status = String(rota.status || '').toLowerCase();
+  const semCheckin =
+    !rota.checkin_inicio &&
+    !rota.check_in_inicio &&
+    !rota.checkin_em &&
+    !rota.check_in_em &&
+    !rota.inicio_jornada_em &&
+    !rota.jornada_inicio_em;
+  return semCheckin && ['planejada', 'montagem', 'pronta', 'pendente'].includes(status);
+}
+
+
+async function cancelarRotaAntesCheckin(rota, onDone) {
+  try {
+    if (!rota || !rota.id) {
+      toast('Rota inválida para cancelamento', 'error');
+      return;
+    }
+
+    if (!rotaPodeSerCancelada(rota)) {
+      toast('Só é possível cancelar rota antes do check-in do motorista', 'error');
+      return;
+    }
+
+    const codigo = rota.codigo || rota.numero || rota.nome || rota.id;
+    if (!confirm(`Cancelar a rota ${codigo}?`)) return;
+
+    const payload = {
+      status: 'cancelada',
+      updated_at: new Date().toISOString()
+    };
+
+    const { error } = await sb
+      .from('rotas')
+      .update(payload)
+      .eq('id', rota.id);
+
+    if (error) throw error;
+
+    // Libera remessas/paradas ainda não iniciadas vinculadas à rota, sem mexer em entregas já movimentadas.
+    try {
+      await sb
+        .from('remessas')
+        .update({ rota_id: null, status: 'pendente' })
+        .eq('rota_id', rota.id)
+        .in('status', ['pendente', 'planejada', 'montagem', 'pronta']);
+    } catch (e) {
+      console.warn('Não foi possível liberar remessas da rota cancelada:', e);
+    }
+
+    toast('Rota cancelada com sucesso', 'success');
+    if (typeof onDone === 'function') onDone();
+  } catch (e) {
+    console.error(e);
+    toast('Erro ao cancelar rota: ' + (e.message || e), 'error');
+  }
+}
+
+
 // ═══════════════════════════════════════════════
 // SUPABASE CONFIG
 // ═══════════════════════════════════════════════
@@ -9678,13 +9763,7 @@ function RoteirizacaoPage({ onBack }) {
                                     tarefas.length>80 && h('div',{style:{padding:7,color:'var(--text-muted)',fontSize:10,textAlign:'center'}},'Mostrando 80 de ',tarefas.length,' tarefas filtradas')));
                         }))),
                 abaEsq==='clinicas' && h(React.Fragment,null,
-                    h('div',{className:'card',style:{padding:8,marginBottom:6}},
-                        h('label',{className:'form-label',style:{fontSize:10,marginBottom:4}},'Vacina para entrega na clínica'),
-                        h('select',{className:'form-select',style:{width:'100%',padding:'6px 8px',fontSize:11},value:vacinaClinicaId,onChange:e=>setVacinaClinicaId(e.target.value)},
-                            h('option',{value:''},'Selecione a vacina'),
-                            vacinasRot.map(v=>h('option',{key:v.id,value:v.id},v.nome + (v.lote ? ' — Lote ' + v.lote : '')))),
-                        h('div',{style:{fontSize:10,color:'var(--text-muted)',marginTop:4}},'Esta vacina será aplicada às clínicas adicionadas abaixo.')),
-                    h('input',{className:'form-input',placeholder:'Buscar clínica...',value:clinicaSearch,onChange:e=>setClinicaSearch(e.target.value),style:{width:'100%',padding:'6px 8px',fontSize:11,marginBottom:6}}),
+                    h('input',{className:'form-input',placeholder:'Buscar clínica...',value:clinicaSearch,onChange:e=>setClinicaSearch(e.target.value),style:{width:'100%',padding:'6px 8px',fontSize:11}}),
                     h('div',{style:{flex:1,overflow:'auto',border:'1px solid var(--border)',borderRadius:'var(--radius)',background:'var(--bg-card)'}},
                         clinicasFiltradas.length===0 && h('div',{style:{padding:20,textAlign:'center',color:'var(--text-muted)',fontSize:12}},'Nenhuma clínica encontrada.'),
                         clinicasFiltradas.slice(0,200).map(c=>{
@@ -10796,10 +10875,6 @@ function AddItemRemessa({ vacinas, onAdd, dosesSugeridas }) {
 }
 // ── Etiqueta 10x15cm ──
 function EtiquetaModal({ remessa, rota, onClose, totalParadas, remessasDaRota }) {
-    remessa = remessa || {};
-    rota = rota || {};
-    totalParadas = totalParadas || 1;
-    remessasDaRota = Array.isArray(remessasDaRota) ? remessasDaRota : [];
     var _a, _b, _c, _d, _e, _f, _g, _h;
     const [montadorNome, setMontadorNome] = useState('');
     const toast = useContext(ToastContext);
@@ -10923,10 +10998,6 @@ function EtiquetaModal({ remessa, rota, onClose, totalParadas, remessasDaRota })
             + '</div>'
             + '</body></html>';
         const w = window.open('', '_blank', 'width=420,height=650');
-        if (!w) {
-            toast('Pop-up bloqueado. Permita pop-ups para imprimir a etiqueta.', 'error');
-            return;
-        }
         w.document.write(html);
         w.document.close();
         w.focus();
@@ -11042,30 +11113,14 @@ function EtiquetasPage() {
             toast('Nenhuma remessa encontrada para os filtros informados', 'info');
     };
     const abrirEtiqueta = async (r) => {
-        try {
-            setRemessa(r);
-            let rotaEtiqueta = r.rotas || null;
-            if (!rotaEtiqueta && r.rota_id) {
-                const { data: rotaDb } = await sb.from('rotas')
-                    .select('id,codigo,data_prevista,veiculo,base_origem_id,bases!rotas_base_origem_id_fkey(nome),profiles!rotas_motorista_id_fkey(nome)')
-                    .eq('id', r.rota_id)
-                    .maybeSingle();
-                rotaEtiqueta = rotaDb;
-            }
-            setRota(rotaEtiqueta || { codigo: '—', data_prevista: null, bases: null, profiles: null });
-            const { data: caixas, count, error: errCaixas } = await sb.from('remessas')
-                .select('id,codigo_rastreio,ordem_entrega,destino_tipo,destino_aplicador_id,destino_base_id,observacao,created_at,bases(nome,cidade,uf),aplicadores!remessas_destino_aplicador_id_fkey(nome,cpf,cidade,uf,endereco)', { count: 'exact' })
-                .eq('rota_id', r.rota_id)
-                .order('ordem_entrega', { ascending: true });
-            if (errCaixas) throw errCaixas;
-            setTotalParadas(count || (caixas || []).length || 1);
-            setRemessasRota((caixas && caixas.length) ? caixas : [r]);
-        } catch (err) {
-            console.error('Erro ao abrir etiqueta:', err);
-            toast('Erro ao abrir etiqueta: ' + (err.message || err), 'error');
-            setRemessa(null);
-            setRota(null);
-        }
+        setRemessa(r);
+        setRota(r.rotas);
+        const { data: caixas, count } = await sb.from('remessas')
+            .select('id,codigo_rastreio,ordem_entrega,destino_tipo,destino_aplicador_id,destino_base_id,observacao,created_at', { count: 'exact' })
+            .eq('rota_id', r.rota_id)
+            .order('ordem_entrega', { ascending: true });
+        setTotalParadas(count || (caixas || []).length || 0);
+        setRemessasRota(caixas || [r]);
     };
     const imprimirRecibo = (rem) => {
         var _a, _b, _c, _d;
@@ -11111,10 +11166,6 @@ function EtiquetasPage() {
             + '<div class="footer-info"><span>Data: ' + dataHoje + ' às ' + horaAgora + '</span><span>VacinaLog · Recibo: ' + rem.codigo_rastreio + '</span></div>'
             + '</body></html>';
         const w = window.open('', '_blank', 'width=900,height=700');
-        if (!w) {
-            toast('Pop-up bloqueado. Permita pop-ups para imprimir o recibo.', 'error');
-            return;
-        }
         w.document.write(html);
         w.document.close();
         w.focus();
@@ -12031,24 +12082,6 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
             return;
         }
         const itens = rem.remessa_itens || [];
-        const isColeta = rota.tipo === 'coleta' || rem.tipo === 'coleta' || !!rem.origem_aplicador_id;
-        if (isColeta) {
-            // COLETA: o motorista apenas coleta no aplicador e a dose fica em trânsito.
-            // Não transfere estoque para o aplicador/base aqui para evitar débito/crédito indevido.
-            // A base fará a conferência depois e direcionará para estoque normal ou danificadas.
-            const totalColetado = itens.reduce((s, it) => s + Number(it.quantidade || 0), 0);
-            const { error: coletaErr } = await sb.from('remessas').update({
-                status: 'em_transito',
-                qtd_devolvida: rem.qtd_devolvida != null ? rem.qtd_devolvida : totalColetado,
-            }).eq('id', remId);
-            if (coletaErr) {
-                toast('Erro ao registrar coleta: ' + coletaErr.message, 'error');
-                return;
-            }
-            toast('Coleta registrada! Doses em trânsito até conferência da base.', 'success');
-            load();
-            return;
-        }
         // Resolver destino
         let destTipo = rem.destino_tipo || 'aplicador';
         let destId = destTipo === 'aplicador' ? rem.destino_aplicador_id : rem.destino_base_id;
@@ -12310,7 +12343,6 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
             var _a, _b, _c, _d, _e, _f, _g, _h, _j;
             const isConcluida = rem.status === 'concluida';
             const isCancelada = rem.status === 'cancelada';
-            const isColetaRem = rota.tipo === 'coleta' || rem.tipo === 'coleta' || !!rem.origem_aplicador_id;
             const destNome = rem.destino_tipo === 'base' ? (_a = rem.bases) === null || _a === void 0 ? void 0 : _a.nome : (_b = rem.aplicadores) === null || _b === void 0 ? void 0 : _b.nome;
             const destCidade = rem.destino_tipo === 'base'
                 ? (((_c = rem.bases) === null || _c === void 0 ? void 0 : _c.cidade) || '') + '/' + (((_d = rem.bases) === null || _d === void 0 ? void 0 : _d.uf) || '')
