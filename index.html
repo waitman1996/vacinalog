@@ -9678,7 +9678,13 @@ function RoteirizacaoPage({ onBack }) {
                                     tarefas.length>80 && h('div',{style:{padding:7,color:'var(--text-muted)',fontSize:10,textAlign:'center'}},'Mostrando 80 de ',tarefas.length,' tarefas filtradas')));
                         }))),
                 abaEsq==='clinicas' && h(React.Fragment,null,
-                    h('input',{className:'form-input',placeholder:'Buscar clínica...',value:clinicaSearch,onChange:e=>setClinicaSearch(e.target.value),style:{width:'100%',padding:'6px 8px',fontSize:11}}),
+                    h('div',{className:'card',style:{padding:8,marginBottom:6}},
+                        h('label',{className:'form-label',style:{fontSize:10,marginBottom:4}},'Vacina para entrega na clínica'),
+                        h('select',{className:'form-select',style:{width:'100%',padding:'6px 8px',fontSize:11},value:vacinaClinicaId,onChange:e=>setVacinaClinicaId(e.target.value)},
+                            h('option',{value:''},'Selecione a vacina'),
+                            vacinasRot.map(v=>h('option',{key:v.id,value:v.id},v.nome + (v.lote ? ' — Lote ' + v.lote : '')))),
+                        h('div',{style:{fontSize:10,color:'var(--text-muted)',marginTop:4}},'Esta vacina será aplicada às clínicas adicionadas abaixo.')),
+                    h('input',{className:'form-input',placeholder:'Buscar clínica...',value:clinicaSearch,onChange:e=>setClinicaSearch(e.target.value),style:{width:'100%',padding:'6px 8px',fontSize:11,marginBottom:6}}),
                     h('div',{style:{flex:1,overflow:'auto',border:'1px solid var(--border)',borderRadius:'var(--radius)',background:'var(--bg-card)'}},
                         clinicasFiltradas.length===0 && h('div',{style:{padding:20,textAlign:'center',color:'var(--text-muted)',fontSize:12}},'Nenhuma clínica encontrada.'),
                         clinicasFiltradas.slice(0,200).map(c=>{
@@ -12025,6 +12031,24 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
             return;
         }
         const itens = rem.remessa_itens || [];
+        const isColeta = rota.tipo === 'coleta' || rem.tipo === 'coleta' || !!rem.origem_aplicador_id;
+        if (isColeta) {
+            // COLETA: o motorista apenas coleta no aplicador e a dose fica em trânsito.
+            // Não transfere estoque para o aplicador/base aqui para evitar débito/crédito indevido.
+            // A base fará a conferência depois e direcionará para estoque normal ou danificadas.
+            const totalColetado = itens.reduce((s, it) => s + Number(it.quantidade || 0), 0);
+            const { error: coletaErr } = await sb.from('remessas').update({
+                status: 'em_transito',
+                qtd_devolvida: rem.qtd_devolvida != null ? rem.qtd_devolvida : totalColetado,
+            }).eq('id', remId);
+            if (coletaErr) {
+                toast('Erro ao registrar coleta: ' + coletaErr.message, 'error');
+                return;
+            }
+            toast('Coleta registrada! Doses em trânsito até conferência da base.', 'success');
+            load();
+            return;
+        }
         // Resolver destino
         let destTipo = rem.destino_tipo || 'aplicador';
         let destId = destTipo === 'aplicador' ? rem.destino_aplicador_id : rem.destino_base_id;
@@ -12286,6 +12310,7 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
             var _a, _b, _c, _d, _e, _f, _g, _h, _j;
             const isConcluida = rem.status === 'concluida';
             const isCancelada = rem.status === 'cancelada';
+            const isColetaRem = rota.tipo === 'coleta' || rem.tipo === 'coleta' || !!rem.origem_aplicador_id;
             const destNome = rem.destino_tipo === 'base' ? (_a = rem.bases) === null || _a === void 0 ? void 0 : _a.nome : (_b = rem.aplicadores) === null || _b === void 0 ? void 0 : _b.nome;
             const destCidade = rem.destino_tipo === 'base'
                 ? (((_c = rem.bases) === null || _c === void 0 ? void 0 : _c.cidade) || '') + '/' + (((_d = rem.bases) === null || _d === void 0 ? void 0 : _d.uf) || '')
