@@ -2524,7 +2524,7 @@ function ImportacaoPage() {
         React.createElement("div", { className: "page-header" },
             React.createElement("div", null,
                 React.createElement("div", { className: "page-title" }, "Importa\u00E7\u00E3o de Dados"),
-                React.createElement("div", { className: "page-subtitle" }, "Importe planilhas de Consulta, Tutores, Estoque, Cl\u00EDnicas Parceiras e Vendas Diretas (VD)"))),
+                React.createElement("div", { className: "page-subtitle" }, "Importe planilhas de Consulta, Tutores, Estoque e Cl\u00EDnicas Parceiras"))),
         React.createElement("div", { className: "tabs" },
             React.createElement("button", { className: `tab ${tab === 'consulta' ? 'active' : ''}`, onClick: () => setTab('consulta') }, "\uD83D\uDCCB Consulta (Tarefas)"),
             React.createElement("button", { className: `tab ${tab === 'tutores' ? 'active' : ''}`, onClick: () => setTab('tutores') }, "\uD83D\uDC69\u200D\u2695\uFE0F Tutores (Escalas)"),
@@ -3861,7 +3861,7 @@ function ImportVD() {
             const codigos = rows.map(r => String(r['Codigo da tarefa'] || r['Código da tarefa'] || '').trim()).filter(Boolean);
             const existMap = {};
             for (let i = 0; i < codigos.length; i += 500) {
-                const { data: ex } = await sb.from('vendas_diretas').select('id, codigo').in('codigo', codigos.slice(i, i+500));
+                const { data: ex } = await sb.from('vendas_diretas').select('id, codigo').in('codigo', codigos.slice(i, i+500)).catch(() => ({data:[]}));
                 (ex || []).forEach(r => { existMap[r.codigo] = r.id; });
             }
             let inserted = 0, updated = 0, ignored = 0;
@@ -3931,7 +3931,7 @@ CREATE POLICY "allow_all_vd" ON vendas_diretas FOR ALL USING (true) WITH CHECK (
             file && React.createElement("span", { style: { fontSize: 12, color: 'var(--text-secondary)' } }, file.name)),
         preview && React.createElement("div", { style: { marginBottom: 16, padding: 12, background: 'var(--bg-input)', borderRadius: 'var(--radius-sm)', fontSize: 13 } },
             React.createElement("div", null, "Total: ", React.createElement("strong", null, preview.total), " · Válidos: ", React.createElement("strong", null, preview.valid)),
-            React.createElement("div", null, "Doses aprovadas: ", React.createElement("strong", { style: { color: 'var(--success)' } }, (preview.totalDoses || 0).toLocaleString('pt-BR')))),
+            React.createElement("div", null, "Doses: ", React.createElement("strong", { style: { color: 'var(--success)' } }, (preview.totalDoses || 0).toLocaleString('pt-BR')))),
         importing && React.createElement("div", { style: { marginBottom: 12 } },
             React.createElement("div", { className: 'progress-bar', style: { height: 8 } },
                 React.createElement("div", { className: 'progress-fill', style: { width: progress + '%' } })),
@@ -8679,28 +8679,51 @@ function ModalDetalheRota({ rota, onClose, ROTA_ST, ROTA_BADGE }) {
     const carregarTarefas = async (remessas) => {
         setLoadingTarefas(true);
         try {
-            // Extrai todos os códigos de tarefa das observações
-            const re = /[A-Z0-9]+(?:\.[A-Z0-9&]+){2,}/g;
-            const codigos = [...new Set(remessas.flatMap(r => (String(r.observacao || '').match(re) || [])))];
-            if (codigos.length === 0) {
-                setTarefasRota([]);
-                setLoadingTarefas(false);
-                return;
-            }
-            const BATCH = 100;
             const todas = [];
-            for (let i = 0; i < codigos.length; i += BATCH) {
-                const { data: ts } = await sb.from('tarefas')
-                    .select('id,codigo,cliente,cidade_campanha,uf_campanha,data_inicio,doses_previstas,doses_aplicadas,status,status_logistica,vacina,base_nome')
-                    .in('codigo', codigos.slice(i, i + BATCH));
-                todas.push(...(ts || []));
+            // Remessas VD: observacao começa com "VD:"
+            const remVD = remessas.filter(r => (r.observacao || '').startsWith('VD:'));
+            const remNormais = remessas.filter(r => !(r.observacao || '').startsWith('VD:'));
+            // Tarefas normais: extrair codigos das observacoes
+            const re = /[A-Z0-9]+(?:\.[A-Z0-9&]+){2,}/g;
+            const codigos = [...new Set(remNormais.flatMap(r => (String(r.observacao || '').match(re) || [])))];
+            if (codigos.length > 0) {
+                for (let i = 0; i < codigos.length; i += 100) {
+                    const { data: ts } = await sb.from('tarefas')
+                        .select('id,codigo,cliente,cidade_campanha,uf_campanha,data_inicio,doses_previstas,doses_aplicadas,status,status_logistica,vacina,base_nome')
+                        .in('codigo', codigos.slice(i, i + 100));
+                    todas.push(...(ts || []).map(t => ({ ...t, _tipo: 'tarefa' })));
+                }
+            }
+            // VDs: extrair uuid (vd_id) ou codigo da observacao "VD: UUID | ..."
+            if (remVD.length > 0) {
+                const vdIds = remVD.map(r => {
+                    const m = (r.observacao || '').match(/^VD:\s*([^\s|]+)/);
+                    return m ? m[1].trim() : null;
+                }).filter(Boolean);
+                const uuids = vdIds.filter(c => /^[0-9a-f-]{36}$/i.test(c));
+                const textos = vdIds.filter(c => !/^[0-9a-f-]{36}$/i.test(c));
+                const toVD = arr => arr.map(v => ({
+                    id: v.id, codigo: v.codigo, cliente: v.cliente,
+                    cidade_campanha: v.cidade, uf_campanha: v.uf,
+                    data_inicio: v.data_inicio ? String(v.data_inicio).split('T')[0] : null,
+                    doses_previstas: v.doses_aprovadas, doses_aplicadas: 0,
+                    status: v.status_original || 'Em validação',
+                    status_logistica: v.status_logistica || 'roteirizado',
+                    vacina: '—', base_nome: '—', _tipo: 'vd'
+                }));
+                if (uuids.length) {
+                    const { data } = await sb.from('vendas_diretas').select('id,codigo,cliente,cidade,uf,data_inicio,doses_aprovadas,status_original,status_logistica').in('id', uuids).catch(() => ({data:[]}));
+                    todas.push(...toVD(data || []));
+                }
+                if (textos.length) {
+                    const { data } = await sb.from('vendas_diretas').select('id,codigo,cliente,cidade,uf,data_inicio,doses_aprovadas,status_original,status_logistica').in('codigo', textos).catch(() => ({data:[]}));
+                    todas.push(...toVD(data || []));
+                }
             }
             todas.sort((a, b) => (a.data_inicio || '').localeCompare(b.data_inicio || ''));
             setTarefasRota(todas);
         }
-        catch (e) {
-            console.warn('carregarTarefas:', e.message);
-        }
+        catch (e) { console.warn('carregarTarefas:', e.message); }
         setLoadingTarefas(false);
     };
     const ST_BADGE = { planejada: 'badge-blue', montagem: 'badge-yellow', pronta: 'badge-cyan', em_transito: 'badge-green', concluida: 'badge-gray', cancelada: 'badge-red', entregue: 'badge-green' };
@@ -8735,7 +8758,14 @@ function ModalDetalheRota({ rota, onClose, ROTA_ST, ROTA_BADGE }) {
                     rotaData.remessas.length,
                     ")"),
                 rotaData.remessas.length === 0 ? (React.createElement("div", { style: { padding: 24, textAlign: 'center', color: 'var(--text-muted)', background: 'var(--bg-input)', borderRadius: 'var(--radius-sm)' } }, "Nenhuma remessa nesta rota.")) : (React.createElement("div", { style: { display: 'flex', flexDirection: 'column', gap: 8 } }, rotaData.remessas.map((rem) => {
-                    const dest = rem.destino_tipo === 'base' ? rem.bases : rem.aplicadores;
+                    // VD: destino extraido da observacao (bases=null, aplicadores=null)
+                    const isVDRem = (rem.observacao || '').startsWith('VD:');
+                    const destVDNome = isVDRem ? (() => {
+                        const parts = (rem.observacao || '').split('|');
+                        const loc = (parts[4] || '').split('/');
+                        return { nome: (parts[1] || '').trim() || 'Venda Direta', cidade: (loc[0] || '').trim(), uf: (loc[1] || '').trim(), cpf: null, endereco: null };
+                    })() : null;
+                    const dest = isVDRem ? destVDNome : (rem.destino_tipo === 'base' ? rem.bases : rem.aplicadores);
                     const doses = (rem.remessa_itens || []).reduce((s, i) => s + Number(i.quantidade || 0), 0);
                     const isConcluida = ['concluida', 'entregue'].includes(rem.status);
                     return (React.createElement("div", { key: rem.id, style: {
@@ -8747,8 +8777,10 @@ function ModalDetalheRota({ rota, onClose, ROTA_ST, ROTA_BADGE }) {
                         React.createElement("div", { style: { flex: 1, minWidth: 0 } },
                             React.createElement("div", { style: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 4 } },
                                 React.createElement("span", { style: { fontFamily: 'JetBrains Mono', fontSize: 11, color: 'var(--accent)', fontWeight: 600 } }, rem.codigo_rastreio || '—'),
-                                React.createElement("span", { className: `badge ${ST_BADGE[rem.status] || 'badge-gray'}`, style: { fontSize: 10 } }, ST_LABEL[rem.status] || rem.status)),
-                            React.createElement("div", { style: { fontWeight: 700, fontSize: 14, marginBottom: 2 } }, (dest === null || dest === void 0 ? void 0 : dest.nome) || '—'),
+                                React.createElement("span", { className: `badge ${ST_BADGE[rem.status] || 'badge-gray'}`, style: { fontSize: 10 } }, ST_LABEL[rem.status] || rem.status),
+                                isVDRem && React.createElement("span", { className: "badge badge-yellow", style: { fontSize: 10 } }, "🛒 VD")),
+                            React.createElement("div", { style: { fontWeight: 700, fontSize: 14, marginBottom: 2 } },
+                                isVDRem ? React.createElement(React.Fragment, null, "🛒 ", (dest === null || dest === void 0 ? void 0 : dest.nome) || '—') : ((dest === null || dest === void 0 ? void 0 : dest.nome) || '—')),
                             (dest === null || dest === void 0 ? void 0 : dest.cpf) && React.createElement("div", { style: { fontSize: 11, color: 'var(--text-muted)' } },
                                 "CPF: ",
                                 dest.cpf),
@@ -8853,8 +8885,10 @@ function ModalDetalheRota({ rota, onClose, ROTA_ST, ROTA_BADGE }) {
                         const LOGISTICA_LABELS = { nao_roteirizado: 'Não roteirizado', roteirizado: 'Roteirizado', montado: 'Montado', carregado: 'Carregado', em_rota: 'Em rota', concluido: 'Concluído' };
                         const LOGISTICA_BADGES = { nao_roteirizado: 'badge-gray', roteirizado: 'badge-blue', montado: 'badge-yellow', carregado: 'badge-cyan', em_rota: 'badge-green', concluido: 'badge-green' };
                         const sl = t.status_logistica || 'nao_roteirizado';
-                        return (React.createElement("tr", { key: t.id },
-                            React.createElement("td", { className: "mono", style: { fontSize: 10, color: 'var(--accent)', fontWeight: 600, maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis' } }, t.codigo),
+                        return (React.createElement("tr", { key: t.id, style: t._tipo === 'vd' ? { background: 'rgba(245,158,11,0.04)' } : {} },
+                            React.createElement("td", { className: "mono", style: { fontSize: 10, color: 'var(--accent)', fontWeight: 600, maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis' } },
+                                t._tipo === 'vd' && React.createElement("span", { className: "badge badge-yellow", style: { fontSize: 9, marginRight: 4, verticalAlign: 'middle' } }, "VD"),
+                                t.codigo),
                             React.createElement("td", { style: { maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', fontWeight: 500 } }, t.cliente),
                             React.createElement("td", { style: { fontSize: 11 } }, [t.cidade_campanha, t.uf_campanha].filter(Boolean).join('/')),
                             React.createElement("td", { style: { fontSize: 11, whiteSpace: 'nowrap' } }, t.data_inicio ? new Date(t.data_inicio + 'T12:00:00').toLocaleDateString('pt-BR') : '—'),
@@ -9753,15 +9787,18 @@ function RoteirizacaoPage({ onBack }) {
                 const isCli = p.tipo === 'clinica';
                 const isVD = p.tipo === 'vd';
                 const aplicadorId = (isCli||isVD) ? null : (p.aplicador_id || apMap[p.cpf] || null);
+                // Obs VD: começa com "VD: <uuid>" para lookup posterior na aba Tarefas
                 const obs = isCli
                     ? ((p.nome_completo || p.nome) + ' | ' + p.doses + ' doses | Vacina: ' + (p.vacina_nome || p.vacina_id || 'não informada') + ' | ' + (p.cidade || '') + '/' + (p.uf || ''))
+                    : isVD
+                    ? ('VD: ' + (p.vd_id || p.codigo || '') + ' | ' + (p.nome || '') + ' | ' + p.doses + ' doses | Vacina: ' + (p.vacina_nome || '') + ' | ' + (p.cidade || '') + '/' + (p.uf || ''))
                     : ((p.nome || '') + ' (' + (p.cpf || '') + ') | ' + p.doses + ' doses para enviar | ' + (p.tarefas || []).map(t => t._codigo || t.codigo_tarefa || (t._tarefa && t._tarefa.codigo) || '').filter(Boolean).join(', '));
                 const { data: remNova, error } = await sb.from('remessas').insert({
                     rota_id: rota.id,
                     tipo: rotaTipo === 'coleta' ? 'coleta' : 'entrega',
                     destino_tipo: (isCli||isVD) ? 'base' : (aplicadorId ? 'aplicador' : 'base'),
                     destino_aplicador_id: (isCli||isVD) ? null : aplicadorId,
-                    destino_base_id: (isCli||isVD) ? (p.base_id||null) : (aplicadorId ? null : baseOrigem),
+                    destino_base_id: isVD ? null : (isCli ? (p.base_id||null) : (aplicadorId ? null : baseOrigem)),
                     ordem_entrega: p.ordem,
                     observacao: obs,
                     codigo_rastreio: ''
@@ -9789,6 +9826,7 @@ function RoteirizacaoPage({ onBack }) {
             const tarefaIds = [...new Set(paradas.flatMap(p => (p.tarefas || []).map(t => t.tarefa_id || (t._tarefa && t._tarefa.id) || t.id).filter(Boolean)))];
             if (tarefaIds.length) await sb.from('tarefas').update({ status_logistica: 'roteirizado' }).in('id', tarefaIds);
             toast('Rota criada com ' + paradas.length + ' paradas' + (errs ? ' (' + errs + ' erros em remessas)' : ''), errs ? 'error' : 'success');
+            sb.from('vendas_diretas').select('id,codigo,grupo,cliente,doses_aprovadas,cidade,uf,endereco,status_logistica').not('status_logistica','in','(concluido,cancelado)').order('cliente').then(r=>setVendasDiretas(r.data||[])).catch(()=>{});
             onBack();
         } catch (err) {
             console.error(err);
@@ -9948,7 +9986,9 @@ function RoteirizacaoPage({ onBack }) {
                                 return h('div',{key:vd.id,style:{padding:8,borderBottom:'1px solid var(--border)',fontSize:11,opacity:ja?0.55:1}},
                                     h('div',{style:{fontFamily:'JetBrains Mono',fontSize:9,color:'var(--accent)',marginBottom:2}},vd.codigo),
                                     h('div',{style:{fontWeight:700,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}},vd.cliente||vd.grupo||'—'),
-                                    h('div',{style:{color:'var(--text-muted)',fontSize:10,marginBottom:6}},(vd.cidade||'')+' '+(vd.uf||''),' · ',(vd.doses_aprovadas||0),' doses aprovadas'),
+                                    h('div',{style:{display:'flex',gap:6,alignItems:'center',marginBottom:6,flexWrap:'wrap'}},
+                                        h('span',{style:{color:'var(--text-muted)',fontSize:10}},(vd.cidade||'')+' '+(vd.uf||''),' · ',(vd.doses_aprovadas||0),' doses aprovadas'),
+                                        vd.status_logistica==='roteirizado'&&h('span',{className:'badge badge-blue',style:{fontSize:9}},'✓ Roteirizada')),
                                     h('div',{style:{display:'flex',gap:4}},
                                         h('input',{className:'form-input',type:'number',min:'1',placeholder:'Doses',value:vdDoses[vd.id]||'',onChange:e=>setVdDoses(prev=>({...prev,[vd.id]:e.target.value})),style:{padding:'5px 6px',fontSize:11,flex:1}}),
                                         h('button',{className:'btn btn-success btn-sm',disabled:ja,onClick:()=>addVD(vd)},ja?'Adicionado':'+Add')));
