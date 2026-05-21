@@ -2524,17 +2524,19 @@ function ImportacaoPage() {
         React.createElement("div", { className: "page-header" },
             React.createElement("div", null,
                 React.createElement("div", { className: "page-title" }, "Importa\u00E7\u00E3o de Dados"),
-                React.createElement("div", { className: "page-subtitle" }, "Importe planilhas de Consulta, Tutores, Estoque e Cl\u00EDnicas Parceiras"))),
+                React.createElement("div", { className: "page-subtitle" }, "Importe planilhas de Consulta, Tutores, Estoque, Cl\u00EDnicas Parceiras e Vendas Diretas (VD)"))),
         React.createElement("div", { className: "tabs" },
             React.createElement("button", { className: `tab ${tab === 'consulta' ? 'active' : ''}`, onClick: () => setTab('consulta') }, "\uD83D\uDCCB Consulta (Tarefas)"),
             React.createElement("button", { className: `tab ${tab === 'tutores' ? 'active' : ''}`, onClick: () => setTab('tutores') }, "\uD83D\uDC69\u200D\u2695\uFE0F Tutores (Escalas)"),
             React.createElement("button", { className: `tab ${tab === 'estoque' ? 'active' : ''}`, onClick: () => setTab('estoque') }, "\uD83D\uDCE6 Estoque"),
             React.createElement("button", { className: `tab ${tab === 'clinicas' ? 'active' : ''}`, onClick: () => setTab('clinicas') }, "\uD83C\uDFE5 Cl\u00EDnicas Parceiras"),
+            React.createElement("button", { className: `tab ${tab === 'vd' ? 'active' : ''}`, onClick: () => setTab('vd') }, "\uD83D\uDED2 Tarefas VD"),
             React.createElement("button", { className: `tab ${tab === 'historico' ? 'active' : ''}`, onClick: () => setTab('historico') }, "\uD83D\uDCDC Hist\u00F3rico")),
         tab === 'consulta' && React.createElement(ImportConsulta, null),
         tab === 'tutores' && React.createElement(ImportTutores, null),
         tab === 'estoque' && React.createElement(ImportEstoque, null),
         tab === 'clinicas' && React.createElement(ImportClinicas, null),
+        tab === 'vd' && React.createElement(ImportVD, null),
         tab === 'historico' && React.createElement(ImportHistorico, null)));
 }
 function ImportConsulta() {
@@ -3808,6 +3810,139 @@ function ImportEstoque() {
                 ((_a = result.errors) === null || _a === void 0 ? void 0 : _a.length) > 0 && React.createElement("div", { style: { fontSize: 12, color: 'var(--warning)', marginTop: 8 } }, result.errors.join(' · '))),
             React.createElement("button", { className: "btn btn-primary", onClick: doImport, disabled: importing || preview.valid === 0 }, importing ? 'Importando...' : `Importar ${preview.valid} registros de estoque`))));
 }
+function ImportVD() {
+    const [file, setFile] = useState(null);
+    const [preview, setPreview] = useState(null);
+    const [importing, setImporting] = useState(false);
+    const [progress, setProgress] = useState(0);
+    const [result, setResult] = useState(null);
+    const toast = useContext(ToastContext);
+    const fileRef = useRef();
+    const handleFile = (f) => {
+        setFile(f); setResult(null);
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            const text = e.target.result;
+            const lines = text.split(/\r?\n/).filter(l => l.trim());
+            if (!lines.length) { setPreview(null); return; }
+            const sep = lines[0].includes(';') ? ';' : ',';
+            const headers = lines[0].split(sep).map(h => h.replace(/^[\s"]+|[\s"]+$/g, ''));
+            const rows = [];
+            for (let i = 1; i < lines.length; i++) {
+                if (!lines[i].trim()) continue;
+                const vals = lines[i].split(sep).map(v => v.replace(/^[\s"]+|[\s"]+$/g, ''));
+                const row = {};
+                headers.forEach((h, idx) => { row[h] = vals[idx] !== undefined ? vals[idx] : ''; });
+                const cod = row['Codigo da tarefa'] || row['Código da tarefa'] || '';
+                if (cod) rows.push(row);
+            }
+            const valid = rows.filter(r => {
+                const st = String(r['Status'] || '').trim();
+                return !st || ['Em validação','Em validacao','Aprovada','Em execução','Em execucao','Ativo'].includes(st);
+            });
+            const totalDoses = valid.reduce((s, r) => s + (parseInt(r['Qtd. Aprovadas'] || r['Qtd Aprovadas'] || 0) || 0), 0);
+            setPreview({ total: rows.length, valid: valid.length, totalDoses, data: valid });
+        };
+        reader.readAsText(f, 'utf-8');
+    };
+    const parseVdDate = (str) => {
+        if (!str) return null;
+        const m = str.match(/(\d{2})\/(\d{2})\/(\d{4}),?\s*(\d{2}:\d{2}:\d{2})?/);
+        if (m) return m[3] + '-' + m[2] + '-' + m[1] + (m[4] ? 'T' + m[4] : '');
+        return null;
+    };
+    const doImport = async () => {
+        if (!preview || preview.valid === 0) return;
+        setImporting(true); setProgress(0);
+        try {
+            const { data: { user } } = await sb.auth.getUser();
+            const userId = user && user.id ? user.id : null;
+            const rows = preview.data;
+            const codigos = rows.map(r => String(r['Codigo da tarefa'] || r['Código da tarefa'] || '').trim()).filter(Boolean);
+            const existMap = {};
+            for (let i = 0; i < codigos.length; i += 500) {
+                const { data: ex } = await sb.from('vendas_diretas').select('id, codigo').in('codigo', codigos.slice(i, i+500));
+                (ex || []).forEach(r => { existMap[r.codigo] = r.id; });
+            }
+            let inserted = 0, updated = 0, ignored = 0;
+            for (let i = 0; i < rows.length; i += 200) {
+                const batch = rows.slice(i, i + 200);
+                const upserts = batch.map(r => {
+                    const codigo = String(r['Codigo da tarefa'] || r['Código da tarefa'] || '').trim();
+                    if (!codigo) { ignored++; return null; }
+                    const rua = String(r['Rua'] || '').trim();
+                    const numero = String(r['Numero'] || r['Número'] || '').trim();
+                    const bairro = String(r['Bairro'] || '').trim();
+                    const obj = {
+                        codigo,
+                        grupo: String(r['Grupo'] || '').trim(),
+                        cliente: String(r['Cliente'] || '').trim(),
+                        doses_aprovadas: parseInt(r['Qtd. Aprovadas'] || r['Qtd Aprovadas'] || 0) || 0,
+                        cidade: String(r['Cidade'] || '').trim(),
+                        uf: String(r['UF'] || '').trim(),
+                        rua, numero, bairro,
+                        endereco: [rua, numero, bairro].filter(Boolean).join(', '),
+                        cep: String(r['CEP'] || '').trim(),
+                        cnpj: String(r['CNPJ'] || '').trim(),
+                        telefone: String(r['Telefone'] || '').trim(),
+                        data_inicio: parseVdDate(r['Data Início'] || r['Data Inicio'] || r['Data início'] || ''),
+                        data_fim: parseVdDate(r['Data Término'] || r['Data Termino'] || r['Data término'] || ''),
+                        status_original: String(r['Status'] || '').trim(),
+                        importado_por: userId,
+                    };
+                    if (!existMap[codigo]) obj.status_logistica = 'nao_roteirizado';
+                    return obj;
+                }).filter(Boolean);
+                if (upserts.length) {
+                    const { error: uErr } = await sb.from('vendas_diretas').upsert(upserts, { onConflict: 'codigo', ignoreDuplicates: false });
+                    if (uErr) { toast('Erro: ' + uErr.message, 'error'); ignored += upserts.length; }
+                    else { upserts.forEach(u => { if (existMap[u.codigo]) updated++; else inserted++; }); }
+                }
+                setProgress(Math.round(((i + batch.length) / rows.length) * 100));
+            }
+            setResult({ inserted, updated, ignored });
+            toast('VD importado! ' + inserted + ' novas + ' + updated + ' atualizadas.', 'success');
+        } catch(err) { toast('Erro: ' + err.message, 'error'); } finally { setImporting(false); }
+    };
+    const sqlTabela = `CREATE TABLE IF NOT EXISTS vendas_diretas (
+  id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
+  codigo text UNIQUE NOT NULL,
+  grupo text, cliente text, doses_aprovadas integer DEFAULT 0,
+  cidade text, uf text, rua text, numero text, bairro text,
+  cep text, cnpj text, telefone text, endereco text,
+  data_inicio timestamptz, data_fim timestamptz,
+  status_original text, status_logistica text DEFAULT 'nao_roteirizado',
+  vacina_id uuid REFERENCES vacinas(id),
+  importado_por uuid REFERENCES auth.users(id),
+  created_at timestamptz DEFAULT now(), updated_at timestamptz DEFAULT now()
+);
+ALTER TABLE vendas_diretas ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "allow_all_vd" ON vendas_diretas FOR ALL USING (true) WITH CHECK (true);`;
+    return React.createElement("div", { className: "card" },
+        React.createElement("div", { className: "card-title", style: { marginBottom: 16 } }, "Importar Tarefas VD (Venda Direta)"),
+        React.createElement("p", { style: { fontSize: 13, color: 'var(--text-secondary)', marginBottom: 12 } },
+            "Importar CSV do sistema VD. Colunas: Codigo da tarefa, Grupo, Cliente, Qtd. Aprovadas, Cidade, UF, Status, Rua, Numero, Bairro, Data Inicio, Data Termino, CEP, CNPJ, Telefone."),
+        React.createElement("details", { style: { marginBottom: 16 } },
+            React.createElement("summary", { style: { fontSize: 12, cursor: 'pointer', color: 'var(--accent)' } }, "Ver SQL para criar tabela no Supabase"),
+            React.createElement("pre", { style: { fontSize: 11, background: 'var(--bg-input)', padding: 10, borderRadius: 6, overflow: 'auto', marginTop: 8, whiteSpace: 'pre-wrap' } }, sqlTabela)),
+        React.createElement("div", { style: { display: 'flex', gap: 12, alignItems: 'center', marginBottom: 16 } },
+            React.createElement("input", { type: 'file', accept: '.csv', ref: fileRef, style: { display: 'none' }, onChange: e => e.target.files[0] && handleFile(e.target.files[0]) }),
+            React.createElement("button", { className: 'btn btn-secondary', onClick: () => fileRef.current && fileRef.current.click() }, "Selecionar CSV"),
+            file && React.createElement("span", { style: { fontSize: 12, color: 'var(--text-secondary)' } }, file.name)),
+        preview && React.createElement("div", { style: { marginBottom: 16, padding: 12, background: 'var(--bg-input)', borderRadius: 'var(--radius-sm)', fontSize: 13 } },
+            React.createElement("div", null, "Total: ", React.createElement("strong", null, preview.total), " · Válidos: ", React.createElement("strong", null, preview.valid)),
+            React.createElement("div", null, "Doses aprovadas: ", React.createElement("strong", { style: { color: 'var(--success)' } }, (preview.totalDoses || 0).toLocaleString('pt-BR')))),
+        importing && React.createElement("div", { style: { marginBottom: 12 } },
+            React.createElement("div", { className: 'progress-bar', style: { height: 8 } },
+                React.createElement("div", { className: 'progress-fill', style: { width: progress + '%' } })),
+            React.createElement("div", { style: { fontSize: 11, textAlign: 'center', marginTop: 4, color: 'var(--text-muted)' } }, "Importando... " + progress + "%")),
+        result && React.createElement("div", { style: { marginBottom: 12, padding: 12, background: 'var(--success-bg)', border: '1px solid rgba(16,185,129,0.3)', borderRadius: 'var(--radius-sm)', fontSize: 13 } },
+            React.createElement("strong", { style: { color: 'var(--success)' } }, "Concluido! "),
+            result.inserted + " novas · " + result.updated + " atualizadas · " + result.ignored + " ignoradas"),
+        React.createElement("button", { className: 'btn btn-primary', onClick: doImport, disabled: importing || !preview || preview.valid === 0 },
+            importing ? 'Importando...' : 'Importar ' + (preview ? preview.valid : 0) + ' tarefas VD'));
+}
+
 function ImportHistorico() {
     const [items, setItems] = useState([]);
     const toast = useContext(ToastContext);
@@ -8612,8 +8747,7 @@ function ModalDetalheRota({ rota, onClose, ROTA_ST, ROTA_BADGE }) {
                         React.createElement("div", { style: { flex: 1, minWidth: 0 } },
                             React.createElement("div", { style: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 4 } },
                                 React.createElement("span", { style: { fontFamily: 'JetBrains Mono', fontSize: 11, color: 'var(--accent)', fontWeight: 600 } }, rem.codigo_rastreio || '—'),
-                                React.createElement("span", { className: `badge ${ST_BADGE[rem.status] || 'badge-gray'}`, style: { fontSize: 10 } }, ST_LABEL[rem.status] || rem.status),
-                                (rem.observacao || '').includes('[TRANSFERENCIA_PENDENTE]') && React.createElement("span", { className: "badge badge-yellow", style: { fontSize: 10 }, title: "Transferencia de estoque pendente - requer ajuste manual na base" }, "Estoque pendente")),
+                                React.createElement("span", { className: `badge ${ST_BADGE[rem.status] || 'badge-gray'}`, style: { fontSize: 10 } }, ST_LABEL[rem.status] || rem.status)),
                             React.createElement("div", { style: { fontWeight: 700, fontSize: 14, marginBottom: 2 } }, (dest === null || dest === void 0 ? void 0 : dest.nome) || '—'),
                             (dest === null || dest === void 0 ? void 0 : dest.cpf) && React.createElement("div", { style: { fontSize: 11, color: 'var(--text-muted)' } },
                                 "CPF: ",
@@ -9352,6 +9486,10 @@ function RoteirizacaoPage({ onBack }) {
     const [bases, setBases] = useState([]);
     const [basesTodas, setBasesTodas] = useState([]);
     const [clinicasRot, setClinicasRot] = useState([]);
+    const [vendasDiretas, setVendasDiretas] = useState([]);
+    const [vdSearch, setVdSearch] = useState('');
+    const [vdDoses, setVdDoses] = useState({});
+    const [vacinaVdId, setVacinaVdId] = useState('');
     const [vacinasRot, setVacinasRot] = useState([]);
     const [vacinaClinicaId, setVacinaClinicaId] = useState('');
     const [veiculos, setVeiculos] = useState([]);
@@ -9432,6 +9570,7 @@ function RoteirizacaoPage({ onBack }) {
                 setBasesTodas(todasBases);
                 setBases(todasBases.filter(b => !isClinicaLocal(b)));
                 setClinicasRot(todasBases.filter(b => isClinicaLocal(b)));
+                sb.from('vendas_diretas').select('id,codigo,grupo,cliente,doses_aprovadas,cidade,uf,endereco,status_logistica').not('status_logistica','in','(concluido,cancelado)').order('cliente').then(r=>setVendasDiretas(r.data||[])).catch(()=>{});
                 setVeiculos(rv.data || []);
                 setMotoristas(rm.data || []);
                 setVacinasRot(rva.data || []);
@@ -9576,6 +9715,15 @@ function RoteirizacaoPage({ onBack }) {
         setClinicaDoses(prev => ({...prev, [c.id]: ''}));
         toast((c.nome || 'Clínica') + ' adicionada ✓ (' + doses + ' doses)', 'success');
     };
+    const addVD = (vd) => {
+        const doses = Math.floor(num(vdDoses[vd.id]));
+        if (!vacinaVdId) { toast('Selecione a vacina para a Venda Direta', 'error'); return; }
+        if (!doses || doses <= 0) { toast('Informe a quantidade de doses', 'error'); return; }
+        const vacinaSel = vacinasRot.find(v => String(v.id) === String(vacinaVdId));
+        setParadas(prev => prev.concat({ tipo:'vd', vd_id:vd.id, codigo:vd.codigo, nome:vd.cliente||vd.grupo||'Venda Direta', cidade:vd.cidade||'', uf:vd.uf||'', endereco:vd.endereco||'', vacina_id:vacinaVdId, vacina_nome:vacinaSel?vacinaSel.nome:'', doses, doses_originais:doses, tarefas:[], tarefas_count:0, ordem:prev.length+1 }));
+        setVdDoses(prev => ({...prev,[vd.id]:''}));
+        toast((vd.cliente||'VD')+' adicionada ('+doses+' doses)', 'success');
+    };
     const removeParada = (idx) => setParadas(prev => prev.filter((_,i) => i !== idx).map((p,i) => ({...p, ordem:i+1})));
     const otimizarRota = () => setParadas(prev => prev.slice().sort((a,b) => String(a.cidade || '').localeCompare(String(b.cidade || ''))).map((p,i) => ({...p, ordem:i+1})));
 
@@ -9603,23 +9751,25 @@ function RoteirizacaoPage({ onBack }) {
             let errs = 0;
             for (const p of paradas) {
                 const isCli = p.tipo === 'clinica';
-                const aplicadorId = isCli ? null : (p.aplicador_id || apMap[p.cpf] || null);
+                const isVD = p.tipo === 'vd';
+                const aplicadorId = (isCli||isVD) ? null : (p.aplicador_id || apMap[p.cpf] || null);
                 const obs = isCli
                     ? ((p.nome_completo || p.nome) + ' | ' + p.doses + ' doses | Vacina: ' + (p.vacina_nome || p.vacina_id || 'não informada') + ' | ' + (p.cidade || '') + '/' + (p.uf || ''))
                     : ((p.nome || '') + ' (' + (p.cpf || '') + ') | ' + p.doses + ' doses para enviar | ' + (p.tarefas || []).map(t => t._codigo || t.codigo_tarefa || (t._tarefa && t._tarefa.codigo) || '').filter(Boolean).join(', '));
                 const { data: remNova, error } = await sb.from('remessas').insert({
                     rota_id: rota.id,
                     tipo: rotaTipo === 'coleta' ? 'coleta' : 'entrega',
-                    destino_tipo: isCli ? 'base' : (aplicadorId ? 'aplicador' : 'base'),
-                    destino_aplicador_id: isCli ? null : aplicadorId,
-                    destino_base_id: isCli ? p.base_id : (aplicadorId ? null : baseOrigem),
+                    destino_tipo: (isCli||isVD) ? 'base' : (aplicadorId ? 'aplicador' : 'base'),
+                    destino_aplicador_id: (isCli||isVD) ? null : aplicadorId,
+                    destino_base_id: (isCli||isVD) ? (p.base_id||null) : (aplicadorId ? null : baseOrigem),
                     ordem_entrega: p.ordem,
                     observacao: obs,
                     codigo_rastreio: ''
                 }).select().single();
                 if (error) { console.error('Erro ao criar remessa:', error); errs++; continue; }
                 const itensMap = {};
-                if (isCli) {
+                if (isVD && p.vd_id) { await sb.from('vendas_diretas').update({status_logistica:'roteirizado'}).eq('id',p.vd_id).catch(()=>{}); }
+                if (isCli || isVD) {
                     if (p.vacina_id && Number(p.doses || 0) > 0) itensMap[String(p.vacina_id)] = Number(p.doses || 0);
                 } else {
                     (p.tarefas || []).forEach(t => {
@@ -9667,7 +9817,7 @@ function RoteirizacaoPage({ onBack }) {
                 h('button', {className:'btn btn-secondary btn-sm', onClick:onBack}, '← Voltar'),
                 h('strong', null, 'Roteirização'),
                 loading && h('span', {style:{fontSize:11,color:'var(--text-muted)'}}, 'Carregando...'),
-                !loading && h('span', {style:{fontSize:11,color:'var(--text-muted)'}}, tutores.length + ' aplicadores · ' + clinicasRot.length + ' clínicas')),
+                !loading && h('span', {style:{fontSize:11,color:'var(--text-muted)'}}, tutores.length + ' aplicadores · ' + clinicasRot.length + ' clínicas · ' + vendasDiretas.length + ' VDs')),
             h('div', {style:{display:'flex',gap:6}},
                 h('button', {className:'btn btn-secondary btn-sm', onClick:()=>{}}, '◀ Ocultar filtros'),
                 h('button', {className:'btn btn-secondary btn-sm', onClick:()=>{}}, 'Ocultar rota ▶'),
@@ -9701,7 +9851,8 @@ function RoteirizacaoPage({ onBack }) {
                         )),
                 h('div',{style:{display:'flex',gap:4}},
                     h('button',{className:abaEsq==='aplicadores'?'btn btn-primary btn-sm':'btn btn-secondary btn-sm',style:{flex:1},onClick:()=>setAbaEsq('aplicadores')},'👤 Aplicadores'),
-                    h('button',{className:abaEsq==='clinicas'?'btn btn-primary btn-sm':'btn btn-secondary btn-sm',style:{flex:1},onClick:()=>setAbaEsq('clinicas')},'🏥 Clínicas')),
+                    h('button',{className:abaEsq==='clinicas'?'btn btn-primary btn-sm':'btn btn-secondary btn-sm',style:{flex:1},onClick:()=>setAbaEsq('clinicas')},'🏥 Clín.'),
+                    h('button',{className:abaEsq==='vd'?'btn btn-primary btn-sm':'btn btn-secondary btn-sm',style:{flex:1},onClick:()=>setAbaEsq('vd')},'🛒 Venda')),
                 abaEsq==='aplicadores' && h(React.Fragment,null,
                     h('div',{className:'card',style:{padding:10}},
                         h('div',{style:{fontSize:12,fontWeight:700,marginBottom:8}},'Filtros'),
@@ -9781,7 +9932,27 @@ function RoteirizacaoPage({ onBack }) {
                                 h('div',{style:{display:'flex',gap:4}},
                                     h('input',{className:'form-input',type:'number',min:'1',placeholder:'Doses',value:clinicaDoses[c.id]||'',onChange:e=>setClinicaDoses(prev=>({...prev,[c.id]:e.target.value})),style:{padding:'5px 6px',fontSize:11,flex:1}}),
                                     h('button',{className:'btn btn-success btn-sm',disabled:ja,onClick:()=>addClinica(c)},ja?'Adic.':'+Add')));
-                        })))
+                        }))),
+                abaEsq==='vd' && h(React.Fragment,null,
+                    h('div',{style:{padding:'6px 0',marginBottom:4}},
+                        h('label',{style:{fontSize:11,color:'var(--text-muted)',display:'block',marginBottom:3}},'Vacina para Venda Direta'),
+                        h('select',{className:'form-select',style:{padding:'5px 6px',fontSize:11,width:'100%'},value:vacinaVdId,onChange:e=>setVacinaVdId(e.target.value)},
+                            h('option',{value:''},'Selecione a vacina'),
+                            vacinasRot.map(v=>h('option',{key:v.id,value:v.id},v.nome)))),
+                    h('input',{className:'form-input',placeholder:'Buscar VD...',value:vdSearch,onChange:e=>setVdSearch(e.target.value),style:{width:'100%',padding:'6px 8px',fontSize:11,marginBottom:4}}),
+                    vendasDiretas.length===0
+                        ? h('div',{style:{padding:20,textAlign:'center',color:'var(--text-muted)',fontSize:12}},'Nenhuma VD importada. Use Importacao > Tarefas VD.')
+                        : h('div',{style:{flex:1,overflow:'auto',border:'1px solid var(--border)',borderRadius:'var(--radius)',background:'var(--bg-card)'}},
+                            vendasDiretas.filter(vd=>{const q=(vdSearch||'').toLowerCase().trim();if(!q)return true;return(vd.cliente||'').toLowerCase().includes(q)||(vd.cidade||'').toLowerCase().includes(q)||(vd.codigo||'').toLowerCase().includes(q);}).slice(0,200).map(vd=>{
+                                const ja=paradas.some(p=>p.tipo==='vd'&&String(p.vd_id)===String(vd.id));
+                                return h('div',{key:vd.id,style:{padding:8,borderBottom:'1px solid var(--border)',fontSize:11,opacity:ja?0.55:1}},
+                                    h('div',{style:{fontFamily:'JetBrains Mono',fontSize:9,color:'var(--accent)',marginBottom:2}},vd.codigo),
+                                    h('div',{style:{fontWeight:700,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}},vd.cliente||vd.grupo||'—'),
+                                    h('div',{style:{color:'var(--text-muted)',fontSize:10,marginBottom:6}},(vd.cidade||'')+' '+(vd.uf||''),' · ',(vd.doses_aprovadas||0),' doses aprovadas'),
+                                    h('div',{style:{display:'flex',gap:4}},
+                                        h('input',{className:'form-input',type:'number',min:'1',placeholder:'Doses',value:vdDoses[vd.id]||'',onChange:e=>setVdDoses(prev=>({...prev,[vd.id]:e.target.value})),style:{padding:'5px 6px',fontSize:11,flex:1}}),
+                                        h('button',{className:'btn btn-success btn-sm',disabled:ja,onClick:()=>addVD(vd)},ja?'Adicionado':'+Add')));
+                            })))
             ),
             h('div',{style:{flex:1,display:'flex',flexDirection:'column',minWidth:0,minHeight:0}},
                 h(MapaRota,{key:mapKey,paradas:paradas,bases:basesTodas.length?basesTodas:bases,baseOrigemId:baseOrigem}),
@@ -9799,7 +9970,7 @@ function RoteirizacaoPage({ onBack }) {
                             h('div',{style:{minWidth:0}},
                                 h('div',{style:{fontWeight:700,color:'var(--text-primary)',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}},idx+1,'. ',p.nome),
                                 h('div',{style:{fontSize:11,color:'var(--text-muted)',display:'flex',alignItems:'center',gap:5,flexWrap:'wrap'}},
-                                    h('span',null,p.tipo==='clinica'?'🏥 Clínica':'👤 Aplicador',' ·'),
+                                    h('span',null,p.tipo==='clinica'?'🏥 Clínica':p.tipo==='vd'?'🛒 VD':'👤 Aplicador',' ·'),
                                     h('input',{
                                         className:'form-input',
                                         type:'number',
@@ -11383,129 +11554,91 @@ async function transferirEstoqueDireto({ vacina_id, quantidade, origem_base_id, 
     try {
         quantidade = Number(quantidade || 0);
         if (!vacina_id || !origem_base_id || !destino_aplicador_id || quantidade <= 0) {
-            console.error('Dados invalidos para transferencia', { vacina_id, quantidade, origem_base_id, destino_aplicador_id });
+            console.error('Dados inválidos para transferência', { vacina_id, quantidade, origem_base_id, destino_aplicador_id });
             return false;
         }
+        // Transferência atômica no Supabase:
+        // debita a base por PRODUTO consolidado, credita o aplicador e grava o extrato.
+        // Se qualquer etapa falhar, nada é concluído parcialmente.
         const { data: { user } } = await sb.auth.getUser();
-        const userId = (user && user.id) ? user.id : null;
-        // Tentativa 1: RPC atomico pelo vacina_id exato
-        const { error: rpcErr } = await sb.rpc('transferir_estoque_produto', {
-            p_vacina_id: vacina_id, p_quantidade: quantidade,
-            p_origem_base_id: origem_base_id, p_destino_aplicador_id: destino_aplicador_id,
-            p_remessa_id: remessa_id, p_observacao: observacao, p_criado_por: userId
+        const { error } = await sb.rpc('transferir_estoque_produto', {
+            p_vacina_id: vacina_id,
+            p_quantidade: quantidade,
+            p_origem_base_id: origem_base_id,
+            p_destino_aplicador_id: destino_aplicador_id,
+            p_remessa_id: remessa_id,
+            p_observacao: observacao,
+            p_criado_por: (user === null || user === void 0 ? void 0 : user.id) || null
         });
-        if (!rpcErr) return true;
-        // Tentativa 2: fallback manual por produto_nome
-        // Ocorre quando o estoque da base foi cadastrado com vacina_id de produto generico
-        // (ex: "Influenza" em vez de "Influenza Trivalente").
-        console.warn('[VacinaLog] RPC falhou, tentando fallback por produto_nome:', rpcErr.message);
-        const { data: vacinaRef } = await sb.from('vacinas').select('nome, produto_nome').eq('id', vacina_id).single();
-        const produtoRef = (vacinaRef && (vacinaRef.produto_nome || vacinaRef.nome) || '').trim();
-        if (!produtoRef) throw rpcErr;
-        const { data: estoqueBase, error: estErr } = await sb.from('estoque')
-            .select('id, quantidade, vacina_id, vacinas(nome, produto_nome)')
-            .eq('base_id', origem_base_id).eq('localizacao_tipo', 'base').gt('quantidade', 0)
-            .order('created_at', { ascending: true });
-        if (estErr) throw estErr;
-        const candidatos = (estoqueBase || []).filter(e => {
-            const pNome = (e.vacinas && (e.vacinas.produto_nome || e.vacinas.nome) || '').trim();
-            return pNome.toLowerCase() === produtoRef.toLowerCase() || String(e.vacina_id) === String(vacina_id);
-        });
-        const saldoDisponivel = candidatos.reduce((s, r) => s + Number(r.quantidade || 0), 0);
-        if (saldoDisponivel < quantidade)
-            throw new Error('Saldo insuficiente para ' + produtoRef + '. Disponivel: ' + saldoDisponivel + ', necessario: ' + quantidade);
-        let restante = quantidade, vacinaIdUsado = vacina_id;
-        for (const row of candidatos) {
-            if (restante <= 0) break;
-            const atual = Number(row.quantidade || 0);
-            const debitar = Math.min(atual, restante);
-            const { error: upErr } = await sb.from('estoque').update({ quantidade: atual - debitar }).eq('id', row.id);
-            if (upErr) throw upErr;
-            vacinaIdUsado = row.vacina_id;
-            restante -= debitar;
-        }
-        const { data: estAplic, error: apErr } = await sb.from('estoque')
-            .select('id, quantidade').eq('vacina_id', vacinaIdUsado)
-            .eq('aplicador_id', destino_aplicador_id).eq('localizacao_tipo', 'aplicador').limit(1);
-        if (apErr) throw apErr;
-        if (estAplic && estAplic[0]) {
-            const { error: updApErr } = await sb.from('estoque').update({ quantidade: Number(estAplic[0].quantidade || 0) + quantidade }).eq('id', estAplic[0].id);
-            if (updApErr) throw updApErr;
-        } else {
-            const { error: insApErr } = await sb.from('estoque').insert({ vacina_id: vacinaIdUsado, aplicador_id: destino_aplicador_id, localizacao_tipo: 'aplicador', quantidade });
-            if (insApErr) throw insApErr;
-        }
-        const { error: movErr } = await sb.from('movimentacoes').insert({ tipo: 'transferencia', vacina_id: vacinaIdUsado, quantidade, origem_tipo: 'base', origem_base_id, destino_tipo: 'aplicador', destino_aplicador_id, remessa_id, observacao, criado_por: userId });
-        if (movErr) throw movErr;
-        console.log('[VacinaLog] Fallback por produto_nome OK para', produtoRef);
+        if (error)
+            throw error;
         return true;
     }
     catch (err) {
-        console.error('transferirEstoqueDireto error:', err.message || err);
+        console.error('transferirEstoqueDireto error:', err);
         return false;
     }
 }
 
 
-// Transferencia direta entre bases/clinicas, com fallback por produto_nome.
+// Transferência direta entre bases/clínicas, debitando corretamente a base origem e creditando a base destino.
 async function transferirEstoqueBaseDireto({ vacina_id, quantidade, origem_base_id, destino_base_id, remessa_id, observacao }) {
     try {
         quantidade = Number(quantidade || 0);
         if (!vacina_id || !origem_base_id || !destino_base_id || quantidade <= 0) {
-            console.error('Dados invalidos para transferencia base->base', { vacina_id, quantidade, origem_base_id, destino_base_id });
+            console.error('Dados inválidos para transferência base→base', { vacina_id, quantidade, origem_base_id, destino_base_id });
             return false;
         }
         if (String(origem_base_id) === String(destino_base_id)) {
-            console.error('Origem e destino sao a mesma base; transferencia cancelada');
+            console.error('Origem e destino são a mesma base; transferência cancelada', { origem_base_id, destino_base_id });
             return false;
         }
         const { data: { user } } = await sb.auth.getUser();
-        const userId = (user && user.id) ? user.id : null;
-        const { data: vacinaRef } = await sb.from('vacinas').select('nome, produto_nome').eq('id', vacina_id).single();
-        const produtoRef = (vacinaRef && (vacinaRef.produto_nome || vacinaRef.nome) || '').trim();
+        let restante = quantidade;
         const { data: origens, error: origErr } = await sb.from('estoque')
-            .select('id, quantidade, vacina_id, vacinas(nome, produto_nome)')
-            .eq('base_id', origem_base_id).eq('localizacao_tipo', 'base')
+            .select('id,quantidade')
+            .eq('vacina_id', vacina_id)
+            .eq('base_id', origem_base_id)
+            .eq('localizacao_tipo', 'base')
             .order('created_at', { ascending: true });
         if (origErr) throw origErr;
-        let candidatos = (origens || []).filter(e => String(e.vacina_id) === String(vacina_id));
-        if (candidatos.length === 0 && produtoRef) {
-            candidatos = (origens || []).filter(e => {
-                const pNome = (e.vacinas && (e.vacinas.produto_nome || e.vacinas.nome) || '').trim();
-                return pNome.toLowerCase() === produtoRef.toLowerCase();
-            });
-            if (candidatos.length > 0)
-                console.warn('[VacinaLog] base->base fallback produto_nome "' + produtoRef + '" para vacina_id ' + vacina_id);
+        const saldoOrigem = (origens || []).reduce((s, r) => s + Number(r.quantidade || 0), 0);
+        if (saldoOrigem < quantidade) {
+            throw new Error('Saldo insuficiente na base de origem. Disponível: ' + saldoOrigem + ', necessário: ' + quantidade);
         }
-        const saldoOrigem = candidatos.reduce((s, r) => s + Number(r.quantidade || 0), 0);
-        if (saldoOrigem < quantidade)
-            throw new Error('Saldo insuficiente na base de origem. Disponivel: ' + saldoOrigem + ', necessario: ' + quantidade);
-        let restante = quantidade, vacinaIdUsado = vacina_id;
-        for (const row of candidatos) {
+        for (const row of (origens || [])) {
             if (restante <= 0) break;
             const atual = Number(row.quantidade || 0);
             const debitar = Math.min(atual, restante);
             const { error: upErr } = await sb.from('estoque').update({ quantidade: atual - debitar }).eq('id', row.id);
             if (upErr) throw upErr;
-            vacinaIdUsado = row.vacina_id;
             restante -= debitar;
         }
         const { data: dests, error: destErr } = await sb.from('estoque')
-            .select('id,quantidade').eq('vacina_id', vacinaIdUsado)
-            .eq('base_id', destino_base_id).eq('localizacao_tipo', 'base').limit(1);
+            .select('id,quantidade')
+            .eq('vacina_id', vacina_id)
+            .eq('base_id', destino_base_id)
+            .eq('localizacao_tipo', 'base')
+            .limit(1);
         if (destErr) throw destErr;
         if (dests && dests[0]) {
             const { error: updDestErr } = await sb.from('estoque').update({ quantidade: Number(dests[0].quantidade || 0) + quantidade }).eq('id', dests[0].id);
             if (updDestErr) throw updDestErr;
         } else {
-            const { error: insDestErr } = await sb.from('estoque').insert({ vacina_id: vacinaIdUsado, base_id: destino_base_id, localizacao_tipo: 'base', quantidade });
+            const { error: insDestErr } = await sb.from('estoque').insert({ vacina_id, base_id: destino_base_id, localizacao_tipo: 'base', quantidade });
             if (insDestErr) throw insDestErr;
         }
-        const { error: movErr } = await sb.from('movimentacoes').insert({ tipo: 'transferencia', vacina_id: vacinaIdUsado, quantidade, origem_tipo: 'base', origem_base_id, destino_tipo: 'base', destino_base_id, remessa_id, observacao, criado_por: userId });
+        const { error: movErr } = await sb.from('movimentacoes').insert({
+            tipo: 'transferencia', vacina_id, quantidade,
+            origem_tipo: 'base', origem_base_id,
+            destino_tipo: 'base', destino_base_id,
+            remessa_id, observacao,
+            criado_por: (user && user.id) ? user.id : null
+        });
         if (movErr) throw movErr;
         return true;
     } catch (err) {
-        console.error('transferirEstoqueBaseDireto error:', err.message || err);
+        console.error('transferirEstoqueBaseDireto error:', err);
         return false;
     }
 }
@@ -12117,16 +12250,20 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
         setTimeout(() => onBack(), 1500);
     };
     const confirmarEntrega = async (remId) => {
-        var _a, _b;
+        var _a, _b, _c;
         // Buscar dados completos da remessa com itens
         const { data: rem, error: remErr } = await sb.from('remessas')
             .select('*, remessa_itens(id, vacina_id, quantidade, vacinas(nome, produto_nome)), aplicadores!remessas_destino_aplicador_id_fkey(nome, cpf)')
             .eq('id', remId).single();
-        if (remErr) { toast(remErr.message, 'error'); return; }
+        if (remErr) {
+            toast(remErr.message, 'error');
+            return;
+        }
+        const itens = rem.remessa_itens || [];
         // Resolver destino
         let destTipo = rem.destino_tipo || 'aplicador';
         let destId = destTipo === 'aplicador' ? rem.destino_aplicador_id : rem.destino_base_id;
-        // Fallback: resolver aplicador pelo CPF na observacao
+        // Fallback: resolver aplicador pelo CPF na observação
         if ((!destId || destTipo !== 'aplicador') && destTipo !== 'base' && rem.observacao) {
             const mCPF = rem.observacao.match(/CPF:\s*([0-9.\-]+)/);
             const mCPF2 = !mCPF && rem.observacao.match(/\(([^)]+)\)/);
@@ -12134,29 +12271,31 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
             if (cpfStr && !cpfStr.includes(' ')) {
                 const { data: ap } = await sb.from('aplicadores').select('id').eq('cpf', cpfStr).single();
                 if (ap) {
-                    destTipo = 'aplicador'; destId = ap.id;
-                    await sb.from('remessas').update({ destino_tipo: 'aplicador', destino_aplicador_id: ap.id, destino_base_id: null }).eq('id', remId);
+                    destTipo = 'aplicador';
+                    destId = ap.id;
+                    await sb.from('remessas').update({
+                        destino_tipo: 'aplicador', destino_aplicador_id: ap.id, destino_base_id: null
+                    }).eq('id', remId);
                 }
             }
         }
-        if (!destId) { toast('Nao foi possivel identificar o destino. Verifique os dados da remessa.', 'error'); return; }
-        // PASSO 1: Marcar remessa como concluida IMEDIATAMENTE.
-        // O motorista confirmou a entrega fisica — o checkout nao pode ser bloqueado
-        // por falha de estoque. A base resolve qualquer pendencia depois.
-        const { error: updErr } = await sb.from('remessas').update({ status: 'concluida' }).eq('id', remId);
-        if (updErr) { toast(updErr.message, 'error'); return; }
-        // PASSO 2: Tentar transferencia de estoque em background (best-effort).
-        const itens = rem.remessa_itens || [];
+        // VD sem destino_base_id: debitar da base de origem como saida por venda
+        if (!destId && (rem.observacao || '').startsWith('VD:')) {
+            destTipo = 'base'; destId = rota.base_origem_id;
+        }
+        if (!destId) {
+            toast('Não foi possível identificar o destino. Verifique os dados da remessa.', 'error');
+            return;
+        }
         if (itens.length > 0) {
-            const errosTransferencia = [];
+            let errosTransferencia = [];
             for (const item of itens) {
                 const qtd = Number(item.quantidade || 0);
                 if (qtd <= 0) continue;
-                const nomeVacina = (item.vacinas && (item.vacinas.nome || item.vacinas.produto_nome)) || 'Vacina';
                 const obs = [
-                    'Entrega confirmada pelo motorista',
+                    'Entrega confirmada',
                     'Rota: ' + rota.codigo,
-                    'Remessa: ' + (rem.codigo_rastreio || remId),
+                    'Remessa: ' + rem.codigo_rastreio,
                     destTipo === 'aplicador'
                         ? 'Aplicador: ' + (((_a = rem.aplicadores) === null || _a === void 0 ? void 0 : _a.nome) || destId)
                         : 'Base destino: ' + destId,
@@ -12164,30 +12303,53 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
                 ].filter(Boolean).join(' | ');
                 let transferOk = false;
                 if (destTipo === 'aplicador') {
-                    transferOk = await transferirEstoqueDireto({ vacina_id: item.vacina_id, quantidade: qtd, origem_base_id: rota.base_origem_id, destino_aplicador_id: destId, remessa_id: remId, observacao: obs });
+                    // Entrega normal: base → aplicador
+                    transferOk = await transferirEstoqueDireto({
+                        vacina_id: item.vacina_id,
+                        quantidade: qtd,
+                        origem_base_id: rota.base_origem_id,
+                        destino_aplicador_id: destId,
+                        remessa_id: remId,
+                        observacao: obs
+                    });
                 } else if (destTipo === 'base') {
-                    transferOk = await transferirEstoqueBaseDireto({ vacina_id: item.vacina_id, quantidade: qtd, origem_base_id: rota.base_origem_id, destino_base_id: destId, remessa_id: remId, observacao: obs });
+                    // Entrega para clínica/base: base origem → base destino, debitando a origem e creditando o destino.
+                    transferOk = await transferirEstoqueBaseDireto({
+                        vacina_id: item.vacina_id,
+                        quantidade: qtd,
+                        origem_base_id: rota.base_origem_id,
+                        destino_base_id: destId,
+                        remessa_id: remId,
+                        observacao: obs
+                    });
                 }
-                if (!transferOk) errosTransferencia.push(nomeVacina);
+                if (!transferOk) {
+                    errosTransferencia.push(((_c = item.vacinas) === null || _c === void 0 ? void 0 : _c.nome) || 'Vacina');
+                }
             }
             if (errosTransferencia.length > 0) {
-                // Flag na observacao para a base identificar e corrigir o estoque
-                const flagPendente = '\n[TRANSFERENCIA_PENDENTE] Vacinas: ' + errosTransferencia.join(', ') + ' - ajuste de estoque necessario na base.';
-                await sb.from('remessas').update({ observacao: (rem.observacao || '') + flagPendente }).eq('id', remId);
-                toast('Entrega registrada! Estoque de ' + errosTransferencia.join(', ') + ' ficou pendente — a base ira corrigir.', 'warning');
-            } else {
-                toast('Entrega confirmada e estoque transferido!', 'success');
+                toast('❌ Entrega NÃO concluída. Falha ao transferir: ' + errosTransferencia.join(', '), 'error');
+                return;
             }
-        } else {
-            toast('Entrega confirmada!', 'success');
+            toast(destTipo === 'base' ? 'Transferência entre bases concluída ✓' : 'Estoque transferido ✓', 'success');
         }
-        // PASSO 3: Atualizar status logistico das tarefas
+        else {
+            toast('Remessa sem itens — entrega confirmada sem movimentação de estoque', 'info');
+        }
+        // Marcar remessa como concluída
+        const { error } = await sb.from('remessas').update({ status: 'concluida' }).eq('id', remId);
+        if (error) {
+            toast(error.message, 'error');
+            return;
+        }
+        // Atualizar status_logistica das tarefas vinculadas para 'entregue'
         await atualizarStatusLogisticaRemessa(rem, destId);
+        toast('Entrega confirmada! ✓', 'success');
         load();
         const { data } = await sb.from('remessas').select('status').eq('rota_id', rota.id);
         const allDone = (data || []).every(r => ['concluida', 'cancelada'].includes(r.status));
         if (allDone)
-            toast('Todas as entregas concluidas! Faca o check-out quando chegar na empresa.', 'success');
+            toast('Todas as entregas feitas! Faça o check-out quando chegar na empresa.', 'success');
     };
     // Atualizar status_logistica das tarefas vinculadas à remessa
     const atualizarStatusLogisticaRemessa = async (rem, aplicadorId) => {
