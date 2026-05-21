@@ -9920,14 +9920,15 @@ function RoteirizacaoPage({ onBack }) {
                     tipo: rotaTipo === 'coleta' ? 'coleta' : 'entrega',
                     destino_tipo: (isCli||isVD) ? 'base' : (aplicadorId ? 'aplicador' : 'base'),
                     destino_aplicador_id: (isCli||isVD) ? null : aplicadorId,
-                    destino_base_id: isVD ? null : (isCli ? (p.base_id||null) : (aplicadorId ? null : baseOrigem)),
+                    // VD: usa baseOrigem como saida de estoque (evita constraint NOT NULL)
+                    destino_base_id: isVD ? baseOrigem : (isCli ? (p.base_id||null) : (aplicadorId ? null : baseOrigem)),
                     ordem_entrega: p.ordem,
                     observacao: obs,
                     codigo_rastreio: ''
                 }).select().single();
-                if (error) { console.error('Erro ao criar remessa:', error); errs++; continue; }
+                if (error) { console.error('Erro ao criar remessa:', error.message, error.details, error.hint); toast('Erro remessa: ' + (error.message || JSON.stringify(error)), 'error'); errs++; continue; }
                 const itensMap = {};
-                if (isVD && p.vd_id) { await sb.from('vendas_diretas').update({status_logistica:'roteirizado'}).eq('id',p.vd_id).catch(()=>{}); }
+                if (isVD && p.vd_id) { sb.from('vendas_diretas').update({status_logistica:'roteirizado'}).eq('id',p.vd_id).then(()=>{}).catch(()=>{}); }
                 if (isCli || isVD) {
                     if (p.vacina_id && Number(p.doses || 0) > 0) itensMap[String(p.vacina_id)] = Number(p.doses || 0);
                 } else {
@@ -10817,6 +10818,36 @@ function MontagemPage() {
             .then(r => setRotas(r.data || []));
         sb.from('vacinas').select('id, nome, lote').eq('ativa', true).then(r => setVacinas(r.data || []));
     }, []);
+    const repararRotaVD = async () => {
+        if (!rotaSel) return;
+        const { data: vds } = await sb.from('vendas_diretas').select('id,codigo,cliente,doses_aprovadas,cidade,uf,vacina_id').eq('status_logistica','roteirizado');
+        if (!vds || vds.length === 0) { toast('Nenhuma VD roteirizada encontrada.', 'error'); return; }
+        const nomes = (vds||[]).map((v,i) => i + ') ' + (v.cliente||v.codigo) + ' — ' + v.doses_aprovadas + ' doses').join('\n');
+        const idx = parseInt(prompt('Qual VD pertence a esta rota?\n\n' + nomes + '\n\nDigite o número:'));
+        const vd = vds[idx];
+        if (!vd) { toast('VD não encontrada', 'error'); return; }
+        const dosesStr = prompt('Quantas doses para ' + vd.cliente + '?', String(vd.doses_aprovadas||''));
+        const doses = parseInt(dosesStr);
+        if (!doses || doses <= 0) return;
+        // Buscar vacinas disponíveis para escolher
+        const { data: vacinasDisp } = await sb.from('vacinas').select('id,nome').eq('ativa',true).order('nome');
+        const vacinaOpts = (vacinasDisp||[]).map((v,i) => i+') '+v.nome).join('\n');
+        const vidx = parseInt(prompt('Qual vacina?\n'+vacinaOpts+'\n\nDigite o número:'));
+        const vacina = (vacinasDisp||[])[vidx];
+        if (!vacina) { toast('Vacina não encontrada', 'error'); return; }
+        const obs = 'VD: ' + vd.id + ' | ' + (vd.cliente||'') + ' | ' + doses + ' doses | Vacina: ' + vacina.nome + ' | ' + (vd.cidade||'') + '/' + (vd.uf||'');
+        const { data: remNova, error: remErr } = await sb.from('remessas').insert({
+            rota_id: rotaSel.id, tipo: 'entrega', destino_tipo: 'base',
+            destino_aplicador_id: null, destino_base_id: null,
+            ordem_entrega: 1, observacao: obs, codigo_rastreio: '', status: 'planejada'
+        }).select().single();
+        if (remErr) { toast('Erro: ' + remErr.message + ' ' + (remErr.details||''), 'error'); return; }
+        const { error: itemErr } = await sb.from('remessa_itens').insert({ remessa_id: remNova.id, vacina_id: vacina.id, quantidade: doses });
+        if (itemErr) { toast('Remessa criada mas item falhou: ' + itemErr.message, 'error'); }
+        else { toast('Remessa VD criada! ✓', 'success'); }
+        sb.from('vendas_diretas').update({status_logistica:'roteirizado'}).eq('id',vd.id).then(()=>{}).catch(()=>{});
+        selecionarRota(rotaSel);
+    };
     const selecionarRota = async (rota) => {
         setRotaSel(rota);
         setLoadingRemessas(true);
@@ -11086,10 +11117,16 @@ function MontagemPage() {
                 total,
                 " remessas prontas")),
         loadingRemessas && React.createElement("div", { style: { textAlign: 'center', padding: 40, color: 'var(--text-muted)' } }, "Carregando remessas..."),
+        !loadingRemessas && rotaSel && remessas.length === 0 && React.createElement("div", { className: "card", style: { padding: 24, textAlign: 'center' } },
+            React.createElement("div", { style: { color: 'var(--text-muted)', marginBottom: 12 } }, "Nenhuma remessa nesta rota."),
+            React.createElement("button", { className: "btn btn-secondary", onClick: repararRotaVD }, "\uD83D\uDD27 Reparar Remessa VD")),
         React.createElement("div", { style: { display: 'flex', flexDirection: 'column', gap: 12 } }, remessas.map((rem, idx) => {
             var _a, _b, _c, _d, _e, _f, _g, _h;
-            const destNome = rem.destino_tipo === 'base' ? (_a = rem.bases) === null || _a === void 0 ? void 0 : _a.nome : (_b = rem.aplicadores) === null || _b === void 0 ? void 0 : _b.nome;
-            const destCidade = rem.destino_tipo === 'base' ? (((_c = rem.bases) === null || _c === void 0 ? void 0 : _c.cidade) + '/' + ((_d = rem.bases) === null || _d === void 0 ? void 0 : _d.uf)) : (((_e = rem.aplicadores) === null || _e === void 0 ? void 0 : _e.cidade) + '/' + ((_f = rem.aplicadores) === null || _f === void 0 ? void 0 : _f.uf));
+            // VD: extrair nome da observacao
+            const isRemVD = (rem.observacao||'').startsWith('VD:');
+            const destVDInfo = isRemVD ? (() => { const p=(rem.observacao||'').split('|'); const loc=(p[4]||'').split('/'); return { nome:(p[1]||'').trim()||'Venda Direta', cidade:(loc[0]||'').trim(), uf:(loc[1]||'').trim() }; })() : null;
+            const destNome = isRemVD ? destVDInfo.nome : (rem.destino_tipo === 'base' ? (_a = rem.bases) === null || _a === void 0 ? void 0 : _a.nome : (_b = rem.aplicadores) === null || _b === void 0 ? void 0 : _b.nome);
+            const destCidade = isRemVD ? (destVDInfo.cidade+'/'+destVDInfo.uf) : (rem.destino_tipo === 'base' ? (((_c = rem.bases) === null || _c === void 0 ? void 0 : _c.cidade) + '/' + ((_d = rem.bases) === null || _d === void 0 ? void 0 : _d.uf)) : (((_e = rem.aplicadores) === null || _e === void 0 ? void 0 : _e.cidade) + '/' + ((_f = rem.aplicadores) === null || _f === void 0 ? void 0 : _f.uf)));
             const destCPF = rem.destino_tipo === 'aplicador' ? (_g = rem.aplicadores) === null || _g === void 0 ? void 0 : _g.cpf : null;
             const destEnd = rem.destino_tipo === 'aplicador' ? (_h = rem.aplicadores) === null || _h === void 0 ? void 0 : _h.endereco : null;
             const totalDoses = (rem.remessa_itens || []).reduce((s, i) => s + i.quantidade, 0);
@@ -11746,11 +11783,11 @@ async function debitarBasePorVacina({ vacina_id, quantidade, base_id, remessa_id
             vacinaIdUsado = row.vacina_id;
             restante -= debitar;
         }
-        await sb.from('movimentacoes').insert({
+        sb.from('movimentacoes').insert({
             tipo: 'saida', vacina_id: vacinaIdUsado, quantidade,
             origem_tipo: 'base', origem_base_id: base_id,
             remessa_id, observacao, criado_por: userId
-        }).catch(() => {});
+        }).then(()=>{}).catch(() => {});
         return true;
     } catch(err) {
         console.error('debitarBasePorVacina error:', err.message || err);
