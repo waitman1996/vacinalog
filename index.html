@@ -11712,6 +11712,51 @@ function MotoristaPage() {
                         })))))))));
 }
 // Fallback: transferência direta sem RPC (para quando constraint não existe)
+// Debito simples: saida de estoque da base sem creditar destino (usado para VD)
+async function debitarBasePorVacina({ vacina_id, quantidade, base_id, remessa_id, observacao }) {
+    try {
+        quantidade = Number(quantidade || 0);
+        if (!vacina_id || !base_id || quantidade <= 0) return false;
+        const { data: { user } } = await sb.auth.getUser();
+        const userId = user && user.id ? user.id : null;
+        // Buscar estoque por vacina_id ou produto_nome
+        const { data: vacinaRef } = await sb.from('vacinas').select('nome, produto_nome').eq('id', vacina_id).single();
+        const produtoRef = (vacinaRef && (vacinaRef.produto_nome || vacinaRef.nome) || '').trim();
+        const { data: rows, error: estErr } = await sb.from('estoque')
+            .select('id, quantidade, vacina_id, vacinas(nome, produto_nome)')
+            .eq('base_id', base_id).eq('localizacao_tipo', 'base').gt('quantidade', 0)
+            .order('created_at', { ascending: true });
+        if (estErr) throw estErr;
+        let candidatos = (rows || []).filter(e => String(e.vacina_id) === String(vacina_id));
+        if (!candidatos.length && produtoRef) {
+            candidatos = (rows || []).filter(e => {
+                const p = (e.vacinas && (e.vacinas.produto_nome || e.vacinas.nome) || '').trim();
+                return p.toLowerCase() === produtoRef.toLowerCase();
+            });
+        }
+        const saldo = candidatos.reduce((s, r) => s + Number(r.quantidade || 0), 0);
+        if (saldo < quantidade) throw new Error('Saldo insuficiente: ' + saldo + ' < ' + quantidade);
+        let restante = quantidade, vacinaIdUsado = vacina_id;
+        for (const row of candidatos) {
+            if (restante <= 0) break;
+            const atual = Number(row.quantidade || 0);
+            const debitar = Math.min(atual, restante);
+            const { error: upErr } = await sb.from('estoque').update({ quantidade: atual - debitar }).eq('id', row.id);
+            if (upErr) throw upErr;
+            vacinaIdUsado = row.vacina_id;
+            restante -= debitar;
+        }
+        await sb.from('movimentacoes').insert({
+            tipo: 'saida', vacina_id: vacinaIdUsado, quantidade,
+            origem_tipo: 'base', origem_base_id: base_id,
+            remessa_id, observacao, criado_por: userId
+        }).catch(() => {});
+        return true;
+    } catch(err) {
+        console.error('debitarBasePorVacina error:', err.message || err);
+        return false;
+    }
+}
 async function transferirEstoqueDireto({ vacina_id, quantidade, origem_base_id, destino_aplicador_id, remessa_id, observacao }) {
     try {
         quantidade = Number(quantidade || 0);
@@ -12441,14 +12486,12 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
                 }
             }
         }
-        // VD sem destino_base_id: debitar da base de origem como saida por venda
-        if (!destId && (rem.observacao || '').startsWith('VD:')) {
-            destTipo = 'base'; destId = rota.base_origem_id;
-        }
         if (!destId) {
             toast('Não foi possível identificar o destino. Verifique os dados da remessa.', 'error');
             return;
         }
+        // VD: detectar pelo prefixo da observacao
+        const isVDEntrega = (rem.observacao || '').startsWith('VD:');
         if (itens.length > 0) {
             let errosTransferencia = [];
             for (const item of itens) {
@@ -12464,25 +12507,25 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
                     ((_b = item.vacinas) === null || _b === void 0 ? void 0 : _b.nome) ? 'Vacina: ' + item.vacinas.nome : null
                 ].filter(Boolean).join(' | ');
                 let transferOk = false;
-                if (destTipo === 'aplicador') {
+                if (isVDEntrega) {
+                    // VD: saida de estoque p/ cliente externo — apenas debitar da base
+                    transferOk = await debitarBasePorVacina({
+                        vacina_id: item.vacina_id, quantidade: qtd,
+                        base_id: rota.base_origem_id, remessa_id: remId, observacao: obs
+                    });
+                } else if (destTipo === 'aplicador') {
                     // Entrega normal: base → aplicador
                     transferOk = await transferirEstoqueDireto({
-                        vacina_id: item.vacina_id,
-                        quantidade: qtd,
+                        vacina_id: item.vacina_id, quantidade: qtd,
                         origem_base_id: rota.base_origem_id,
-                        destino_aplicador_id: destId,
-                        remessa_id: remId,
-                        observacao: obs
+                        destino_aplicador_id: destId, remessa_id: remId, observacao: obs
                     });
                 } else if (destTipo === 'base') {
-                    // Entrega para clínica/base: base origem → base destino, debitando a origem e creditando o destino.
+                    // Entrega clinica: base origem → base destino
                     transferOk = await transferirEstoqueBaseDireto({
-                        vacina_id: item.vacina_id,
-                        quantidade: qtd,
+                        vacina_id: item.vacina_id, quantidade: qtd,
                         origem_base_id: rota.base_origem_id,
-                        destino_base_id: destId,
-                        remessa_id: remId,
-                        observacao: obs
+                        destino_base_id: destId, remessa_id: remId, observacao: obs
                     });
                 }
                 if (!transferOk) {
