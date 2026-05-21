@@ -785,10 +785,10 @@ function Sidebar({ profile, currentPage, onNavigate, open, onClose, collapsed, o
     const menuItems = [];
     if (role === 'admin') {
         menuItems.push({ section: 'Geral' }, { id: 'dashboard', icon: '📊', label: 'Dashboard' }, { section: 'Cadastros' }, { id: 'bases', icon: '🏢', label: 'Bases' },
-      { id: 'clinicas', icon: '🏥', label: 'Clínicas Parceiras' }, { id: 'vacinas', icon: '💉', label: 'Vacinas' }, { id: 'aplicadores', icon: '👤', label: 'Aplicadores' }, { id: 'usuarios', icon: '👥', label: 'Usuários' }, { section: 'Operação' }, { id: 'estoque', icon: '📦', label: 'Estoque' }, { id: 'mapa-estoque', icon: '🗺️', label: 'Mapa Estoque' }, { id: 'importacao', icon: '📥', label: 'Importação' }, { id: 'tarefas', icon: '📋', label: 'Tarefas' }, { id: 'escalas', icon: '👩‍⚕️', label: 'Escalas' }, { id: 'tarefas-escalas', icon: '🔗', label: 'Tarefas × Escalas' }, { id: 'demanda', icon: '⚖️', label: 'Demanda vs Oferta' }, { id: 'previsao', icon: '🔮', label: 'Previsão de Demanda' }, { id: 'relatorio', icon: '📊', label: 'Relatório Executivo' }, { section: 'Logística' }, { id: 'rotas', icon: '🚚', label: 'Rotas' }, { id: 'veiculos', icon: '🚗', label: 'Veículos' }, { id: 'montagem', icon: '📦', label: 'Fila de Montagem' }, { id: 'etiquetas', icon: '🏷️', label: 'Etiquetas/Recibos' }, { id: 'transferencia', icon: '↔️', label: 'Transferência' }, { id: 'recolhimento', icon: '↩️', label: 'Recolhimento' }, { id: 'movimentacoes', icon: '📜', label: 'Movimentações' }, { id: 'aumentos-doses', icon: '➕', label: 'Aumento de Doses' });
+      { id: 'clinicas', icon: '🏥', label: 'Clínicas Parceiras' }, { id: 'vacinas', icon: '💉', label: 'Vacinas' }, { id: 'aplicadores', icon: '👤', label: 'Aplicadores' }, { id: 'usuarios', icon: '👥', label: 'Usuários' }, { section: 'Operação' }, { id: 'estoque', icon: '📦', label: 'Estoque' }, { id: 'mapa-estoque', icon: '🗺️', label: 'Mapa Estoque' }, { id: 'importacao', icon: '📥', label: 'Importação' }, { id: 'tarefas', icon: '📋', label: 'Tarefas' }, { id: 'vendas-diretas', icon: '🛒', label: 'Vendas Diretas' }, { id: 'escalas', icon: '👩‍⚕️', label: 'Escalas' }, { id: 'tarefas-escalas', icon: '🔗', label: 'Tarefas × Escalas' }, { id: 'demanda', icon: '⚖️', label: 'Demanda vs Oferta' }, { id: 'previsao', icon: '🔮', label: 'Previsão de Demanda' }, { id: 'relatorio', icon: '📊', label: 'Relatório Executivo' }, { section: 'Logística' }, { id: 'rotas', icon: '🚚', label: 'Rotas' }, { id: 'veiculos', icon: '🚗', label: 'Veículos' }, { id: 'montagem', icon: '📦', label: 'Fila de Montagem' }, { id: 'etiquetas', icon: '🏷️', label: 'Etiquetas/Recibos' }, { id: 'transferencia', icon: '↔️', label: 'Transferência' }, { id: 'recolhimento', icon: '↩️', label: 'Recolhimento' }, { id: 'movimentacoes', icon: '📜', label: 'Movimentações' }, { id: 'aumentos-doses', icon: '➕', label: 'Aumento de Doses' });
     }
     else if (role === 'planejador') {
-        menuItems.push({ section: 'Planejamento' }, { id: 'dashboard', icon: '📊', label: 'Dashboard' }, { id: 'estoque', icon: '📦', label: 'Estoque' }, { id: 'mapa-estoque', icon: '🗺️', label: 'Mapa Estoque' }, { id: 'demanda', icon: '⚖️', label: 'Demanda vs Oferta' }, { id: 'tarefas', icon: '📋', label: 'Tarefas' }, { id: 'escalas', icon: '👩‍⚕️', label: 'Escalas' }, { id: 'tarefas-escalas', icon: '🔗', label: 'Tarefas × Escalas' }, { id: 'demanda', icon: '⚖️', label: 'Demanda vs Oferta' }, { id: 'previsao', icon: '🔮', label: 'Previsão de Demanda' }, { id: 'relatorio', icon: '📊', label: 'Relatório Executivo' }, { id: 'rotas', icon: '🚚', label: 'Rotas' }, { id: 'transferencia', icon: '↔️', label: 'Transferência' }, { id: 'aumentos-doses', icon: '➕', label: 'Aumento de Doses' }, { id: 'importacao', icon: '📥', label: 'Importação' });
+        menuItems.push({ section: 'Planejamento' }, { id: 'dashboard', icon: '📊', label: 'Dashboard' }, { id: 'estoque', icon: '📦', label: 'Estoque' }, { id: 'mapa-estoque', icon: '🗺️', label: 'Mapa Estoque' }, { id: 'demanda', icon: '⚖️', label: 'Demanda vs Oferta' }, { id: 'tarefas', icon: '📋', label: 'Tarefas' }, { id: 'vendas-diretas', icon: '🛒', label: 'Vendas Diretas' }, { id: 'escalas', icon: '👩‍⚕️', label: 'Escalas' }, { id: 'tarefas-escalas', icon: '🔗', label: 'Tarefas × Escalas' }, { id: 'demanda', icon: '⚖️', label: 'Demanda vs Oferta' }, { id: 'previsao', icon: '🔮', label: 'Previsão de Demanda' }, { id: 'relatorio', icon: '📊', label: 'Relatório Executivo' }, { id: 'rotas', icon: '🚚', label: 'Rotas' }, { id: 'transferencia', icon: '↔️', label: 'Transferência' }, { id: 'aumentos-doses', icon: '➕', label: 'Aumento de Doses' }, { id: 'importacao', icon: '📥', label: 'Importação' });
     }
     else if (role === 'montador') {
         menuItems.push({ section: 'Logística' }, { id: 'rotas', icon: '🚚', label: 'Rotas' }, { id: 'montagem', icon: '📦', label: 'Fila de Montagem' }, { id: 'etiquetas', icon: '🏷️', label: 'Etiquetas/Recibos' }, { section: 'Estoque' }, { id: 'estoque', icon: '📦', label: 'Estoque' }, { id: 'mapa-estoque', icon: '🗺️', label: 'Mapa Estoque' }, { id: 'transferencia', icon: '↔️', label: 'Transferência' });
@@ -2518,6 +2518,105 @@ function VacinaForm({ initial, onSave, onClose }) {
 // ═══════════════════════════════════════════════
 // IMPORTAÇÃO DE DADOS (Consulta + Tutores)
 // ═══════════════════════════════════════════════
+function VendasDiretasPage() {
+    const [vds, setVds] = useState([]);
+    const [loading, setLoading] = useState(true);
+    const [erroTabela, setErroTabela] = useState(false);
+    const [search, setSearch] = useState('');
+    const [statusFilter, setStatusFilter] = useState('');
+    const toast = useContext(ToastContext);
+    const ST_LABELS = { nao_roteirizado: 'Não roteirizado', roteirizado: 'Roteirizado', em_rota: 'Em rota', concluido: 'Concluído', cancelado: 'Cancelado' };
+    const ST_BADGES = { nao_roteirizado: 'badge-gray', roteirizado: 'badge-blue', em_rota: 'badge-green', concluido: 'badge-green', cancelado: 'badge-red' };
+    const load = async () => {
+        setLoading(true);
+        const { data, error } = await sb.from('vendas_diretas')
+            .select('id,codigo,grupo,cliente,doses_aprovadas,cidade,uf,data_inicio,data_fim,status_original,status_logistica,cnpj,telefone,endereco,rua,numero,bairro,cep')
+            .order('created_at', { ascending: false });
+        if (error) {
+            if (error.message && (error.message.includes('does not exist') || error.message.includes('relation') || error.code === '42P01')) {
+                setErroTabela(true);
+            } else {
+                toast('Erro ao carregar VDs: ' + error.message, 'error');
+            }
+            setLoading(false);
+            return;
+        }
+        setVds(data || []);
+        setErroTabela(false);
+        setLoading(false);
+    };
+    useEffect(() => { load(); }, []);
+    const sqlTabela = `-- Execute no Supabase SQL Editor:
+CREATE TABLE IF NOT EXISTS vendas_diretas (
+  id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
+  codigo text UNIQUE NOT NULL,
+  grupo text, cliente text, doses_aprovadas integer DEFAULT 0,
+  cidade text, uf text, rua text, numero text, bairro text,
+  cep text, cnpj text, telefone text, endereco text,
+  data_inicio timestamptz, data_fim timestamptz,
+  status_original text,
+  status_logistica text DEFAULT 'nao_roteirizado',
+  vacina_id uuid REFERENCES vacinas(id),
+  importado_por uuid REFERENCES auth.users(id),
+  created_at timestamptz DEFAULT now(),
+  updated_at timestamptz DEFAULT now()
+);
+ALTER TABLE vendas_diretas ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "allow_all_vd" ON vendas_diretas FOR ALL USING (true) WITH CHECK (true);`;
+    const filtradas = vds.filter(v => {
+        const q = search.toLowerCase().trim();
+        const matchQ = !q || (v.cliente||'').toLowerCase().includes(q) || (v.codigo||'').toLowerCase().includes(q) || (v.cidade||'').toLowerCase().includes(q) || (v.grupo||'').toLowerCase().includes(q);
+        const matchSt = !statusFilter || v.status_logistica === statusFilter;
+        return matchQ && matchSt;
+    });
+    const totalDoses = filtradas.reduce((s, v) => s + (v.doses_aprovadas || 0), 0);
+    const fmtDate = (d) => d ? new Date(d).toLocaleDateString('pt-BR') : '—';
+    return React.createElement("div", null,
+        React.createElement("div", { className: "page-header" },
+            React.createElement("div", null,
+                React.createElement("div", { className: "page-title" }, "🛒 Vendas Diretas (VD)"),
+                React.createElement("div", { className: "page-subtitle" }, filtradas.length + " registros · " + totalDoses.toLocaleString('pt-BR') + " doses")),
+            React.createElement("button", { className: "btn btn-secondary", onClick: load }, "↻ Recarregar")),
+        erroTabela ? React.createElement("div", { className: "card", style: { borderColor: 'var(--warning)' } },
+            React.createElement("div", { className: "card-title", style: { color: 'var(--warning)' } }, "⚠️ Tabela vendas_diretas não existe no Supabase"),
+            React.createElement("p", { style: { fontSize: 13, marginBottom: 16 } }, "Execute o SQL abaixo no Supabase SQL Editor para criar a tabela, depois importe o CSV em Importação > Tarefas VD."),
+            React.createElement("pre", { style: { background: 'var(--bg-input)', padding: 14, borderRadius: 8, fontSize: 12, overflow: 'auto', whiteSpace: 'pre-wrap', border: '1px solid var(--border)' } }, sqlTabela),
+            React.createElement("button", { className: "btn btn-secondary", style: { marginTop: 12 }, onClick: () => { navigator.clipboard && navigator.clipboard.writeText(sqlTabela); toast('SQL copiado!', 'success'); } }, "📋 Copiar SQL"))
+        : React.createElement(React.Fragment, null,
+            React.createElement("div", { className: "card", style: { marginBottom: 12 } },
+                React.createElement("div", { style: { display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' } },
+                    React.createElement("input", { className: "form-input", placeholder: "Buscar cliente, código, cidade...", value: search, onChange: e => setSearch(e.target.value), style: { flex: 1, minWidth: 200 } }),
+                    React.createElement("select", { className: "form-select", value: statusFilter, onChange: e => setStatusFilter(e.target.value), style: { minWidth: 160 } },
+                        React.createElement("option", { value: "" }, "Todos os status"),
+                        Object.entries(ST_LABELS).map(([k, v]) => React.createElement("option", { key: k, value: k }, v))))),
+            loading ? React.createElement("div", { style: { textAlign: 'center', padding: 40, color: 'var(--text-muted)' } }, "Carregando...")
+            : filtradas.length === 0 ? React.createElement("div", { className: "card", style: { textAlign: 'center', padding: 32, color: 'var(--text-muted)' } },
+                "Nenhuma VD encontrada. Importe em ", React.createElement("strong", null, "Importação > Tarefas VD"), ".")
+            : React.createElement("div", { className: "card", style: { padding: 0 } },
+                React.createElement("div", { className: "table-wrap" },
+                    React.createElement("table", null,
+                        React.createElement("thead", null,
+                            React.createElement("tr", null,
+                                React.createElement("th", null, "Código"),
+                                React.createElement("th", null, "Grupo"),
+                                React.createElement("th", null, "Cliente"),
+                                React.createElement("th", null, "Cidade/UF"),
+                                React.createElement("th", null, "Data Início"),
+                                React.createElement("th", { style: { textAlign: 'right' } }, "Doses"),
+                                React.createElement("th", null, "Status Original"),
+                                React.createElement("th", null, "Status Logística"))),
+                        React.createElement("tbody", null, filtradas.map(v =>
+                            React.createElement("tr", { key: v.id },
+                                React.createElement("td", { className: "mono", style: { fontSize: 10, color: 'var(--accent)', fontWeight: 600, maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, v.codigo),
+                                React.createElement("td", { style: { fontSize: 12, maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, v.grupo || '—'),
+                                React.createElement("td", { style: { fontWeight: 500, maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, v.cliente || '—'),
+                                React.createElement("td", { style: { fontSize: 12 } }, [v.cidade, v.uf].filter(Boolean).join('/') || '—'),
+                                React.createElement("td", { style: { fontSize: 12, whiteSpace: 'nowrap' } }, fmtDate(v.data_inicio)),
+                                React.createElement("td", { className: "mono", style: { textAlign: 'right', fontWeight: 600 } }, (v.doses_aprovadas || 0).toLocaleString('pt-BR')),
+                                React.createElement("td", null, React.createElement("span", { className: "badge badge-gray", style: { fontSize: 10 } }, v.status_original || '—')),
+                                React.createElement("td", null, React.createElement("span", { className: `badge ${ST_BADGES[v.status_logistica] || 'badge-gray'}` }, ST_LABELS[v.status_logistica] || v.status_logistica || '—'))))))))));
+}
+
 function ImportacaoPage() {
     const [tab, setTab] = useState('consulta');
     return (React.createElement("div", null,
@@ -8681,8 +8780,11 @@ function ModalDetalheRota({ rota, onClose, ROTA_ST, ROTA_BADGE }) {
         try {
             const todas = [];
             // Remessas VD: observacao começa com "VD:"
-            const remVD = remessas.filter(r => (r.observacao || '').startsWith('VD:'));
-            const remNormais = remessas.filter(r => !(r.observacao || '').startsWith('VD:'));
+            // VD: obs começa com "VD:" (novas) OU destino_base_id=null sem destino definido (antigas)
+            const remVD = remessas.filter(r =>
+                (r.observacao || '').startsWith('VD:') ||
+                (r.destino_tipo === 'base' && !r.destino_base_id && !r.destino_aplicador_id));
+            const remNormais = remessas.filter(r => !remVD.includes(r));
             // Tarefas normais: extrair codigos das observacoes
             const re = /[A-Z0-9]+(?:\.[A-Z0-9&]+){2,}/g;
             const codigos = [...new Set(remNormais.flatMap(r => (String(r.observacao || '').match(re) || [])))];
@@ -8697,9 +8799,22 @@ function ModalDetalheRota({ rota, onClose, ROTA_ST, ROTA_BADGE }) {
             // VDs: extrair uuid (vd_id) ou codigo da observacao "VD: UUID | ..."
             if (remVD.length > 0) {
                 const vdIds = remVD.map(r => {
-                    const m = (r.observacao || '').match(/^VD:\s*([^\s|]+)/);
-                    return m ? m[1].trim() : null;
+                    const obs = r.observacao || '';
+                    if (obs.startsWith('VD:')) {
+                        const m = obs.match(/^VD:\s*([^\s|]+)/);
+                        return m ? m[1].trim() : null;
+                    }
+                    return null; // remessa antiga sem uuid, será listada genericamente
                 }).filter(Boolean);
+                // Para remessas VD antigas sem uuid: criar entradas placeholder
+                const remVDSemId = remVD.filter(r => !(r.observacao||'').startsWith('VD:'));
+                remVDSemId.forEach(r => {
+                    const nome = (r.observacao||'').split('|')[0].trim() || 'Venda Direta';
+                    todas.push({ id: r.id, codigo: '(VD sem código)', cliente: nome,
+                        cidade_campanha: '', uf_campanha: '', data_inicio: null,
+                        doses_previstas: 0, doses_aplicadas: 0, status: 'roteirizado',
+                        status_logistica: 'roteirizado', vacina: '—', base_nome: '—', _tipo: 'vd' });
+                });
                 const uuids = vdIds.filter(c => /^[0-9a-f-]{36}$/i.test(c));
                 const textos = vdIds.filter(c => !/^[0-9a-f-]{36}$/i.test(c));
                 const toVD = arr => arr.map(v => ({
@@ -8758,12 +8873,19 @@ function ModalDetalheRota({ rota, onClose, ROTA_ST, ROTA_BADGE }) {
                     rotaData.remessas.length,
                     ")"),
                 rotaData.remessas.length === 0 ? (React.createElement("div", { style: { padding: 24, textAlign: 'center', color: 'var(--text-muted)', background: 'var(--bg-input)', borderRadius: 'var(--radius-sm)' } }, "Nenhuma remessa nesta rota.")) : (React.createElement("div", { style: { display: 'flex', flexDirection: 'column', gap: 8 } }, rotaData.remessas.map((rem) => {
-                    // VD: destino extraido da observacao (bases=null, aplicadores=null)
-                    const isVDRem = (rem.observacao || '').startsWith('VD:');
+                    // VD: detectar por prefixo "VD:" OU por ausencia de destino (rotas antigas)
+                    const isVDRem = (rem.observacao || '').startsWith('VD:') ||
+                        (rem.destino_tipo === 'base' && !rem.destino_base_id && !rem.bases && !rem.aplicadores);
                     const destVDNome = isVDRem ? (() => {
-                        const parts = (rem.observacao || '').split('|');
-                        const loc = (parts[4] || '').split('/');
-                        return { nome: (parts[1] || '').trim() || 'Venda Direta', cidade: (loc[0] || '').trim(), uf: (loc[1] || '').trim(), cpf: null, endereco: null };
+                        const obs = rem.observacao || '';
+                        if (obs.startsWith('VD:')) {
+                            const parts = obs.split('|');
+                            const loc = (parts[4] || '').split('/');
+                            return { nome: (parts[1] || '').trim() || 'Venda Direta', cidade: (loc[0] || '').trim(), uf: (loc[1] || '').trim(), cpf: null, endereco: null };
+                        }
+                        // Rota criada antes do fix: extrair nome do inicio da obs
+                        const nome = obs.split('|')[0].trim() || 'Venda Direta';
+                        return { nome, cidade: '', uf: '', cpf: null, endereco: null };
                     })() : null;
                     const dest = isVDRem ? destVDNome : (rem.destino_tipo === 'base' ? rem.bases : rem.aplicadores);
                     const doses = (rem.remessa_itens || []).reduce((s, i) => s + Number(i.quantidade || 0), 0);
@@ -14145,6 +14267,7 @@ function App() {
             case 'aplicadores': return React.createElement(AplicadoresPage, null);
             case 'importacao': return React.createElement(ImportacaoPage, null);
             case 'tarefas': return React.createElement(TarefasPage, { profile: profile });
+            case 'vendas-diretas': return React.createElement(VendasDiretasPage, null);
             case 'escalas': return React.createElement(EscalasPage, null);
             case 'tarefas-escalas': return React.createElement(TarefasEscalasPage, { profile: profile });
             case 'previsao': return React.createElement(PrevisaoDemandaPage, null);
