@@ -8612,7 +8612,8 @@ function ModalDetalheRota({ rota, onClose, ROTA_ST, ROTA_BADGE }) {
                         React.createElement("div", { style: { flex: 1, minWidth: 0 } },
                             React.createElement("div", { style: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 4 } },
                                 React.createElement("span", { style: { fontFamily: 'JetBrains Mono', fontSize: 11, color: 'var(--accent)', fontWeight: 600 } }, rem.codigo_rastreio || '—'),
-                                React.createElement("span", { className: `badge ${ST_BADGE[rem.status] || 'badge-gray'}`, style: { fontSize: 10 } }, ST_LABEL[rem.status] || rem.status)),
+                                React.createElement("span", { className: `badge ${ST_BADGE[rem.status] || 'badge-gray'}`, style: { fontSize: 10 } }, ST_LABEL[rem.status] || rem.status),
+                                (rem.observacao || '').includes('[TRANSFERENCIA_PENDENTE]') && React.createElement("span", { className: "badge badge-yellow", style: { fontSize: 10 }, title: "Transferencia de estoque pendente - requer ajuste manual na base" }, "Estoque pendente")),
                             React.createElement("div", { style: { fontWeight: 700, fontSize: 14, marginBottom: 2 } }, (dest === null || dest === void 0 ? void 0 : dest.nome) || '—'),
                             (dest === null || dest === void 0 ? void 0 : dest.cpf) && React.createElement("div", { style: { fontSize: 11, color: 'var(--text-muted)' } },
                                 "CPF: ",
@@ -11382,91 +11383,129 @@ async function transferirEstoqueDireto({ vacina_id, quantidade, origem_base_id, 
     try {
         quantidade = Number(quantidade || 0);
         if (!vacina_id || !origem_base_id || !destino_aplicador_id || quantidade <= 0) {
-            console.error('Dados inválidos para transferência', { vacina_id, quantidade, origem_base_id, destino_aplicador_id });
+            console.error('Dados invalidos para transferencia', { vacina_id, quantidade, origem_base_id, destino_aplicador_id });
             return false;
         }
-        // Transferência atômica no Supabase:
-        // debita a base por PRODUTO consolidado, credita o aplicador e grava o extrato.
-        // Se qualquer etapa falhar, nada é concluído parcialmente.
         const { data: { user } } = await sb.auth.getUser();
-        const { error } = await sb.rpc('transferir_estoque_produto', {
-            p_vacina_id: vacina_id,
-            p_quantidade: quantidade,
-            p_origem_base_id: origem_base_id,
-            p_destino_aplicador_id: destino_aplicador_id,
-            p_remessa_id: remessa_id,
-            p_observacao: observacao,
-            p_criado_por: (user === null || user === void 0 ? void 0 : user.id) || null
+        const userId = (user && user.id) ? user.id : null;
+        // Tentativa 1: RPC atomico pelo vacina_id exato
+        const { error: rpcErr } = await sb.rpc('transferir_estoque_produto', {
+            p_vacina_id: vacina_id, p_quantidade: quantidade,
+            p_origem_base_id: origem_base_id, p_destino_aplicador_id: destino_aplicador_id,
+            p_remessa_id: remessa_id, p_observacao: observacao, p_criado_por: userId
         });
-        if (error)
-            throw error;
-        return true;
-    }
-    catch (err) {
-        console.error('transferirEstoqueDireto error:', err);
-        return false;
-    }
-}
-
-
-// Transferência direta entre bases/clínicas, debitando corretamente a base origem e creditando a base destino.
-async function transferirEstoqueBaseDireto({ vacina_id, quantidade, origem_base_id, destino_base_id, remessa_id, observacao }) {
-    try {
-        quantidade = Number(quantidade || 0);
-        if (!vacina_id || !origem_base_id || !destino_base_id || quantidade <= 0) {
-            console.error('Dados inválidos para transferência base→base', { vacina_id, quantidade, origem_base_id, destino_base_id });
-            return false;
-        }
-        if (String(origem_base_id) === String(destino_base_id)) {
-            console.error('Origem e destino são a mesma base; transferência cancelada', { origem_base_id, destino_base_id });
-            return false;
-        }
-        const { data: { user } } = await sb.auth.getUser();
-        let restante = quantidade;
-        const { data: origens, error: origErr } = await sb.from('estoque')
-            .select('id,quantidade')
-            .eq('vacina_id', vacina_id)
-            .eq('base_id', origem_base_id)
-            .eq('localizacao_tipo', 'base')
+        if (!rpcErr) return true;
+        // Tentativa 2: fallback manual por produto_nome
+        // Ocorre quando o estoque da base foi cadastrado com vacina_id de produto generico
+        // (ex: "Influenza" em vez de "Influenza Trivalente").
+        console.warn('[VacinaLog] RPC falhou, tentando fallback por produto_nome:', rpcErr.message);
+        const { data: vacinaRef } = await sb.from('vacinas').select('nome, produto_nome').eq('id', vacina_id).single();
+        const produtoRef = (vacinaRef && (vacinaRef.produto_nome || vacinaRef.nome) || '').trim();
+        if (!produtoRef) throw rpcErr;
+        const { data: estoqueBase, error: estErr } = await sb.from('estoque')
+            .select('id, quantidade, vacina_id, vacinas(nome, produto_nome)')
+            .eq('base_id', origem_base_id).eq('localizacao_tipo', 'base').gt('quantidade', 0)
             .order('created_at', { ascending: true });
-        if (origErr) throw origErr;
-        const saldoOrigem = (origens || []).reduce((s, r) => s + Number(r.quantidade || 0), 0);
-        if (saldoOrigem < quantidade) {
-            throw new Error('Saldo insuficiente na base de origem. Disponível: ' + saldoOrigem + ', necessário: ' + quantidade);
-        }
-        for (const row of (origens || [])) {
+        if (estErr) throw estErr;
+        const candidatos = (estoqueBase || []).filter(e => {
+            const pNome = (e.vacinas && (e.vacinas.produto_nome || e.vacinas.nome) || '').trim();
+            return pNome.toLowerCase() === produtoRef.toLowerCase() || String(e.vacina_id) === String(vacina_id);
+        });
+        const saldoDisponivel = candidatos.reduce((s, r) => s + Number(r.quantidade || 0), 0);
+        if (saldoDisponivel < quantidade)
+            throw new Error('Saldo insuficiente para ' + produtoRef + '. Disponivel: ' + saldoDisponivel + ', necessario: ' + quantidade);
+        let restante = quantidade, vacinaIdUsado = vacina_id;
+        for (const row of candidatos) {
             if (restante <= 0) break;
             const atual = Number(row.quantidade || 0);
             const debitar = Math.min(atual, restante);
             const { error: upErr } = await sb.from('estoque').update({ quantidade: atual - debitar }).eq('id', row.id);
             if (upErr) throw upErr;
+            vacinaIdUsado = row.vacina_id;
+            restante -= debitar;
+        }
+        const { data: estAplic, error: apErr } = await sb.from('estoque')
+            .select('id, quantidade').eq('vacina_id', vacinaIdUsado)
+            .eq('aplicador_id', destino_aplicador_id).eq('localizacao_tipo', 'aplicador').limit(1);
+        if (apErr) throw apErr;
+        if (estAplic && estAplic[0]) {
+            const { error: updApErr } = await sb.from('estoque').update({ quantidade: Number(estAplic[0].quantidade || 0) + quantidade }).eq('id', estAplic[0].id);
+            if (updApErr) throw updApErr;
+        } else {
+            const { error: insApErr } = await sb.from('estoque').insert({ vacina_id: vacinaIdUsado, aplicador_id: destino_aplicador_id, localizacao_tipo: 'aplicador', quantidade });
+            if (insApErr) throw insApErr;
+        }
+        const { error: movErr } = await sb.from('movimentacoes').insert({ tipo: 'transferencia', vacina_id: vacinaIdUsado, quantidade, origem_tipo: 'base', origem_base_id, destino_tipo: 'aplicador', destino_aplicador_id, remessa_id, observacao, criado_por: userId });
+        if (movErr) throw movErr;
+        console.log('[VacinaLog] Fallback por produto_nome OK para', produtoRef);
+        return true;
+    }
+    catch (err) {
+        console.error('transferirEstoqueDireto error:', err.message || err);
+        return false;
+    }
+}
+
+
+// Transferencia direta entre bases/clinicas, com fallback por produto_nome.
+async function transferirEstoqueBaseDireto({ vacina_id, quantidade, origem_base_id, destino_base_id, remessa_id, observacao }) {
+    try {
+        quantidade = Number(quantidade || 0);
+        if (!vacina_id || !origem_base_id || !destino_base_id || quantidade <= 0) {
+            console.error('Dados invalidos para transferencia base->base', { vacina_id, quantidade, origem_base_id, destino_base_id });
+            return false;
+        }
+        if (String(origem_base_id) === String(destino_base_id)) {
+            console.error('Origem e destino sao a mesma base; transferencia cancelada');
+            return false;
+        }
+        const { data: { user } } = await sb.auth.getUser();
+        const userId = (user && user.id) ? user.id : null;
+        const { data: vacinaRef } = await sb.from('vacinas').select('nome, produto_nome').eq('id', vacina_id).single();
+        const produtoRef = (vacinaRef && (vacinaRef.produto_nome || vacinaRef.nome) || '').trim();
+        const { data: origens, error: origErr } = await sb.from('estoque')
+            .select('id, quantidade, vacina_id, vacinas(nome, produto_nome)')
+            .eq('base_id', origem_base_id).eq('localizacao_tipo', 'base')
+            .order('created_at', { ascending: true });
+        if (origErr) throw origErr;
+        let candidatos = (origens || []).filter(e => String(e.vacina_id) === String(vacina_id));
+        if (candidatos.length === 0 && produtoRef) {
+            candidatos = (origens || []).filter(e => {
+                const pNome = (e.vacinas && (e.vacinas.produto_nome || e.vacinas.nome) || '').trim();
+                return pNome.toLowerCase() === produtoRef.toLowerCase();
+            });
+            if (candidatos.length > 0)
+                console.warn('[VacinaLog] base->base fallback produto_nome "' + produtoRef + '" para vacina_id ' + vacina_id);
+        }
+        const saldoOrigem = candidatos.reduce((s, r) => s + Number(r.quantidade || 0), 0);
+        if (saldoOrigem < quantidade)
+            throw new Error('Saldo insuficiente na base de origem. Disponivel: ' + saldoOrigem + ', necessario: ' + quantidade);
+        let restante = quantidade, vacinaIdUsado = vacina_id;
+        for (const row of candidatos) {
+            if (restante <= 0) break;
+            const atual = Number(row.quantidade || 0);
+            const debitar = Math.min(atual, restante);
+            const { error: upErr } = await sb.from('estoque').update({ quantidade: atual - debitar }).eq('id', row.id);
+            if (upErr) throw upErr;
+            vacinaIdUsado = row.vacina_id;
             restante -= debitar;
         }
         const { data: dests, error: destErr } = await sb.from('estoque')
-            .select('id,quantidade')
-            .eq('vacina_id', vacina_id)
-            .eq('base_id', destino_base_id)
-            .eq('localizacao_tipo', 'base')
-            .limit(1);
+            .select('id,quantidade').eq('vacina_id', vacinaIdUsado)
+            .eq('base_id', destino_base_id).eq('localizacao_tipo', 'base').limit(1);
         if (destErr) throw destErr;
         if (dests && dests[0]) {
             const { error: updDestErr } = await sb.from('estoque').update({ quantidade: Number(dests[0].quantidade || 0) + quantidade }).eq('id', dests[0].id);
             if (updDestErr) throw updDestErr;
         } else {
-            const { error: insDestErr } = await sb.from('estoque').insert({ vacina_id, base_id: destino_base_id, localizacao_tipo: 'base', quantidade });
+            const { error: insDestErr } = await sb.from('estoque').insert({ vacina_id: vacinaIdUsado, base_id: destino_base_id, localizacao_tipo: 'base', quantidade });
             if (insDestErr) throw insDestErr;
         }
-        const { error: movErr } = await sb.from('movimentacoes').insert({
-            tipo: 'transferencia', vacina_id, quantidade,
-            origem_tipo: 'base', origem_base_id,
-            destino_tipo: 'base', destino_base_id,
-            remessa_id, observacao,
-            criado_por: (user && user.id) ? user.id : null
-        });
+        const { error: movErr } = await sb.from('movimentacoes').insert({ tipo: 'transferencia', vacina_id: vacinaIdUsado, quantidade, origem_tipo: 'base', origem_base_id, destino_tipo: 'base', destino_base_id, remessa_id, observacao, criado_por: userId });
         if (movErr) throw movErr;
         return true;
     } catch (err) {
-        console.error('transferirEstoqueBaseDireto error:', err);
+        console.error('transferirEstoqueBaseDireto error:', err.message || err);
         return false;
     }
 }
@@ -12078,20 +12117,16 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
         setTimeout(() => onBack(), 1500);
     };
     const confirmarEntrega = async (remId) => {
-        var _a, _b, _c;
+        var _a, _b;
         // Buscar dados completos da remessa com itens
         const { data: rem, error: remErr } = await sb.from('remessas')
             .select('*, remessa_itens(id, vacina_id, quantidade, vacinas(nome, produto_nome)), aplicadores!remessas_destino_aplicador_id_fkey(nome, cpf)')
             .eq('id', remId).single();
-        if (remErr) {
-            toast(remErr.message, 'error');
-            return;
-        }
-        const itens = rem.remessa_itens || [];
+        if (remErr) { toast(remErr.message, 'error'); return; }
         // Resolver destino
         let destTipo = rem.destino_tipo || 'aplicador';
         let destId = destTipo === 'aplicador' ? rem.destino_aplicador_id : rem.destino_base_id;
-        // Fallback: resolver aplicador pelo CPF na observação
+        // Fallback: resolver aplicador pelo CPF na observacao
         if ((!destId || destTipo !== 'aplicador') && destTipo !== 'base' && rem.observacao) {
             const mCPF = rem.observacao.match(/CPF:\s*([0-9.\-]+)/);
             const mCPF2 = !mCPF && rem.observacao.match(/\(([^)]+)\)/);
@@ -12099,27 +12134,29 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
             if (cpfStr && !cpfStr.includes(' ')) {
                 const { data: ap } = await sb.from('aplicadores').select('id').eq('cpf', cpfStr).single();
                 if (ap) {
-                    destTipo = 'aplicador';
-                    destId = ap.id;
-                    await sb.from('remessas').update({
-                        destino_tipo: 'aplicador', destino_aplicador_id: ap.id, destino_base_id: null
-                    }).eq('id', remId);
+                    destTipo = 'aplicador'; destId = ap.id;
+                    await sb.from('remessas').update({ destino_tipo: 'aplicador', destino_aplicador_id: ap.id, destino_base_id: null }).eq('id', remId);
                 }
             }
         }
-        if (!destId) {
-            toast('Não foi possível identificar o destino. Verifique os dados da remessa.', 'error');
-            return;
-        }
+        if (!destId) { toast('Nao foi possivel identificar o destino. Verifique os dados da remessa.', 'error'); return; }
+        // PASSO 1: Marcar remessa como concluida IMEDIATAMENTE.
+        // O motorista confirmou a entrega fisica — o checkout nao pode ser bloqueado
+        // por falha de estoque. A base resolve qualquer pendencia depois.
+        const { error: updErr } = await sb.from('remessas').update({ status: 'concluida' }).eq('id', remId);
+        if (updErr) { toast(updErr.message, 'error'); return; }
+        // PASSO 2: Tentar transferencia de estoque em background (best-effort).
+        const itens = rem.remessa_itens || [];
         if (itens.length > 0) {
-            let errosTransferencia = [];
+            const errosTransferencia = [];
             for (const item of itens) {
                 const qtd = Number(item.quantidade || 0);
                 if (qtd <= 0) continue;
+                const nomeVacina = (item.vacinas && (item.vacinas.nome || item.vacinas.produto_nome)) || 'Vacina';
                 const obs = [
-                    'Entrega confirmada',
+                    'Entrega confirmada pelo motorista',
                     'Rota: ' + rota.codigo,
-                    'Remessa: ' + rem.codigo_rastreio,
+                    'Remessa: ' + (rem.codigo_rastreio || remId),
                     destTipo === 'aplicador'
                         ? 'Aplicador: ' + (((_a = rem.aplicadores) === null || _a === void 0 ? void 0 : _a.nome) || destId)
                         : 'Base destino: ' + destId,
@@ -12127,53 +12164,30 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
                 ].filter(Boolean).join(' | ');
                 let transferOk = false;
                 if (destTipo === 'aplicador') {
-                    // Entrega normal: base → aplicador
-                    transferOk = await transferirEstoqueDireto({
-                        vacina_id: item.vacina_id,
-                        quantidade: qtd,
-                        origem_base_id: rota.base_origem_id,
-                        destino_aplicador_id: destId,
-                        remessa_id: remId,
-                        observacao: obs
-                    });
+                    transferOk = await transferirEstoqueDireto({ vacina_id: item.vacina_id, quantidade: qtd, origem_base_id: rota.base_origem_id, destino_aplicador_id: destId, remessa_id: remId, observacao: obs });
                 } else if (destTipo === 'base') {
-                    // Entrega para clínica/base: base origem → base destino, debitando a origem e creditando o destino.
-                    transferOk = await transferirEstoqueBaseDireto({
-                        vacina_id: item.vacina_id,
-                        quantidade: qtd,
-                        origem_base_id: rota.base_origem_id,
-                        destino_base_id: destId,
-                        remessa_id: remId,
-                        observacao: obs
-                    });
+                    transferOk = await transferirEstoqueBaseDireto({ vacina_id: item.vacina_id, quantidade: qtd, origem_base_id: rota.base_origem_id, destino_base_id: destId, remessa_id: remId, observacao: obs });
                 }
-                if (!transferOk) {
-                    errosTransferencia.push(((_c = item.vacinas) === null || _c === void 0 ? void 0 : _c.nome) || 'Vacina');
-                }
+                if (!transferOk) errosTransferencia.push(nomeVacina);
             }
             if (errosTransferencia.length > 0) {
-                toast('❌ Entrega NÃO concluída. Falha ao transferir: ' + errosTransferencia.join(', '), 'error');
-                return;
+                // Flag na observacao para a base identificar e corrigir o estoque
+                const flagPendente = '\n[TRANSFERENCIA_PENDENTE] Vacinas: ' + errosTransferencia.join(', ') + ' - ajuste de estoque necessario na base.';
+                await sb.from('remessas').update({ observacao: (rem.observacao || '') + flagPendente }).eq('id', remId);
+                toast('Entrega registrada! Estoque de ' + errosTransferencia.join(', ') + ' ficou pendente — a base ira corrigir.', 'warning');
+            } else {
+                toast('Entrega confirmada e estoque transferido!', 'success');
             }
-            toast(destTipo === 'base' ? 'Transferência entre bases concluída ✓' : 'Estoque transferido ✓', 'success');
+        } else {
+            toast('Entrega confirmada!', 'success');
         }
-        else {
-            toast('Remessa sem itens — entrega confirmada sem movimentação de estoque', 'info');
-        }
-        // Marcar remessa como concluída
-        const { error } = await sb.from('remessas').update({ status: 'concluida' }).eq('id', remId);
-        if (error) {
-            toast(error.message, 'error');
-            return;
-        }
-        // Atualizar status_logistica das tarefas vinculadas para 'entregue'
+        // PASSO 3: Atualizar status logistico das tarefas
         await atualizarStatusLogisticaRemessa(rem, destId);
-        toast('Entrega confirmada! ✓', 'success');
         load();
         const { data } = await sb.from('remessas').select('status').eq('rota_id', rota.id);
         const allDone = (data || []).every(r => ['concluida', 'cancelada'].includes(r.status));
         if (allDone)
-            toast('Todas as entregas feitas! Faça o check-out quando chegar na empresa.', 'success');
+            toast('Todas as entregas concluidas! Faca o check-out quando chegar na empresa.', 'success');
     };
     // Atualizar status_logistica das tarefas vinculadas à remessa
     const atualizarStatusLogisticaRemessa = async (rem, aplicadorId) => {
