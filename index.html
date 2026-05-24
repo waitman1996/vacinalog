@@ -12710,6 +12710,7 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
         // VD: detectar pelo prefixo ANTES do check de destId
         // Remessas VD antigas podem ter destino_base_id=null — isso é esperado
         const isVDEntrega = (rem.observacao || '').startsWith('VD:');
+        let _estoquesPendentes = [];
         if (!destId && !isVDEntrega) {
             toast('Não foi possível identificar o destino. Verifique os dados da remessa.', 'error');
             return;
@@ -12751,7 +12752,7 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
             } else {
                 toast(isVDEntrega ? '✓ Venda entregue e estoque debitado!' : (destTipo === 'base' ? '✓ Entrega clínica concluída!' : '✓ Estoque transferido!'), 'success');
             }
-            const _estoquesPendentes = errosTransferencia;
+            _estoquesPendentes = errosTransferencia;
         } else {
             toast('✓ Entrega confirmada (sem itens de estoque)', 'info');
         }
