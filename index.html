@@ -9257,11 +9257,10 @@ function RotasListPage({ onOpenRoteirizacao }) {
             }).filter(Boolean);
             const vdMap = {};
             if (vdIds.length) {
-                const { data: vdsData } = await sb.from('vendas_diretas')
+                const vdRes = await sb.from('vendas_diretas')
                     .select('id,codigo,cliente,cidade,uf,rua,numero,bairro,cep,cnpj,telefone,endereco')
-                    .in('id', vdIds)
-                    .catch(() => ({data:[]}));
-                (vdsData||[]).forEach(v => { vdMap[v.id] = v; });
+                    .in('id', vdIds);
+                ((vdRes && vdRes.data)||[]).forEach(v => { vdMap[v.id] = v; });
             }
             // Buscar rota de coleta vinculada (se existir)
             const { data: rotaColeta } = await sb.from('rotas')
