@@ -12529,6 +12529,7 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
     const [assinaturaModal, setAssinaturaModal] = useState(null);
     const [assinaturaColetaModal, setAssinaturaColetaModal] = useState(null); // para coleta
     const [entregaDetalhe, setEntregaDetalhe] = useState(null);
+    const [substituirModal, setSubstituirModal] = useState(null); // remessa a ter destino substituído
     const [rotaColeta, setRotaColeta] = useState(null); // rota de coleta vinculada
     const [remessasColeta, setRemessasColeta] = useState([]);
     const [gpsAtivo, setGpsAtivo] = useState(false);
@@ -12771,6 +12772,22 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
                 toast('Estoque de ' + _estoquesPendentes.join(', ') + ' ficou pendente — ajuste em Estoque > Base.', 'info');
             }, 1500);
         }
+    };
+    const substituirDestino = async (remId, novoTipo, novoId, novoNome) => {
+        const campos = novoTipo === 'aplicador'
+            ? { destino_tipo: 'aplicador', destino_aplicador_id: novoId, destino_base_id: null }
+            : { destino_tipo: 'base', destino_base_id: novoId, destino_aplicador_id: null };
+        const obs = '\n[SUBSTITUIÇÃO ' + new Date().toLocaleTimeString('pt-BR') + '] Destino alterado para: ' + novoNome + ' (' + novoTipo + ')';
+        const { error } = await sb.from('remessas')
+            .update({ ...campos, observacao: sb.rpc ? undefined : undefined })
+            .eq('id', remId);
+        // Update observacao separately to append
+        const { data: remAtual } = await sb.from('remessas').select('observacao').eq('id', remId).single();
+        await sb.from('remessas').update({ ...campos, observacao: ((remAtual && remAtual.observacao) || '') + obs }).eq('id', remId);
+        if (error) { toast('Erro ao substituir: ' + error.message, 'error'); return; }
+        toast('✓ Destino substituído para ' + novoNome, 'success');
+        setSubstituirModal(null);
+        load();
     };
     // Atualizar status_logistica das tarefas vinculadas à remessa
     const atualizarStatusLogisticaRemessa = async (rem, aplicadorId) => {
@@ -13019,6 +13036,7 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
                         }))),
                         !isConcluida && !isCancelada && rota.status === 'em_transito' && (React.createElement("div", { style: { display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 4 } },
                             React.createElement("button", { className: "btn btn-success btn-sm", onClick: () => setAssinaturaModal(rem) }, "\u2713 Confirmar Entrega"),
+                            React.createElement("button", { className: "btn btn-secondary btn-sm", style: { borderColor: 'var(--warning)', color: 'var(--warning)' }, onClick: () => setSubstituirModal(rem) }, "\uD83D\uDD04 Substituir"),
                             React.createElement("button", { className: "btn btn-secondary btn-sm", onClick: () => {
                                     const p = prompt('Descreva o problema:');
                                     if (p)
@@ -13030,6 +13048,11 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
                         rem.observacao && rem.observacao.includes('[PROBLEMA') && (React.createElement("div", { style: { marginTop: 8, padding: '6px 10px', background: 'var(--danger-bg)', borderRadius: 'var(--radius-sm)', fontSize: 11, color: 'var(--danger)' } }, rem.observacao.split('\n').filter(l => l.includes('[PROBLEMA')).join(' | ')))))));
         })),
         entregaDetalhe && (React.createElement(EntregaDetalheModal, { remessa: entregaDetalhe, rota: rota, onClose: () => setEntregaDetalhe(null) })),
+        substituirModal && React.createElement(SubstituirDestinoModal, {
+            remessa: substituirModal,
+            onConfirm: substituirDestino,
+            onClose: () => setSubstituirModal(null)
+        }),
         assinaturaModal && (React.createElement(AssinaturaEntregaModal, { remessa: assinaturaModal, rota: rota, onConfirm: async (remId) => { setAssinaturaModal(null); await confirmarEntrega(remId); }, onClose: () => setAssinaturaModal(null) })),
         assinaturaColetaModal && (React.createElement(AssinaturaColetaModal, { remessa: assinaturaColetaModal, rota: rotaColeta, onConfirm: async (remId, qtdDevolvida, sigInfo) => {
                 setAssinaturaColetaModal(null);
@@ -13095,6 +13118,102 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
             })))),
         checkoutModal && (React.createElement(CheckoutModal, { rota: rota, entregues: entregues, total: remessas.length, onClose: () => setCheckoutModal(false), onConfirm: fazerCheckout }))));
 }
+function SubstituirDestinoModal({ remessa, onConfirm, onClose }) {
+    const [tipo, setTipo] = React.useState('aplicador'); // 'aplicador' | 'clinica'
+    const [busca, setBusca] = React.useState('');
+    const [resultados, setResultados] = React.useState([]);
+    const [selecionado, setSelecionado] = React.useState(null);
+    const [buscando, setBuscando] = React.useState(false);
+    const [salvando, setSalvando] = React.useState(false);
+    const toast = React.useContext(ToastContext);
+    const doses = (remessa.remessa_itens || []).reduce((s, i) => s + i.quantidade, 0);
+    const buscar = async (termo, t) => {
+        if (!termo || termo.length < 2) { setResultados([]); return; }
+        setBuscando(true);
+        if (t === 'aplicador') {
+            const { data } = await sb.from('aplicadores')
+                .select('id, nome, cpf, cidade, uf')
+                .or('nome.ilike.%' + termo + '%,cpf.ilike.%' + termo + '%')
+                .eq('ativo', true).limit(8);
+            setResultados(data || []);
+        } else {
+            const { data } = await sb.from('bases')
+                .select('id, nome, cidade, uf')
+                .ilike('nome', '%' + termo + '%')
+                .eq('ativa', true).limit(8);
+            setResultados(data || []);
+        }
+        setBuscando(false);
+    };
+    React.useEffect(() => {
+        const t = setTimeout(() => buscar(busca, tipo), 350);
+        return () => clearTimeout(t);
+    }, [busca, tipo]);
+    const confirmar = async () => {
+        if (!selecionado) { toast('Selecione o novo destino', 'error'); return; }
+        setSalvando(true);
+        await onConfirm(remessa.id, tipo, selecionado.id, selecionado.nome);
+        setSalvando(false);
+    };
+    const nomeAtual = (() => {
+        const obs = remessa.observacao || '';
+        if (obs.startsWith('VD:')) return (obs.split('|')[1] || '').trim() || 'VD';
+        if (remessa.destino_tipo === 'aplicador') return (remessa.aplicadores && remessa.aplicadores.nome) || '—';
+        return (remessa.bases && remessa.bases.nome) || '—';
+    })();
+    return React.createElement(Modal, { title: "\uD83D\uDD04 Substituir Destino da Entrega", onClose: onClose, large: false },
+        React.createElement("div", { style: { display: 'flex', flexDirection: 'column', gap: 14 } },
+            React.createElement("div", { style: { background: 'var(--bg-input)', borderRadius: 'var(--radius-sm)', padding: '10px 14px', fontSize: 13 } },
+                React.createElement("div", { style: { color: 'var(--text-muted)', marginBottom: 4 } }, "Remessa: ",
+                    React.createElement("span", { style: { fontFamily: 'JetBrains Mono', color: 'var(--accent)', fontWeight: 600 } }, remessa.codigo_rastreio)),
+                React.createElement("div", null, "Destino atual: ", React.createElement("strong", null, nomeAtual)),
+                React.createElement("div", null, "Doses: ", React.createElement("strong", { style: { color: 'var(--success)' } }, doses))),
+            React.createElement("div", { style: { display: 'flex', gap: 8 } },
+                React.createElement("button", {
+                    className: tipo === 'aplicador' ? 'btn btn-primary btn-sm' : 'btn btn-secondary btn-sm',
+                    style: { flex: 1 }, onClick: () => { setTipo('aplicador'); setBusca(''); setResultados([]); setSelecionado(null); }
+                }, "\uD83D\uDC64 Aplicador"),
+                React.createElement("button", {
+                    className: tipo === 'clinica' ? 'btn btn-primary btn-sm' : 'btn btn-secondary btn-sm',
+                    style: { flex: 1 }, onClick: () => { setTipo('clinica'); setBusca(''); setResultados([]); setSelecionado(null); }
+                }, "\uD83C\uDFE5 Clínica Parceira")),
+            React.createElement("div", null,
+                React.createElement("label", { className: "form-label" }, tipo === 'aplicador' ? "Buscar aplicador (nome ou CPF)" : "Buscar clínica"),
+                React.createElement("input", {
+                    className: "form-input",
+                    placeholder: tipo === 'aplicador' ? "Digite o nome ou CPF..." : "Digite o nome da clínica...",
+                    value: busca,
+                    onChange: e => { setBusca(e.target.value); setSelecionado(null); },
+                    autoFocus: true
+                }),
+                buscando && React.createElement("div", { style: { fontSize: 11, color: 'var(--text-muted)', marginTop: 4 } }, "Buscando..."),
+                resultados.length > 0 && !selecionado && React.createElement("div", {
+                    style: { border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', marginTop: 4, maxHeight: 200, overflow: 'auto', background: 'var(--bg-card)' }
+                }, resultados.map(r => React.createElement("div", {
+                    key: r.id,
+                    style: { padding: '8px 12px', cursor: 'pointer', borderBottom: '1px solid var(--border)', fontSize: 13 },
+                    onMouseDown: e => { e.preventDefault(); setSelecionado(r); setBusca(r.nome); setResultados([]); }
+                },
+                    React.createElement("div", { style: { fontWeight: 600 } }, r.nome),
+                    React.createElement("div", { style: { fontSize: 11, color: 'var(--text-muted)' } },
+                        tipo === 'aplicador' ? ('CPF: ' + (r.cpf || '—')) : '',
+                        ' ', (r.cidade || ''), r.uf ? '/' + r.uf : '')))),
+                selecionado && React.createElement("div", {
+                    style: { marginTop: 8, padding: '8px 12px', background: 'var(--success-bg)', border: '1px solid rgba(16,185,129,0.3)', borderRadius: 'var(--radius-sm)', fontSize: 13 }
+                },
+                    React.createElement("div", { style: { fontWeight: 600, color: 'var(--success)' } }, "✓ " + selecionado.nome),
+                    React.createElement("div", { style: { fontSize: 11, color: 'var(--text-muted)' } },
+                        tipo === 'aplicador' ? ('CPF: ' + (selecionado.cpf || '—')) : (selecionado.cidade || ''),
+                        selecionado.uf ? '/' + selecionado.uf : ''))),
+            React.createElement("div", { style: { display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 4 } },
+                React.createElement("button", { className: "btn btn-secondary", onClick: onClose }, "Cancelar"),
+                React.createElement("button", {
+                    className: "btn btn-primary",
+                    disabled: !selecionado || salvando,
+                    onClick: confirmar
+                }, salvando ? 'Salvando...' : 'Confirmar Substituição'))));
+}
+
 function CheckoutModal({ rota, entregues, total, onClose, onConfirm }) {
     const [obs, setObs] = useState('');
     const [saving, setSaving] = useState(false);
