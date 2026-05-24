@@ -11960,10 +11960,10 @@ async function debitarBasePorVacina({ vacina_id, quantidade, base_id, remessa_id
             origem_tipo: 'base', origem_base_id: base_id,
             remessa_id, observacao, criado_por: userId
         }).then(()=>{}).catch(() => {});
-        return true;
+        return { ok: true };
     } catch(err) {
         console.error('debitarBasePorVacina error:', err.message || err);
-        return false;
+        return { ok: false, erro: err.message || String(err) };
     }
 }
 async function transferirEstoqueDireto({ vacina_id, quantidade, origem_base_id, destino_aplicador_id, remessa_id, observacao }) {
@@ -12727,25 +12727,30 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
                     isVDEntrega ? 'VD Entrega' : (destTipo === 'aplicador' ? 'Aplicador: ' + (((_b = rem.aplicadores) === null || _b === void 0 ? void 0 : _b.nome) || destId) : 'Base: ' + destId),
                     nomeVacina ? 'Vacina: ' + nomeVacina : null].filter(Boolean).join(' | ');
                 let transferOk = false;
+                let erroDetalhe = '';
                 if (isVDEntrega) {
-                    // rota.base_origem_id deve estar preenchido - logar se null
                     const baseIdParaDebito = rota.base_origem_id || rotaInit.base_origem_id;
-                    if (!baseIdParaDebito) console.error('[VacinaLog] base_origem_id NULL na rota:', rota.id, rota.codigo);
-                    transferOk = await debitarBasePorVacina({ vacina_id: item.vacina_id, quantidade: qtd, base_id: baseIdParaDebito, remessa_id: remId, observacao: obs });
+                    if (!baseIdParaDebito) { erroDetalhe = 'base_origem_id não encontrado na rota'; }
+                    else {
+                        const res = await debitarBasePorVacina({ vacina_id: item.vacina_id, quantidade: qtd, base_id: baseIdParaDebito, remessa_id: remId, observacao: obs });
+                        transferOk = res && res.ok;
+                        erroDetalhe = (res && res.erro) || '';
+                    }
                 } else if (destTipo === 'aplicador') {
                     transferOk = await transferirEstoqueDireto({ vacina_id: item.vacina_id, quantidade: qtd, origem_base_id: rota.base_origem_id, destino_aplicador_id: destId, remessa_id: remId, observacao: obs });
                 } else if (destTipo === 'base') {
                     transferOk = await transferirEstoqueBaseDireto({ vacina_id: item.vacina_id, quantidade: qtd, origem_base_id: rota.base_origem_id, destino_base_id: destId, remessa_id: remId, observacao: obs });
                 }
-                if (!transferOk) errosTransferencia.push(nomeVacina);
+                if (!transferOk) errosTransferencia.push(nomeVacina + (erroDetalhe ? ' (' + erroDetalhe + ')' : ''));
             }
             if (errosTransferencia.length > 0) {
                 const flagPendente = '\n[ESTOQUE_PENDENTE] ' + errosTransferencia.join(', ') + ' — ajuste necessário na base.';
                 await sb.from('remessas').update({ observacao: (rem.observacao || '') + flagPendente }).eq('id', remId);
-                toast('⚠️ Entrega registrada! Estoque de ' + errosTransferencia.join(', ') + ' ficou pendente — ajuste em Estoque > Base.', 'warning');
+                // Não mostrar aviso aqui - vai aparecer depois do allDone para não confundir
             } else {
                 toast(isVDEntrega ? '✓ Venda entregue e estoque debitado!' : (destTipo === 'base' ? '✓ Entrega clínica concluída!' : '✓ Estoque transferido!'), 'success');
             }
+            const _estoquesPendentes = errosTransferencia;
         } else {
             toast('✓ Entrega confirmada (sem itens de estoque)', 'info');
         }
@@ -12760,6 +12765,12 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
         const { data } = await sb.from('remessas').select('status').eq('rota_id', rota.id);
         const allDone = (data || []).every(r => ['concluida', 'cancelada'].includes(r.status));
         if (allDone) toast('🏁 Todas as entregas concluídas! Faça o check-out.', 'success');
+        // Mostrar aviso de estoque pendente por último (informativo, não bloqueia)
+        if (_estoquesPendentes && _estoquesPendentes.length > 0) {
+            setTimeout(function() {
+                toast('Estoque de ' + _estoquesPendentes.join(', ') + ' ficou pendente — ajuste em Estoque > Base.', 'info');
+            }, 1500);
+        }
     };
     // Atualizar status_logistica das tarefas vinculadas à remessa
     const atualizarStatusLogisticaRemessa = async (rem, aplicadorId) => {
