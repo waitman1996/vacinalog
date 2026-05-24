@@ -11917,7 +11917,11 @@ function MotoristaPage() {
 async function debitarBasePorVacina({ vacina_id, quantidade, base_id, remessa_id, observacao }) {
     try {
         quantidade = Number(quantidade || 0);
-        if (!vacina_id || !base_id || quantidade <= 0) return false;
+        if (!vacina_id || quantidade <= 0) return false;
+        if (!base_id) {
+            console.error('[VacinaLog] debitarBasePorVacina: base_id é null/undefined');
+            throw new Error('Base de origem não identificada. Verifique se a rota tem base de origem definida.');
+        }
         const { data: { user } } = await sb.auth.getUser();
         const userId = user && user.id ? user.id : null;
         // Buscar estoque por vacina_id ou produto_nome
@@ -12538,7 +12542,7 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
                 .select('*, remessa_itens(quantidade, vacinas(nome)), bases(nome,cidade,uf), aplicadores!remessas_destino_aplicador_id_fkey(nome,cpf,cidade,uf,endereco)')
                 .eq('rota_id', rota.id).order('ordem_entrega'),
             sb.from('rotas')
-                .select('*, bases!rotas_base_origem_id_fkey(nome), profiles!rotas_motorista_id_fkey(nome)')
+                .select('id,codigo,status,tipo,base_origem_id,veiculo,data_prevista,checkin_at,checkin_lat,checkin_lng,checkout_at,checkout_obs,current_lat,current_lng,bases!rotas_base_origem_id_fkey(nome,cidade,uf), profiles!rotas_motorista_id_fkey(nome)')
                 .eq('id', rota.id).single()
         ]);
         setRemessas(remRes.data || []);
@@ -12723,7 +12727,10 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
                     nomeVacina ? 'Vacina: ' + nomeVacina : null].filter(Boolean).join(' | ');
                 let transferOk = false;
                 if (isVDEntrega) {
-                    transferOk = await debitarBasePorVacina({ vacina_id: item.vacina_id, quantidade: qtd, base_id: rota.base_origem_id, remessa_id: remId, observacao: obs });
+                    // rota.base_origem_id deve estar preenchido - logar se null
+                    const baseIdParaDebito = rota.base_origem_id || rotaInit.base_origem_id;
+                    if (!baseIdParaDebito) console.error('[VacinaLog] base_origem_id NULL na rota:', rota.id, rota.codigo);
+                    transferOk = await debitarBasePorVacina({ vacina_id: item.vacina_id, quantidade: qtd, base_id: baseIdParaDebito, remessa_id: remId, observacao: obs });
                 } else if (destTipo === 'aplicador') {
                     transferOk = await transferirEstoqueDireto({ vacina_id: item.vacina_id, quantidade: qtd, origem_base_id: rota.base_origem_id, destino_aplicador_id: destId, remessa_id: remId, observacao: obs });
                 } else if (destTipo === 'base') {
