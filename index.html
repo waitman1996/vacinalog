@@ -11337,7 +11337,15 @@ function MontagemPage() {
                         React.createElement("button", { className: "btn btn-secondary btn-sm", onClick: () => imprimirRecibo(rem) }, "\uD83D\uDCCB Recibo"),
                         !isPronta && React.createElement("button", { className: "btn btn-success btn-sm", onClick: () => marcarPronta(rem) }, "\u2713 Marcar Pronta"),
                         isPronta && React.createElement("button", { className: "btn btn-secondary btn-sm", onClick: () => marcarMontagem(rem.id) }, "\u21A9 Reabrir"))),
-                rem.observacao && (React.createElement("div", { style: { fontSize: 11, color: 'var(--text-muted)', background: 'var(--bg-input)', padding: '6px 10px', borderRadius: 'var(--radius-sm)', marginBottom: 10, borderLeft: '3px solid var(--border)' } }, rem.observacao)),
+                rem.observacao && (() => {
+                    // Mostrar apenas a primeira linha da observação (sem base64 de assinatura)
+                    const obsLimpa = (rem.observacao || '').split('\n')[0].split('[ASSINATURA')[0].trim();
+                    const isVDObs = obsLimpa.startsWith('VD:');
+                    const obsExibir = isVDObs
+                        ? (() => { const p = obsLimpa.split('|'); return '🛒 VD: ' + (p[1]||'').trim() + (p[4] ? ' · ' + (p[4]||'').trim() : ''); })()
+                        : obsLimpa;
+                    return obsExibir ? React.createElement("div", { style: { fontSize: 11, color: 'var(--text-muted)', background: 'var(--bg-input)', padding: '6px 10px', borderRadius: 'var(--radius-sm)', marginBottom: 10, borderLeft: '3px solid var(--border)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, obsExibir) : null;
+                })(),
                 React.createElement("div", { style: { marginBottom: 10 } }, (rem.remessa_itens || []).length === 0 ? (React.createElement("div", { style: { fontSize: 12, color: 'var(--text-muted)', fontStyle: 'italic' } }, "Nenhum item adicionado ainda")) : (React.createElement("table", { style: { width: '100%', borderCollapse: 'collapse' } },
                     React.createElement("thead", null,
                         React.createElement("tr", null,
@@ -12316,8 +12324,8 @@ function AssinaturaColetaModal({ remessa, rota, onConfirm, onClose }) {
                     React.createElement("label", { className: "form-label" }, "Nome do Aplicador *"),
                     React.createElement("input", { className: "form-input", value: nome, onChange: e => setNome(e.target.value), placeholder: "Nome completo" })),
                 React.createElement("div", { className: "form-group" },
-                    React.createElement("label", { className: "form-label" }, "CPF"),
-                    React.createElement("input", { className: "form-input", value: cpf, onChange: e => setCpf(e.target.value), placeholder: "000.000.000-00" }))),
+                    React.createElement("label", { className: "form-label" }, isVDRemModal ? "CNPJ" : "CPF"),
+                    React.createElement("input", { className: "form-input", value: cpf, onChange: e => setCpf(e.target.value), placeholder: isVDRemModal ? "00.000.000/0001-00" : "000.000.000-00" }))),
             React.createElement("div", { style: { background: 'var(--bg-input)', borderRadius: 'var(--radius-sm)', padding: '12px 16px', border: '2px solid rgba(245,158,11,0.4)' } },
                 React.createElement("div", { style: { fontSize: 12, fontWeight: 700, color: '#b45309', marginBottom: 8 } }, "Quantidade real devolvida"),
                 React.createElement("div", { style: { display: 'flex', alignItems: 'center', gap: 12 } },
@@ -12348,22 +12356,30 @@ function AssinaturaEntregaModal({ remessa, rota, onConfirm, onClose }) {
     const [nome, setNome] = React.useState('');
     const [cpf, setCpf] = React.useState('');
     const [saving, setSaving] = React.useState(false);
-    // Pré-preencher nome e CPF do aplicador
+    // Pré-preencher nome e CPF — para VD extrair da observação (campo 1 = nome do cliente)
     React.useEffect(() => {
         var _a, _b, _c;
-        const n = remessa.destino_tipo === 'aplicador' ? (_a = remessa.aplicadores) === null || _a === void 0 ? void 0 : _a.nome : (_b = remessa.bases) === null || _b === void 0 ? void 0 : _b.nome;
-        const c = remessa.destino_tipo === 'aplicador' ? (_c = remessa.aplicadores) === null || _c === void 0 ? void 0 : _c.cpf : '';
-        // Fallback: extrair da observação
-        let nomeF = n || '';
-        let cpfF = c || '';
-        if (!nomeF) {
-            const obs = remessa.observacao || '';
-            const mN = obs.match(/^([^(|]+)/);
-            const mC = obs.match(/\(([^)]+)\)/);
-            if (mN)
-                nomeF = mN[1].trim();
-            if (mC)
-                cpfF = mC[1].trim();
+        const obs = remessa.observacao || '';
+        const isVD = obs.startsWith('VD:');
+        let nomeF = '';
+        let cpfF = '';
+        if (isVD) {
+            // Formato: "VD: uuid | Nome do Cliente | doses | Vacina | Cidade/UF"
+            const parts = obs.split('|');
+            nomeF = (parts[1] || '').trim() || 'Cliente VD';
+            // CNPJ pode estar no nome — deixar campo em branco para preenchimento manual
+            cpfF = '';
+        } else {
+            const n = remessa.destino_tipo === 'aplicador' ? (_a = remessa.aplicadores) === null || _a === void 0 ? void 0 : _a.nome : (_b = remessa.bases) === null || _b === void 0 ? void 0 : _b.nome;
+            const c = remessa.destino_tipo === 'aplicador' ? (_c = remessa.aplicadores) === null || _c === void 0 ? void 0 : _c.cpf : '';
+            nomeF = n || '';
+            cpfF = c || '';
+            if (!nomeF) {
+                const mN = obs.match(/^([^(|]+)/);
+                const mC = obs.match(/\(([^)]+)\)/);
+                if (mN) nomeF = mN[1].trim();
+                if (mC) cpfF = mC[1].trim();
+            }
         }
         setNome(nomeF);
         setCpf(cpfF);
@@ -12447,7 +12463,10 @@ function AssinaturaEntregaModal({ remessa, rota, onConfirm, onClose }) {
         await onConfirm(remessa.id);
         setSaving(false);
     };
-    const destNome = remessa.destino_tipo === 'aplicador' ? (_a = remessa.aplicadores) === null || _a === void 0 ? void 0 : _a.nome : (_b = remessa.bases) === null || _b === void 0 ? void 0 : _b.nome;
+    const isVDRemModal = (remessa.observacao || '').startsWith('VD:');
+    const destNomeModal = isVDRemModal
+        ? ((remessa.observacao || '').split('|')[1] || '').trim() || 'Cliente VD'
+        : (remessa.destino_tipo === 'aplicador' ? (_a = remessa.aplicadores) === null || _a === void 0 ? void 0 : _a.nome : (_b = remessa.bases) === null || _b === void 0 ? void 0 : _b.nome);
     const doses = (remessa.remessa_itens || []).reduce((s, i) => s + i.quantidade, 0);
     return (React.createElement(Modal, { title: "Confirmar Entrega \u2014 Assinatura", onClose: onClose, large: true },
         React.createElement("div", { style: { display: 'flex', flexDirection: 'column', gap: 14 } },
@@ -12457,9 +12476,9 @@ function AssinaturaEntregaModal({ remessa, rota, onConfirm, onClose }) {
                     React.createElement("span", { style: { color: 'var(--accent)', fontFamily: 'JetBrains Mono' } }, remessa.codigo_rastreio)),
                 React.createElement("div", { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, fontSize: 12 } },
                     React.createElement("div", null,
-                        React.createElement("span", { style: { color: 'var(--text-muted)' } }, "Aplicador:"),
+                        React.createElement("span", { style: { color: 'var(--text-muted)' } }, isVDRemModal ? "Cliente VD:" : "Aplicador:"),
                         " ",
-                        React.createElement("strong", null, destNome || nome || '—')),
+                        React.createElement("strong", null, destNomeModal || nome || '—')),
                     React.createElement("div", null,
                         React.createElement("span", { style: { color: 'var(--text-muted)' } }, "Doses:"),
                         " ",
@@ -12922,9 +12941,10 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
             let endExibir = destEnd;
             if (isVDRemMotorista) {
                 // VD: pegar nome do campo 1 da obs (após o uuid)
-                const partsVD = (rem.observacao || '').split('|');
+                // Limpar obs antes de fazer split (remover assinatura/base64 que pode ter sido adicionado)
+                const obsVDLimpa = (rem.observacao || '').split('\n')[0].split('[ASSINATURA')[0];
+                const partsVD = obsVDLimpa.split('|');
                 nomeExibir = (partsVD[1] || '').trim() || 'Venda Direta';
-                const locVD = (partsVD[4] || '').split('/');
                 endExibir = (partsVD[4] || '').trim() || null;
             } else if (!nomeExibir || nomeExibir === ((_j = rota.bases) === null || _j === void 0 ? void 0 : _j.nome)) {
                 const obs = rem.observacao || '';
