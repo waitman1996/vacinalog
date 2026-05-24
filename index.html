@@ -12706,12 +12706,13 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
                 }
             }
         }
-        if (!destId) {
+        // VD: detectar pelo prefixo ANTES do check de destId
+        // Remessas VD antigas podem ter destino_base_id=null — isso é esperado
+        const isVDEntrega = (rem.observacao || '').startsWith('VD:');
+        if (!destId && !isVDEntrega) {
             toast('Não foi possível identificar o destino. Verifique os dados da remessa.', 'error');
             return;
         }
-        // VD: detectar pelo prefixo da observacao
-        const isVDEntrega = (rem.observacao || '').startsWith('VD:');
         // PASSO 1: Marcar como concluída IMEDIATAMENTE (não bloquear pelo estoque)
         const { error: updErr } = await sb.from('remessas').update({ status: 'concluida' }).eq('id', remId);
         if (updErr) { toast(updErr.message, 'error'); return; }
@@ -12937,9 +12938,12 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
             // VD: extrair nome do cliente da observação "VD: uuid | Cliente | ..."
             const isVDRemMotorista = (rem.observacao || '').startsWith('VD:');
             const destNome = rem.destino_tipo === 'base' ? (_a = rem.bases) === null || _a === void 0 ? void 0 : _a.nome : (_b = rem.aplicadores) === null || _b === void 0 ? void 0 : _b.nome;
-            const destCidade = rem.destino_tipo === 'base'
-                ? (((_c = rem.bases) === null || _c === void 0 ? void 0 : _c.cidade) || '') + '/' + (((_d = rem.bases) === null || _d === void 0 ? void 0 : _d.uf) || '')
-                : (((_e = rem.aplicadores) === null || _e === void 0 ? void 0 : _e.cidade) || '') + '/' + (((_f = rem.aplicadores) === null || _f === void 0 ? void 0 : _f.uf) || '');
+            const destCidadeRaw = isVDRemMotorista
+                ? endExibir || ''
+                : (rem.destino_tipo === 'base'
+                    ? (((_c = rem.bases) === null || _c === void 0 ? void 0 : _c.cidade) || '') + ((_d = rem.bases) === null || _d === void 0 ? void 0 : _d.uf ? '/' + rem.bases.uf : '')
+                    : (((_e = rem.aplicadores) === null || _e === void 0 ? void 0 : _e.cidade) || '') + ((_f = rem.aplicadores) === null || _f === void 0 ? void 0 : _f.uf ? '/' + rem.aplicadores.uf : ''));
+            const destCidade = destCidadeRaw;
             const destCPF = rem.destino_tipo === 'aplicador' ? (_g = rem.aplicadores) === null || _g === void 0 ? void 0 : _g.cpf : null;
             const destEnd = rem.destino_tipo === 'aplicador' ? (_h = rem.aplicadores) === null || _h === void 0 ? void 0 : _h.endereco : null;
             const doses = (rem.remessa_itens || []).reduce((s, i) => s + i.quantidade, 0);
@@ -12952,7 +12956,8 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
                 const obsVDLimpa = (rem.observacao || '').split('\n')[0].split('[ASSINATURA')[0];
                 const partsVD = obsVDLimpa.split('|');
                 nomeExibir = (partsVD[1] || '').trim() || 'Venda Direta';
-                endExibir = (partsVD[4] || '').trim() || null;
+                const cidadeUF = (partsVD[4] || '').trim();
+                endExibir = cidadeUF && cidadeUF !== '/' ? cidadeUF : null;
             } else if (!nomeExibir || nomeExibir === ((_j = rota.bases) === null || _j === void 0 ? void 0 : _j.nome)) {
                 const obs = rem.observacao || '';
                 const mNome = obs.match(/^([^(|]+)/);
