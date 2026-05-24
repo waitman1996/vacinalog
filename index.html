@@ -12766,13 +12766,11 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
         load();
         const { data } = await sb.from('remessas').select('status').eq('rota_id', rota.id);
         const allDone = (data || []).every(r => ['concluida', 'cancelada'].includes(r.status));
-        if (allDone) toast('🏁 Todas as entregas concluídas! Faça o check-out.', 'success');
-        // Mostrar aviso de estoque pendente por último (informativo, não bloqueia)
+        // Mostrar aviso de estoque pendente ANTES do allDone (sem setTimeout)
         if (_estoquesPendentes && _estoquesPendentes.length > 0) {
-            setTimeout(function() {
-                toast('Estoque de ' + _estoquesPendentes.join(', ') + ' ficou pendente — ajuste em Estoque > Base.', 'info');
-            }, 1500);
+            toast('Estoque de ' + _estoquesPendentes.join(', ') + ' ficou pendente — ajuste em Estoque > Base.', 'info');
         }
+        if (allDone) toast('🏁 Todas as entregas concluídas! Faça o check-out.', 'success');
     };
     const substituirDestino = async (remId, novoTipo, novoId, novoNome) => {
         const campos = novoTipo === 'aplicador'
