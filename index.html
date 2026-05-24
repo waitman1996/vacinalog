@@ -11928,8 +11928,7 @@ async function debitarBasePorVacina({ vacina_id, quantidade, base_id, remessa_id
         const produtoRef = (vacinaRef && (vacinaRef.produto_nome || vacinaRef.nome) || '').trim();
         const { data: rows, error: estErr } = await sb.from('estoque')
             .select('id, quantidade, vacina_id, vacinas(nome, produto_nome)')
-            .eq('base_id', base_id).eq('localizacao_tipo', 'base').gt('quantidade', 0)
-            .order('created_at', { ascending: true });
+            .eq('base_id', base_id).eq('localizacao_tipo', 'base').gt('quantidade', 0);
         if (estErr) throw estErr;
         let candidatos = (rows || []).filter(e => String(e.vacina_id) === String(vacina_id));
         if (!candidatos.length && produtoRef) {
