@@ -12938,12 +12938,6 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
             // VD: extrair nome do cliente da observação "VD: uuid | Cliente | ..."
             const isVDRemMotorista = (rem.observacao || '').startsWith('VD:');
             const destNome = rem.destino_tipo === 'base' ? (_a = rem.bases) === null || _a === void 0 ? void 0 : _a.nome : (_b = rem.aplicadores) === null || _b === void 0 ? void 0 : _b.nome;
-            const destCidadeRaw = isVDRemMotorista
-                ? endExibir || ''
-                : (rem.destino_tipo === 'base'
-                    ? (((_c = rem.bases) === null || _c === void 0 ? void 0 : _c.cidade) || '') + ((_d = rem.bases) === null || _d === void 0 ? void 0 : _d.uf ? '/' + rem.bases.uf : '')
-                    : (((_e = rem.aplicadores) === null || _e === void 0 ? void 0 : _e.cidade) || '') + ((_f = rem.aplicadores) === null || _f === void 0 ? void 0 : _f.uf ? '/' + rem.aplicadores.uf : ''));
-            const destCidade = destCidadeRaw;
             const destCPF = rem.destino_tipo === 'aplicador' ? (_g = rem.aplicadores) === null || _g === void 0 ? void 0 : _g.cpf : null;
             const destEnd = rem.destino_tipo === 'aplicador' ? (_h = rem.aplicadores) === null || _h === void 0 ? void 0 : _h.endereco : null;
             const doses = (rem.remessa_itens || []).reduce((s, i) => s + i.quantidade, 0);
@@ -12951,14 +12945,20 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
             let cpfExibir = destCPF;
             let endExibir = destEnd;
             if (isVDRemMotorista) {
-                // VD: pegar nome do campo 1 da obs (após o uuid)
-                // Limpar obs antes de fazer split (remover assinatura/base64 que pode ter sido adicionado)
+                // VD: pegar nome e endereço da obs ANTES de calcular destCidade
                 const obsVDLimpa = (rem.observacao || '').split('\n')[0].split('[ASSINATURA')[0];
                 const partsVD = obsVDLimpa.split('|');
                 nomeExibir = (partsVD[1] || '').trim() || 'Venda Direta';
                 const cidadeUF = (partsVD[4] || '').trim();
                 endExibir = cidadeUF && cidadeUF !== '/' ? cidadeUF : null;
-            } else if (!nomeExibir || nomeExibir === ((_j = rota.bases) === null || _j === void 0 ? void 0 : _j.nome)) {
+            }
+            // destCidade: para VD usar endExibir (cidade/UF da obs), para outros usar o join
+            const destCidade = isVDRemMotorista
+                ? (endExibir || '')
+                : (rem.destino_tipo === 'base'
+                    ? (((_c = rem.bases) === null || _c === void 0 ? void 0 : _c.cidade) || '') + ((_d = rem.bases) === null || _d === void 0 ? void 0 : _d.uf ? '/' + rem.bases.uf : '')
+                    : (((_e = rem.aplicadores) === null || _e === void 0 ? void 0 : _e.cidade) || '') + ((_f = rem.aplicadores) === null || _f === void 0 ? void 0 : _f.uf ? '/' + rem.aplicadores.uf : ''));
+            if (false) { } else if (!nomeExibir || nomeExibir === ((_j = rota.bases) === null || _j === void 0 ? void 0 : _j.nome)) {
                 const obs = rem.observacao || '';
                 const mNome = obs.match(/^([^(|]+)/);
                 const mCPF = obs.match(/\(([^)]+)\)/);
