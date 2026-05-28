@@ -11553,20 +11553,30 @@ function EtiquetaModal({ remessa, rota, onClose, totalParadas, remessasDaRota })
         });
     }, []);
     const origemNome = ((_a = rota.bases) === null || _a === void 0 ? void 0 : _a.nome) || '';
-    let destNome = remessa.destino_tipo === 'base' ? (_b = remessa.bases) === null || _b === void 0 ? void 0 : _b.nome : (_c = remessa.aplicadores) === null || _c === void 0 ? void 0 : _c.nome;
-    let destCidade = remessa.destino_tipo === 'base'
-        ? (((_d = remessa.bases) === null || _d === void 0 ? void 0 : _d.cidade) || '') + (((_e = remessa.bases) === null || _e === void 0 ? void 0 : _e.uf) ? '/' + remessa.bases.uf : '')
-        : (((_f = remessa.aplicadores) === null || _f === void 0 ? void 0 : _f.cidade) || '') + (((_g = remessa.aplicadores) === null || _g === void 0 ? void 0 : _g.uf) ? '/' + remessa.aplicadores.uf : '');
-    let destCPF = remessa.destino_tipo === 'aplicador' ? (_h = remessa.aplicadores) === null || _h === void 0 ? void 0 : _h.cpf : null;
-    if (!destNome || destNome === origemNome) {
-        const obs = remessa.observacao || '';
-        const matchNome = obs.match(/^([^(|]+)/);
-        const matchCPF = obs.match(/\(([^)]+)\)/);
-        if (matchNome)
-            destNome = matchNome[1].trim();
-        if (matchCPF)
-            destCPF = matchCPF[1].trim();
-        destCidade = '';
+    // VD: detectar pela observação e extrair nome do cliente
+    const obsEtLimpa = (remessa.observacao || '').split('\n')[0].split('[ASSINATURA')[0];
+    const isVDEt = obsEtLimpa.startsWith('VD:');
+    let destNome, destCidade, destCPF;
+    if (isVDEt) {
+        const parts = obsEtLimpa.split('|');
+        destNome = (parts[1] || '').trim() || 'Cliente VD';
+        const cidadeUF = (parts[4] || '').trim();
+        destCidade = cidadeUF && cidadeUF !== '/' ? cidadeUF : '';
+        destCPF = null;
+    } else {
+        destNome = remessa.destino_tipo === 'base' ? (_b = remessa.bases) === null || _b === void 0 ? void 0 : _b.nome : (_c = remessa.aplicadores) === null || _c === void 0 ? void 0 : _c.nome;
+        destCidade = remessa.destino_tipo === 'base'
+            ? (((_d = remessa.bases) === null || _d === void 0 ? void 0 : _d.cidade) || '') + (((_e = remessa.bases) === null || _e === void 0 ? void 0 : _e.uf) ? '/' + remessa.bases.uf : '')
+            : (((_f = remessa.aplicadores) === null || _f === void 0 ? void 0 : _f.cidade) || '') + (((_g = remessa.aplicadores) === null || _g === void 0 ? void 0 : _g.uf) ? '/' + remessa.aplicadores.uf : '');
+        destCPF = remessa.destino_tipo === 'aplicador' ? (_h = remessa.aplicadores) === null || _h === void 0 ? void 0 : _h.cpf : null;
+        if (!destNome || destNome === origemNome) {
+            const obs = remessa.observacao || '';
+            const matchNome = obs.match(/^([^(|]+)/);
+            const matchCPF = obs.match(/\(([^)]+)\)/);
+            if (matchNome) destNome = matchNome[1].trim();
+            if (matchCPF) destCPF = matchCPF[1].trim();
+            destCidade = '';
+        }
     }
     const totalDoses = (remessa.remessa_itens || []).reduce((s, i) => s + i.quantidade, 0);
     const dosesExibir = totalDoses > 0 ? totalDoses : (() => {
