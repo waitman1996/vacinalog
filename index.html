@@ -2536,14 +2536,15 @@ function VendasDiretasPage() {
     const [erroTabela, setErroTabela] = useState(false);
     const [search, setSearch] = useState('');
     const [statusFilter, setStatusFilter] = useState('');
+    const [salvando, setSalvando] = useState(null); // id sendo salvo
     const toast = useContext(ToastContext);
     const ST_LABELS = { nao_roteirizado: 'Não roteirizado', roteirizado: 'Roteirizado', em_rota: 'Em rota', concluido: 'Concluído', cancelado: 'Cancelado' };
-    const ST_BADGES = { nao_roteirizado: 'badge-gray', roteirizado: 'badge-blue', em_rota: 'badge-green', concluido: 'badge-green', cancelado: 'badge-red' };
+    const ST_BADGES = { nao_roteirizado: 'badge-gray', roteirizado: 'badge-blue', em_rota: 'badge-yellow', concluido: 'badge-green', cancelado: 'badge-red' };
     const load = async () => {
         setLoading(true);
         const { data, error } = await sb.from('vendas_diretas')
             .select('id,codigo,grupo,cliente,doses_aprovadas,cidade,uf,data_inicio,data_fim,status_original,status_logistica,cnpj,telefone,endereco,rua,numero,bairro,cep')
-            .order('created_at', { ascending: false });
+            .order('cliente', { ascending: true });
         if (error) {
             if (error.message && (error.message.includes('does not exist') || error.message.includes('relation') || error.code === '42P01')) {
                 setErroTabela(true);
@@ -2558,6 +2559,14 @@ function VendasDiretasPage() {
         setLoading(false);
     };
     useEffect(() => { load(); }, []);
+    const alterarStatus = async (v, novoStatus) => {
+        setSalvando(v.id);
+        const { error } = await sb.from('vendas_diretas').update({ status_logistica: novoStatus }).eq('id', v.id);
+        setSalvando(null);
+        if (error) { toast('Erro: ' + error.message, 'error'); return; }
+        setVds(prev => prev.map(x => x.id === v.id ? { ...x, status_logistica: novoStatus } : x));
+        toast('✓ Status atualizado', 'success');
+    };
     const sqlTabela = `-- Execute no Supabase SQL Editor:
 CREATE TABLE IF NOT EXISTS vendas_diretas (
   id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
@@ -2583,6 +2592,8 @@ CREATE POLICY "allow_all_vd" ON vendas_diretas FOR ALL USING (true) WITH CHECK (
     });
     const totalDoses = filtradas.reduce((s, v) => s + (v.doses_aprovadas || 0), 0);
     const fmtDate = (d) => d ? new Date(d).toLocaleDateString('pt-BR') : '—';
+    const cancelado = (v) => v.status_logistica === 'cancelado';
+    const podeCancelar = (v) => !['concluido', 'em_rota'].includes(v.status_logistica);
     return React.createElement("div", null,
         React.createElement("div", { className: "page-header" },
             React.createElement("div", null,
@@ -2597,10 +2608,10 @@ CREATE POLICY "allow_all_vd" ON vendas_diretas FOR ALL USING (true) WITH CHECK (
         : React.createElement(React.Fragment, null,
             React.createElement("div", { className: "card", style: { marginBottom: 12 } },
                 React.createElement("div", { style: { display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' } },
-                    React.createElement("input", { className: "form-input", placeholder: "Buscar cliente, código, cidade...", value: search, onChange: e => setSearch(e.target.value), style: { flex: 1, minWidth: 200 } }),
+                    React.createElement("input", { className: "form-input", placeholder: "Buscar cliente, código, cidade, grupo...", value: search, onChange: e => setSearch(e.target.value), style: { flex: 1, minWidth: 200 } }),
                     React.createElement("select", { className: "form-select", value: statusFilter, onChange: e => setStatusFilter(e.target.value), style: { minWidth: 160 } },
                         React.createElement("option", { value: "" }, "Todos os status"),
-                        Object.entries(ST_LABELS).map(([k, v]) => React.createElement("option", { key: k, value: k }, v))))),
+                        Object.entries(ST_LABELS).map(([k, vl]) => React.createElement("option", { key: k, value: k }, vl))))),
             loading ? React.createElement("div", { style: { textAlign: 'center', padding: 40, color: 'var(--text-muted)' } }, "Carregando...")
             : filtradas.length === 0 ? React.createElement("div", { className: "card", style: { textAlign: 'center', padding: 32, color: 'var(--text-muted)' } },
                 "Nenhuma VD encontrada. Importe em ", React.createElement("strong", null, "Importação > Tarefas VD"), ".")
@@ -2616,9 +2627,10 @@ CREATE POLICY "allow_all_vd" ON vendas_diretas FOR ALL USING (true) WITH CHECK (
                                 React.createElement("th", null, "Data Início"),
                                 React.createElement("th", { style: { textAlign: 'right' } }, "Doses"),
                                 React.createElement("th", null, "Status Original"),
-                                React.createElement("th", null, "Status Logística"))),
+                                React.createElement("th", null, "Status Logística"),
+                                React.createElement("th", null, "Ações"))),
                         React.createElement("tbody", null, filtradas.map(v =>
-                            React.createElement("tr", { key: v.id },
+                            React.createElement("tr", { key: v.id, style: cancelado(v) ? { opacity: 0.5 } : {} },
                                 React.createElement("td", { className: "mono", style: { fontSize: 10, color: 'var(--accent)', fontWeight: 600, maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, v.codigo),
                                 React.createElement("td", { style: { fontSize: 12, maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, v.grupo || '—'),
                                 React.createElement("td", { style: { fontWeight: 500, maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, v.cliente || '—'),
@@ -2626,7 +2638,24 @@ CREATE POLICY "allow_all_vd" ON vendas_diretas FOR ALL USING (true) WITH CHECK (
                                 React.createElement("td", { style: { fontSize: 12, whiteSpace: 'nowrap' } }, fmtDate(v.data_inicio)),
                                 React.createElement("td", { className: "mono", style: { textAlign: 'right', fontWeight: 600 } }, (v.doses_aprovadas || 0).toLocaleString('pt-BR')),
                                 React.createElement("td", null, React.createElement("span", { className: "badge badge-gray", style: { fontSize: 10 } }, v.status_original || '—')),
-                                React.createElement("td", null, React.createElement("span", { className: `badge ${ST_BADGES[v.status_logistica] || 'badge-gray'}` }, ST_LABELS[v.status_logistica] || v.status_logistica || '—'))))))))));
+                                React.createElement("td", null, React.createElement("span", { className: `badge ${ST_BADGES[v.status_logistica] || 'badge-gray'}` }, ST_LABELS[v.status_logistica] || v.status_logistica || '—')),
+                                React.createElement("td", null,
+                                    salvando === v.id
+                                        ? React.createElement("span", { style: { fontSize: 11, color: 'var(--text-muted)' } }, "...")
+                                        : cancelado(v)
+                                        ? React.createElement("button", {
+                                            className: "btn btn-secondary btn-sm",
+                                            title: "Reativar esta VD para roteirização",
+                                            onClick: () => alterarStatus(v, 'nao_roteirizado')
+                                          }, "↩ Reativar")
+                                        : podeCancelar(v)
+                                        ? React.createElement("button", {
+                                            className: "btn btn-danger btn-sm",
+                                            title: "Cancelar — não aparecerá na roteirização",
+                                            onClick: () => { if (window.confirm('Cancelar ' + (v.cliente||v.codigo) + '? Ela nao aparecera mais para roteirizacao.')) alterarStatus(v, 'cancelado'); }
+                                          }, "✕ Cancelar")
+                                        : React.createElement("span", { style: { fontSize: 11, color: 'var(--text-muted)' } }, "—")
+                                )))))))));
 }
 
 function ImportacaoPage() {
