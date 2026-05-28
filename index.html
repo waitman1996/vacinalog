@@ -3972,8 +3972,8 @@ function ImportVD() {
             const codigos = rows.map(r => String(r['Codigo da tarefa'] || r['Código da tarefa'] || '').trim()).filter(Boolean);
             const existMap = {};
             for (let i = 0; i < codigos.length; i += 500) {
-                const { data: ex } = await sb.from('vendas_diretas').select('id, codigo').in('codigo', codigos.slice(i, i+500)).catch(() => ({data:[]}));
-                (ex || []).forEach(r => { existMap[r.codigo] = r.id; });
+                const _exRes = await sb.from('vendas_diretas').select('id, codigo').in('codigo', codigos.slice(i, i+500));
+                (_exRes.data || []).forEach(r => { existMap[r.codigo] = r.id; });
             }
             let inserted = 0, updated = 0, ignored = 0;
             for (let i = 0; i < rows.length; i += 200) {
@@ -5385,12 +5385,17 @@ function CriarRotaColeta({ onNavigate }) {
                     React.createElement("label", { className: "form-label" }, "Motorista *"),
                     React.createElement("select", { className: "form-select", value: form.motorista_id, onChange: e => setForm(f => ({ ...f, motorista_id: e.target.value })) },
                         React.createElement("option", { value: "" }, "Selecione..."),
-                        motoristas.map(m => React.createElement("option", { key: m.id, value: m.id }, m.nome)))),
+                        motoristas
+                            .filter(m => !m.base_id || !trocarMotoristaRota.base_origem_id || m.base_id === trocarMotoristaRota.base_origem_id)
+                            .map(m => React.createElement("option", { key: m.id, value: m.id }, m.nome +
+                                (m.base_id !== trocarMotoristaRota.base_origem_id && m.base_id ? ' ⚠ outra base' : ''))))),
                 React.createElement("div", { className: "form-group" },
                     React.createElement("label", { className: "form-label" }, "Ve\u00EDculo"),
                     React.createElement("select", { className: "form-select", value: form.veiculo_id, onChange: e => setForm(f => ({ ...f, veiculo_id: e.target.value })) },
                         React.createElement("option", { value: "" }, "Sem ve\u00EDculo espec\u00EDfico"),
-                        veiculos.map(v => React.createElement("option", { key: v.id, value: v.id },
+                        veiculos
+                            .filter(v => !v.base_id || !trocarMotoristaRota.base_origem_id || v.base_id === trocarMotoristaRota.base_origem_id)
+                            .map(v => React.createElement("option", { key: v.id, value: v.id },
                             v.modelo,
                             " \u00B7 ",
                             v.placa)))),
@@ -6741,6 +6746,7 @@ function EstoquePage() {
     const [showTransitoModal, setShowTransitoModal] = useState(false);
     const [rotasTransito, setRotasTransito] = useState([]);
     const [conciliando, setConciliando] = useState(null); // aplicador_id sendo conciliado
+    const [filterNome, setFilterNome] = useState('');
     const [conciliacaoVal, setConciliacaoVal] = useState('');
     const toast = useContext(ToastContext);
     const load = async () => {
@@ -6855,7 +6861,7 @@ function EstoquePage() {
     const pontosUnicosEstoque = [...new Set(items.map(i => { const loc = getEstoqueCidadeUf(i); return getPontoPartidaByCidade(loc.cidade, loc.uf); }).filter(Boolean))].sort();
     // Aplicar filtros
     const itemsFiltrados = items.filter(i => {
-        var _a;
+        var _a, _b, _c;
         if (filterVacina && ((_a = i.vacinas) === null || _a === void 0 ? void 0 : _a.nome) !== filterVacina)
             return false;
         if (filterTipo === 'clinica' && !isClinicaEstoque(i)) return false;
@@ -6865,6 +6871,14 @@ function EstoquePage() {
             const loc = getEstoqueCidadeUf(i);
             if (getPontoPartidaByCidade(loc.cidade, loc.uf) !== filterPonto)
                 return false;
+        }
+        if (filterNome) {
+            const q = filterNome.toLowerCase().trim();
+            const nomeLocal = i.localizacao_tipo === 'base'
+                ? (((_b = i.bases) === null || _b === void 0 ? void 0 : _b.nome) || '').toLowerCase()
+                : (((_c = i.aplicadores) === null || _c === void 0 ? void 0 : _c.nome) || '').toLowerCase();
+            const cpf = (i.aplicadores && i.aplicadores.cpf || '').toLowerCase();
+            if (!nomeLocal.includes(q) && !cpf.includes(q)) return false;
         }
         return true;
     });
@@ -6985,6 +6999,9 @@ function EstoquePage() {
             React.createElement("strong", null, "Modo Admin:"),
             " Clique no valor de quantidade para editar diretamente. O ajuste ser\u00E1 registrado em Movimenta\u00E7\u00F5es.")),
         React.createElement("div", { style: { display: 'flex', gap: 10, marginBottom: 12, flexWrap: 'wrap', alignItems: 'flex-end' } },
+            React.createElement("div", { className: "form-group", style: { marginBottom: 0, minWidth: 220, flex: 1 } },
+                React.createElement("label", { className: "form-label" }, "Buscar por nome / CPF"),
+                React.createElement("input", { className: "form-input", style: { padding: '6px 10px', fontSize: 13 }, placeholder: "Ex: Ana Menezes, CD Marília...", value: filterNome, onChange: e => setFilterNome(e.target.value) })),
             React.createElement("div", { className: "form-group", style: { marginBottom: 0, minWidth: 200 } },
                 React.createElement("label", { className: "form-label" }, "Vacina"),
                 React.createElement("select", { className: "form-select", style: { padding: '6px 10px', fontSize: 13 }, value: filterVacina, onChange: e => setFilterVacina(e.target.value) },
@@ -7002,8 +7019,8 @@ function EstoquePage() {
                 React.createElement("select", { className: "form-select", style: { padding: '6px 10px', fontSize: 13 }, value: filterPonto, onChange: e => setFilterPonto(e.target.value) },
                     React.createElement("option", { value: "" }, "Todos"),
                     pontosUnicosEstoque.map(p => React.createElement("option", { key: p, value: p }, p)))),
-            (filterVacina || filterTipo || filterPonto) && (React.createElement("button", { className: "btn btn-secondary btn-sm", style: { alignSelf: 'flex-end' }, onClick: () => { setFilterVacina(''); setFilterTipo(''); setFilterPonto(''); } }, "\u2715 Limpar filtros")),
-            (filterVacina || filterTipo) && (React.createElement("div", { style: { alignSelf: 'flex-end', fontSize: 12, color: 'var(--text-muted)' } },
+            (filterVacina || filterTipo || filterPonto || filterNome) && (React.createElement("button", { className: "btn btn-secondary btn-sm", style: { alignSelf: 'flex-end' }, onClick: () => { setFilterVacina(''); setFilterTipo(''); setFilterPonto(''); setFilterNome(''); } }, "\u2715 Limpar filtros")),
+            (filterVacina || filterTipo || filterPonto || filterNome) && (React.createElement("div", { style: { alignSelf: 'flex-end', fontSize: 12, color: 'var(--text-muted)' } },
                 "Mostrando ",
                 React.createElement("strong", { style: { color: 'var(--accent)' } }, itemsFiltrados.length),
                 " de ",
@@ -8839,11 +8856,11 @@ function ModalDetalheRota({ rota, onClose, ROTA_ST, ROTA_BADGE }) {
                     vacina: '—', base_nome: '—', _tipo: 'vd'
                 }));
                 if (uuids.length) {
-                    const { data } = await sb.from('vendas_diretas').select('id,codigo,cliente,cidade,uf,data_inicio,doses_aprovadas,status_original,status_logistica').in('id', uuids).catch(() => ({data:[]}));
+                    const { data } = await sb.from('vendas_diretas').select('id,codigo,cliente,cidade,uf,data_inicio,doses_aprovadas,status_original,status_logistica').in('id', uuids);
                     todas.push(...toVD(data || []));
                 }
                 if (textos.length) {
-                    const { data } = await sb.from('vendas_diretas').select('id,codigo,cliente,cidade,uf,data_inicio,doses_aprovadas,status_original,status_logistica').in('codigo', textos).catch(() => ({data:[]}));
+                    const { data } = await sb.from('vendas_diretas').select('id,codigo,cliente,cidade,uf,data_inicio,doses_aprovadas,status_original,status_logistica').in('codigo', textos);
                     todas.push(...toVD(data || []));
                 }
             }
@@ -9069,6 +9086,9 @@ function RotasListPage({ onOpenRoteirizacao }) {
     const [chatRota, setChatRota] = useState(null);
     const [naoLidas, setNaoLidas] = useState({});
     const [trocarMotoristaRota, setTrocarMotoristaRota] = useState(null);
+    const [trocarVeiculoRota, setTrocarVeiculoRota] = useState(null);
+    const [novoVeiculoTrocaId, setNovoVeiculoTrocaId] = useState('');
+    const [salvandoVeiculo, setSalvandoVeiculo] = useState(false);
     const [motoristas, setMotoristas] = useState([]);
     const [veiculos, setVeiculos] = useState([]);
     const [novoMotoristaId, setNovoMotoristaId] = useState('');
@@ -9108,9 +9128,9 @@ function RotasListPage({ onOpenRoteirizacao }) {
         const mapa = {};
         (chats || []).forEach(c => { mapa[c.rota_id] = c.nao_lidas || 0; });
         setNaoLidas(mapa);
-        const { data: mots } = await sb.from('profiles').select('id, nome').eq('role', 'motorista').order('nome');
+        const { data: mots } = await sb.from('profiles').select('id, nome, base_id').eq('role', 'motorista').eq('ativo', true).order('nome');
         setMotoristas(mots || []);
-        const { data: veics } = await sb.from('veiculos').select('id, modelo, placa').order('modelo');
+        const { data: veics } = await sb.from('veiculos').select('id, modelo, placa, base_id, capacidade_doses').eq('ativo', true).order('modelo');
         setVeiculos(veics || []);
     };
     useEffect(() => { load(); }, [statusFilter, searchCodigo, dataInicioFilter, dataFimFilter]);
@@ -9232,6 +9252,25 @@ function RotasListPage({ onOpenRoteirizacao }) {
         setTrocarMotoristaRota(null);
         setNovoMotoristaId('');
         setNovoVeiculoId('');
+        load();
+    };
+    const confirmarTrocarVeiculo = async () => {
+        if (!novoVeiculoTrocaId) { toast('Selecione um veículo', 'error'); return; }
+        setSalvandoVeiculo(true);
+        const veiculo = veiculos.find(v => v.id === novoVeiculoTrocaId);
+        const placaTexto = veiculo ? veiculo.modelo + ' - ' + veiculo.placa : null;
+        const { error } = await sb.from('rotas').update({
+            veiculo_id: novoVeiculoTrocaId,
+            veiculo: placaTexto,
+        }).eq('id', trocarVeiculoRota.id);
+        setSalvandoVeiculo(false);
+        if (error) { toast('Erro: ' + error.message, 'error'); return; }
+        // Registrar log na observação da rota
+        const obsLog = '\n[TROCA_VEICULO ' + new Date().toLocaleString('pt-BR') + '] Veículo alterado para: ' + (placaTexto || novoVeiculoTrocaId);
+        await sb.from('rotas').update({ checkout_obs: ((trocarVeiculoRota.checkout_obs || '') + obsLog).trim() }).eq('id', trocarVeiculoRota.id);
+        toast('✓ Veículo atualizado para ' + (placaTexto || '—'), 'success');
+        setTrocarVeiculoRota(null);
+        setNovoVeiculoTrocaId('');
         load();
     };
     const imprimirRomaneio = async (rota) => {
@@ -9452,13 +9491,41 @@ function RotasListPage({ onOpenRoteirizacao }) {
     return (React.createElement("div", null,
         chatRota && React.createElement(ChatRotaModal, { rota: chatRota, onClose: () => { setChatRota(null); load(); } }),
         rotaDetalhe && React.createElement(ModalDetalheRota, { rota: rotaDetalhe, onClose: () => setRotaDetalhe(null), ROTA_ST: ROTA_ST, ROTA_BADGE: ROTA_BADGE }),
+        trocarVeiculoRota && React.createElement(Modal, { title: '🚗 Trocar Veículo — ' + trocarVeiculoRota.codigo, onClose: () => setTrocarVeiculoRota(null) },
+            React.createElement("div", { style: { display: 'flex', flexDirection: 'column', gap: 14 } },
+                React.createElement("div", { style: { background: 'var(--bg-input)', borderRadius: 'var(--radius-sm)', padding: '10px 14px', border: '1px solid var(--border)', fontSize: 13 } },
+                    React.createElement("div", { style: { color: 'var(--text-muted)', fontSize: 11, marginBottom: 4 } }, "Veículo atual"),
+                    React.createElement("strong", null, trocarVeiculoRota.veiculos
+                        ? trocarVeiculoRota.veiculos.modelo + ' · ' + trocarVeiculoRota.veiculos.placa
+                        : (trocarVeiculoRota.veiculo || '—')),
+                    trocarVeiculoRota.checkin_at && React.createElement("div", { style: { fontSize: 11, color: 'var(--warning)', marginTop: 4 } },
+                        "⚠️ Rota em andamento — o motorista já fez check-in")),
+                React.createElement("div", { className: "form-group" },
+                    React.createElement("label", { className: "form-label" }, "Novo Veículo ",
+                        React.createElement("span", { style: { fontWeight: 400, color: 'var(--text-muted)', fontSize: 11 } },
+                            "— filtrado pela base da rota")),
+                    React.createElement("select", { className: "form-select", value: novoVeiculoTrocaId, onChange: e => setNovoVeiculoTrocaId(e.target.value) },
+                        React.createElement("option", { value: "" }, "Selecione o veículo substituto..."),
+                        veiculos
+                            .filter(v => v.id !== trocarVeiculoRota.veiculo_id)
+                            .filter(v => !v.base_id || !trocarVeiculoRota.base_origem_id || v.base_id === trocarVeiculoRota.base_origem_id)
+                            .map(v => React.createElement("option", { key: v.id, value: v.id },
+                                v.modelo + ' · ' + v.placa +
+                                (v.capacidade_doses ? ' (' + v.capacidade_doses + ' doses)' : '') +
+                                (v.base_id !== trocarVeiculoRota.base_origem_id && v.base_id ? ' ⚠ outra base' : ''))))),
+                React.createElement("div", { style: { display: 'flex', gap: 8, justifyContent: 'flex-end' } },
+                    React.createElement("button", { className: "btn btn-secondary", onClick: () => setTrocarVeiculoRota(null) }, "Cancelar"),
+                    React.createElement("button", { className: "btn btn-primary", disabled: !novoVeiculoTrocaId || salvandoVeiculo, onClick: confirmarTrocarVeiculo },
+                        salvandoVeiculo ? 'Salvando...' : 'Confirmar Troca')))),
         trocarMotoristaRota && (React.createElement(Modal, { title: `Trocar Motorista — ${trocarMotoristaRota.codigo}`, onClose: () => setTrocarMotoristaRota(null) },
             React.createElement("div", { style: { display: 'flex', flexDirection: 'column', gap: 14 } },
                 React.createElement("div", { style: { background: 'var(--bg-input)', borderRadius: 'var(--radius-sm)', padding: '10px 14px', border: '1px solid var(--border)', fontSize: 13 } },
                     React.createElement("div", { style: { color: 'var(--text-muted)', fontSize: 11, marginBottom: 4 } }, "Motorista atual"),
                     React.createElement("strong", null, ((_a = trocarMotoristaRota.profiles) === null || _a === void 0 ? void 0 : _a.nome) || '—')),
                 React.createElement("div", { className: "form-group" },
-                    React.createElement("label", { className: "form-label" }, "Novo Motorista *"),
+                    React.createElement("label", { className: "form-label" }, "Novo Motorista * ",
+                        React.createElement("span", { style: { fontWeight: 400, color: 'var(--text-muted)', fontSize: 11 } },
+                            "— filtrado pela base da rota")),
                     React.createElement("select", { className: "form-select", value: novoMotoristaId, onChange: e => setNovoMotoristaId(e.target.value) },
                         React.createElement("option", { value: "" }, "Selecione..."),
                         motoristas.map(m => React.createElement("option", { key: m.id, value: m.id }, m.nome)))),
@@ -9580,6 +9647,7 @@ function RotasListPage({ onOpenRoteirizacao }) {
                                             naoLidas[r.id] ? React.createElement("span", { className: "badge badge-red", style: { marginLeft: 4 } }, naoLidas[r.id]) : null),
                                         r.status === 'planejada' && React.createElement("button", { className: "btn btn-success btn-sm", onClick: () => enviarMontagem(r.id) }, "\u2192 Montagem"),
                                         podeTrocarMot && (React.createElement("button", { className: "btn btn-secondary btn-sm", onClick: () => { setTrocarMotoristaRota(r); setNovoMotoristaId(r.motorista_id || ''); setNovoVeiculoId(r.veiculo_id || ''); } }, "\uD83D\uDD04 Motorista")),
+                                        !r.checkout_at && !['concluida', 'cancelada'].includes(r.status) && (React.createElement("button", { className: "btn btn-secondary btn-sm", onClick: () => { setTrocarVeiculoRota(r); setNovoVeiculoTrocaId(r.veiculo_id || ''); } }, "\uD83D\uDE97 Veículo")),
                                         podeCancel && React.createElement("button", { className: "btn btn-danger btn-sm", onClick: () => cancelar(r.id) }, "Cancelar"),
                                         r.status === 'em_transito' && React.createElement("span", { style: { fontSize: 10, color: 'var(--success)' } }, "\uD83D\uDFE2 ao vivo")))));
                         })))))));
