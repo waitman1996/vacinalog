@@ -4005,9 +4005,27 @@ function ImportVD() {
                     return obj;
                 }).filter(Boolean);
                 if (upserts.length) {
-                    const { error: uErr } = await sb.from('vendas_diretas').upsert(upserts, { onConflict: 'codigo', ignoreDuplicates: false });
-                    if (uErr) { toast('Erro: ' + uErr.message, 'error'); ignored += upserts.length; }
-                    else { upserts.forEach(u => { if (existMap[u.codigo]) updated++; else inserted++; }); }
+                    // Deduplicar: chave = codigo|cliente|cidade|doses
+                    // Mesmo codigo com combinação diferente = registro novo
+                    // Combinação idêntica = ignorar duplicata
+                    const seenKeys = new Set();
+                    const upsertsDedupe = upserts.filter(u => {
+                        const key = (u.codigo||'') + '|' + (u.cliente||'').toLowerCase().trim() + '|' + (u.cidade||'').toLowerCase().trim() + '|' + String(u.doses_aprovadas||0);
+                        if (seenKeys.has(key)) return false;
+                        seenKeys.add(key);
+                        return true;
+                    });
+                    // Para códigos repetidos com dados diferentes: gerar sufixo único
+                    const codigoCount = {};
+                    const upsertsFinal = upsertsDedupe.map(u => {
+                        const c = u.codigo;
+                        if (codigoCount[c] === undefined) { codigoCount[c] = 0; return u; }
+                        codigoCount[c]++;
+                        return { ...u, codigo: c + '_' + codigoCount[c] };
+                    });
+                    const { error: uErr } = await sb.from('vendas_diretas').upsert(upsertsFinal, { onConflict: 'codigo', ignoreDuplicates: false });
+                    if (uErr) { toast('Erro: ' + uErr.message, 'error'); ignored += upsertsFinal.length; }
+                    else { upsertsFinal.forEach(u => { if (existMap[u.codigo]) updated++; else inserted++; }); }
                 }
                 setProgress(Math.round(((i + batch.length) / rows.length) * 100));
             }
