@@ -11789,18 +11789,29 @@ function EtiquetasPage() {
     };
     const imprimirRecibo = (rem) => {
         var _a, _b, _c, _d;
-        const destNome = rem.destino_tipo === 'base' ? (_a = rem.bases) === null || _a === void 0 ? void 0 : _a.nome : (_b = rem.aplicadores) === null || _b === void 0 ? void 0 : _b.nome;
-        const destCPF = rem.destino_tipo === 'aplicador' ? (_c = rem.aplicadores) === null || _c === void 0 ? void 0 : _c.cpf : null;
-        let nomeExibir = destNome;
-        let cpfExibir = destCPF;
-        if (!nomeExibir) {
-            const obs = rem.observacao || '';
-            const mNome = obs.match(/^([^(|]+)/);
-            const mCPF = obs.match(/\(([^)]+)\)/);
-            if (mNome)
-                nomeExibir = mNome[1].trim();
-            if (mCPF)
-                cpfExibir = mCPF[1].trim();
+        // VD: extrair dados do cliente da observação
+        const obsLimpa2 = (rem.observacao || '').split('\n')[0].split('[ASSINATURA')[0];
+        const isVDRec2 = obsLimpa2.startsWith('VD:');
+        let nomeExibir, cpfExibir, destCidadeRec;
+        if (isVDRec2) {
+            const parts = obsLimpa2.split('|');
+            nomeExibir = (parts[1] || '').trim() || 'Cliente VD';
+            const cidadeUF = (parts[4] || '').trim();
+            destCidadeRec = cidadeUF && cidadeUF !== '/' ? cidadeUF : '';
+            cpfExibir = null;
+        } else {
+            const destNome = rem.destino_tipo === 'base' ? (_a = rem.bases) === null || _a === void 0 ? void 0 : _a.nome : (_b = rem.aplicadores) === null || _b === void 0 ? void 0 : _b.nome;
+            const destCPF = rem.destino_tipo === 'aplicador' ? (_c = rem.aplicadores) === null || _c === void 0 ? void 0 : _c.cpf : null;
+            nomeExibir = destNome;
+            cpfExibir = destCPF;
+            destCidadeRec = '';
+            if (!nomeExibir) {
+                const obs = rem.observacao || '';
+                const mNome = obs.match(/^([^(|]+)/);
+                const mCPF = obs.match(/\(([^)]+)\)/);
+                if (mNome) nomeExibir = mNome[1].trim();
+                if (mCPF) cpfExibir = mCPF[1].trim();
+            }
         }
         const dataHoje = new Date().toLocaleDateString('pt-BR');
         const horaAgora = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
@@ -11815,7 +11826,7 @@ function EtiquetasPage() {
             + '<h1>Termo de Entrega e Responsabilidade</h1><div class="empresa">S&A IMUNIZAÇÕES LTDA</div>'
             + '<div class="intro">Pelo presente instrumento, eu, abaixo identificado, declaro ter recebido da S&A IMUNIZAÇÕES LTDA os materiais e imunobiológicos listados, assumindo total responsabilidade pela sua guarda, conservação térmica e uso exclusivo na campanha designada.</div>'
             + '<div class="section"><div class="section-title">Dados de Recebimento</div>'
-            + '<div class="field"><b>APLICADOR:</b> ' + (nomeExibir || '_____________________________') + '&nbsp;&nbsp;&nbsp;&nbsp;<b>CPF:</b> ' + (cpfExibir || '___________________') + '</div>'
+            + '<div class="field"><b>' + (isVDRec2 ? 'CLIENTE' : 'APLICADOR') + ':</b> ' + (nomeExibir || '_____________________________') + '&nbsp;&nbsp;&nbsp;&nbsp;<b>' + (isVDRec2 ? 'CNPJ' : 'CPF') + ':</b> ' + (cpfExibir || '___________________') + (destCidadeRec ? '&nbsp;&nbsp;&nbsp;&nbsp;<b>CIDADE:</b> ' + destCidadeRec : '') + '</div>'
             + '<div class="field"><b>CÓDIGO:</b> ' + (rem.codigo_rastreio || '—') + '&nbsp;&nbsp;&nbsp;&nbsp;<b>ROTA:</b> ' + (((_d = rem.rotas) === null || _d === void 0 ? void 0 : _d.codigo) || '—') + '</div>'
             + '<div class="field"><b>TIPO:</b> <span class="checkbox"></span> ENTREGA &nbsp;&nbsp; <span class="checkbox"></span> DEVOLUÇÃO</div></div>'
             + '<div class="section"><div class="section-title">Detalhamento da Carga</div>'
