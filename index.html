@@ -11240,21 +11240,31 @@ function MontagemPage() {
     // Imprimir Recibo / Termo de Entrega e Responsabilidade
     const imprimirRecibo = (rem) => {
         var _a, _b, _c, _d, _e, _f, _g, _h;
-        const destNome = rem.destino_tipo === 'base' ? (_a = rem.bases) === null || _a === void 0 ? void 0 : _a.nome : (_b = rem.aplicadores) === null || _b === void 0 ? void 0 : _b.nome;
-        const destCPF = rem.destino_tipo === 'aplicador' ? (_c = rem.aplicadores) === null || _c === void 0 ? void 0 : _c.cpf : null;
-        const destCidade = rem.destino_tipo === 'base'
-            ? (((_d = rem.bases) === null || _d === void 0 ? void 0 : _d.cidade) || '') + '/' + (((_e = rem.bases) === null || _e === void 0 ? void 0 : _e.uf) || '')
-            : (((_f = rem.aplicadores) === null || _f === void 0 ? void 0 : _f.cidade) || '') + '/' + (((_g = rem.aplicadores) === null || _g === void 0 ? void 0 : _g.uf) || '');
-        let nomeExibir = destNome;
-        let cpfExibir = destCPF;
-        if (!nomeExibir) {
-            const obs = rem.observacao || '';
-            const mNome = obs.match(/^([^(|]+)/);
-            const mCPF = obs.match(/\(([^)]+)\)/);
-            if (mNome)
-                nomeExibir = mNome[1].trim();
-            if (mCPF)
-                cpfExibir = mCPF[1].trim();
+        // VD: extrair dados do cliente da observação
+        const obsLimpa = (rem.observacao || '').split('\n')[0].split('[ASSINATURA')[0];
+        const isVDRec = obsLimpa.startsWith('VD:');
+        let nomeExibir, cpfExibir, destCidade;
+        if (isVDRec) {
+            const parts = obsLimpa.split('|');
+            nomeExibir = (parts[1] || '').trim() || 'Cliente VD';
+            const cidadeUF = (parts[4] || '').trim();
+            destCidade = cidadeUF && cidadeUF !== '/' ? cidadeUF : '';
+            cpfExibir = null; // CNPJ preenchido manualmente no recibo
+        } else {
+            const destNome = rem.destino_tipo === 'base' ? (_a = rem.bases) === null || _a === void 0 ? void 0 : _a.nome : (_b = rem.aplicadores) === null || _b === void 0 ? void 0 : _b.nome;
+            const destCPF = rem.destino_tipo === 'aplicador' ? (_c = rem.aplicadores) === null || _c === void 0 ? void 0 : _c.cpf : null;
+            destCidade = rem.destino_tipo === 'base'
+                ? (((_d = rem.bases) === null || _d === void 0 ? void 0 : _d.cidade) || '') + '/' + (((_e = rem.bases) === null || _e === void 0 ? void 0 : _e.uf) || '')
+                : (((_f = rem.aplicadores) === null || _f === void 0 ? void 0 : _f.cidade) || '') + '/' + (((_g = rem.aplicadores) === null || _g === void 0 ? void 0 : _g.uf) || '');
+            nomeExibir = destNome;
+            cpfExibir = destCPF;
+            if (!nomeExibir) {
+                const obs = rem.observacao || '';
+                const mNome = obs.match(/^([^(|]+)/);
+                const mCPF = obs.match(/\(([^)]+)\)/);
+                if (mNome) nomeExibir = mNome[1].trim();
+                if (mCPF) cpfExibir = mCPF[1].trim();
+            }
         }
         const totalDoses = (rem.remessa_itens || []).reduce((s, i) => s + i.quantidade, 0);
         const dataHoje = new Date().toLocaleDateString('pt-BR');
@@ -11291,7 +11301,7 @@ function MontagemPage() {
             + '<div class="intro">Pelo presente instrumento, eu, abaixo identificado, declaro ter recebido da S&A IMUNIZAÇÕES LTDA os materiais e imunobiológicos listados, assumindo total responsabilidade pela sua guarda, conservação térmica e uso exclusivo na campanha designada.</div>'
             + '<div class="section">'
             + '<div class="section-title">Dados de Recebimento</div>'
-            + '<div class="field"><b>APLICADOR:</b> ' + (nomeExibir || '_____________________________') + '&nbsp;&nbsp;&nbsp;&nbsp;<b>CPF:</b> ' + (cpfExibir || '___________________') + '</div>'
+            + '<div class="field"><b>' + (isVDRec ? 'CLIENTE' : 'APLICADOR') + ':</b> ' + (nomeExibir || '_____________________________') + '&nbsp;&nbsp;&nbsp;&nbsp;<b>' + (isVDRec ? 'CNPJ' : 'CPF') + ':</b> ' + (cpfExibir || '___________________') + (destCidade ? '&nbsp;&nbsp;&nbsp;&nbsp;<b>CIDADE:</b> ' + destCidade : '') + '</div>'
             + '<div class="field"><b>TIPO:</b> <span class="checkbox"></span> ENTREGA &nbsp;&nbsp; <span class="checkbox"></span> DEVOLUÇÃO</div>'
             + '</div>'
             + '<div class="section">'
