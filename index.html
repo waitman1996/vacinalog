@@ -2573,19 +2573,35 @@ function VendasDiretasPage() {
             const prefixUuid = 'VD: ' + v.id + ' |';
             const prefixCod  = 'VD: ' + v.codigo + ' |';
             const [r1, r2] = await Promise.all([
-                sb.from('remessas').select(sel).ilike('observacao', prefixUuid + '%').order('created_at', { ascending: false }),
-                sb.from('remessas').select(sel).ilike('observacao', prefixCod  + '%').order('created_at', { ascending: false })
+                sb.from('remessas').select(sel).ilike('observacao', prefixUuid + '%'),
+                sb.from('remessas').select(sel).ilike('observacao', prefixCod  + '%')
             ]);
+            console.log('[VD Detalhe] prefixUuid:', prefixUuid);
+            console.log('[VD Detalhe] prefixCod:', prefixCod);
+            console.log('[VD Detalhe] r1:', r1.error || (r1.data && r1.data.length) + ' rows');
+            console.log('[VD Detalhe] r2:', r2.error || (r2.data && r2.data.length) + ' rows');
+            // Se ambas queries falharem, tentar busca mais ampla
+            if (r1.error || r2.error) {
+                throw new Error((r1.error || r2.error).message);
+            }
             // Merge e deduplicar por id
             const seen = new Set();
             const all = [...(r1.data||[]), ...(r2.data||[])].filter(r => {
                 if (seen.has(r.id)) return false;
                 seen.add(r.id); return true;
             });
-            all.sort((a, b) => (b.created_at||'').localeCompare(a.created_at||''));
+            // Se não achou nada com ilike, tentar buscar todas remessas VD da VD pelo codigo_rastreio
+            if (all.length === 0) {
+                console.log('[VD Detalhe] Tentando busca alternativa...');
+                const { data: r3 } = await sb.from('remessas').select(sel)
+                    .ilike('observacao', 'VD:%' + v.codigo.substring(0, 15) + '%');
+                console.log('[VD Detalhe] r3:', r3 && r3.length + ' rows');
+                (r3 || []).forEach(r => { if (!seen.has(r.id)) { seen.add(r.id); all.push(r); } });
+            }
             setDetalheData(all);
         } catch(e) {
-            console.error('abrirDetalhe error:', e);
+            console.error('abrirDetalhe error:', e && e.message, e);
+            toast('Erro ao buscar remessas: ' + (e && e.message || String(e)), 'error');
             setDetalheData([]);
         }
         setDetalheLoading(false);
