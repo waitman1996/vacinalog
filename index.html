@@ -2536,7 +2536,10 @@ function VendasDiretasPage() {
     const [erroTabela, setErroTabela] = useState(false);
     const [search, setSearch] = useState('');
     const [statusFilter, setStatusFilter] = useState('');
-    const [salvando, setSalvando] = useState(null); // id sendo salvo
+    const [salvando, setSalvando] = useState(null);
+    const [detalheVD, setDetalheVD] = useState(null); // VD sendo visualizada
+    const [detalheData, setDetalheData] = useState(null); // dados carregados
+    const [detalheLoading, setDetalheLoading] = useState(false);
     const toast = useContext(ToastContext);
     const ST_LABELS = { nao_roteirizado: 'Não roteirizado', roteirizado: 'Roteirizado', em_rota: 'Em rota', concluido: 'Concluído', cancelado: 'Cancelado' };
     const ST_BADGES = { nao_roteirizado: 'badge-gray', roteirizado: 'badge-blue', em_rota: 'badge-yellow', concluido: 'badge-green', cancelado: 'badge-red' };
@@ -2559,6 +2562,22 @@ function VendasDiretasPage() {
         setLoading(false);
     };
     useEffect(() => { load(); }, []);
+    const abrirDetalhe = async (v) => {
+        setDetalheVD(v);
+        setDetalheData(null);
+        setDetalheLoading(true);
+        try {
+            // Buscar remessas relacionadas (por uuid ou codigo na observacao)
+            const { data: rems } = await sb.from('remessas')
+                .select('id,codigo_rastreio,status,observacao,ordem_entrega,created_at,remessa_itens(quantidade,vacinas(nome)),rotas(id,codigo,data_prevista,status,profiles!rotas_motorista_id_fkey(nome),bases!rotas_base_origem_id_fkey(nome))')
+                .or('observacao.like.VD: ' + v.id + ' |%,observacao.like.VD: ' + v.codigo + ' |%')
+                .order('created_at', { ascending: false });
+            setDetalheData(rems || []);
+        } catch(e) {
+            setDetalheData([]);
+        }
+        setDetalheLoading(false);
+    };
     const alterarStatus = async (v, novoStatus) => {
         setSalvando(v.id);
         const { error } = await sb.from('vendas_diretas').update({ status_logistica: novoStatus }).eq('id', v.id);
@@ -2600,6 +2619,61 @@ CREATE POLICY "allow_all_vd" ON vendas_diretas FOR ALL USING (true) WITH CHECK (
                 React.createElement("div", { className: "page-title" }, "🛒 Vendas Diretas (VD)"),
                 React.createElement("div", { className: "page-subtitle" }, filtradas.length + " registros · " + totalDoses.toLocaleString('pt-BR') + " doses")),
             React.createElement("button", { className: "btn btn-secondary", onClick: load }, "↻ Recarregar")),
+        detalheVD && React.createElement(Modal, { title: '🛒 Rastreio VD — ' + detalheVD.codigo, onClose: () => setDetalheVD(null), large: true },
+            React.createElement("div", { style: { display: 'flex', flexDirection: 'column', gap: 16 } },
+                React.createElement("div", { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(200px,1fr))', gap: 12 } },
+                    React.createElement("div", { style: { background: 'var(--bg-input)', borderRadius: 'var(--radius-sm)', padding: '10px 14px' } },
+                        React.createElement("div", { style: { fontSize: 11, color: 'var(--text-muted)', marginBottom: 4 } }, "CLIENTE"),
+                        React.createElement("div", { style: { fontWeight: 700, fontSize: 14 } }, detalheVD.cliente || '—')),
+                    React.createElement("div", { style: { background: 'var(--bg-input)', borderRadius: 'var(--radius-sm)', padding: '10px 14px' } },
+                        React.createElement("div", { style: { fontSize: 11, color: 'var(--text-muted)', marginBottom: 4 } }, "CIDADE/UF"),
+                        React.createElement("div", { style: { fontWeight: 600 } }, [detalheVD.cidade, detalheVD.uf].filter(Boolean).join('/') || '—')),
+                    React.createElement("div", { style: { background: 'var(--bg-input)', borderRadius: 'var(--radius-sm)', padding: '10px 14px' } },
+                        React.createElement("div", { style: { fontSize: 11, color: 'var(--text-muted)', marginBottom: 4 } }, "DOSES APROVADAS"),
+                        React.createElement("div", { style: { fontWeight: 700, fontSize: 18, color: 'var(--accent)' } }, (detalheVD.doses_aprovadas || 0).toLocaleString('pt-BR'))),
+                    React.createElement("div", { style: { background: 'var(--bg-input)', borderRadius: 'var(--radius-sm)', padding: '10px 14px' } },
+                        React.createElement("div", { style: { fontSize: 11, color: 'var(--text-muted)', marginBottom: 4 } }, "STATUS LOGÍSTICA"),
+                        React.createElement("span", { className: 'badge ' + (ST_BADGES[detalheVD.status_logistica] || 'badge-gray') },
+                            ST_LABELS[detalheVD.status_logistica] || detalheVD.status_logistica || '—'))),
+                detalheVD.endereco && React.createElement("div", { style: { fontSize: 13, color: 'var(--text-secondary)' } },
+                    "📍 ", detalheVD.endereco, detalheVD.cidade ? ', ' + detalheVD.cidade + '/' + (detalheVD.uf||'') : ''),
+                React.createElement("div", null,
+                    React.createElement("div", { style: { fontWeight: 700, fontSize: 13, marginBottom: 10, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px' } }, "Histórico de Remessas"),
+                    detalheLoading
+                        ? React.createElement("div", { style: { textAlign: 'center', padding: 24, color: 'var(--text-muted)' } }, "Carregando...")
+                        : (!detalheData || detalheData.length === 0)
+                        ? React.createElement("div", { style: { padding: 20, textAlign: 'center', color: 'var(--text-muted)', fontSize: 13, background: 'var(--bg-input)', borderRadius: 'var(--radius-sm)' } },
+                            "Nenhuma remessa encontrada para esta VD.")
+                        : React.createElement("div", { style: { display: 'flex', flexDirection: 'column', gap: 10 } },
+                            detalheData.map(r => {
+                                const rota = r.rotas;
+                                const doses = (r.remessa_itens||[]).reduce((s,i)=>s+i.quantidade,0);
+                                const motorista = rota && rota.profiles && rota.profiles.nome;
+                                const base = rota && rota.bases && rota.bases.nome;
+                                const dataRota = rota && rota.data_prevista ? new Date(rota.data_prevista+'T12:00:00').toLocaleDateString('pt-BR') : null;
+                                // Extrair assinatura da obs
+                                const obsLines = (r.observacao||'').split('\n');
+                                const assLine = obsLines.find(l => l.includes('[ASSINATURA'));
+                                const assInfo = assLine ? assLine.replace('[ASSINATURA','').replace(']','').trim() : null;
+                                const recebPor = obsLines.find(l => l.includes('Recebido por:'));
+                                const ST_REM = { planejada:'badge-gray', em_separacao:'badge-yellow', pronta:'badge-blue', em_transito:'badge-yellow', concluida:'badge-green', cancelada:'badge-red' };
+                                return React.createElement("div", { key: r.id, style: { border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '12px 16px', background: 'var(--bg-card)' } },
+                                    React.createElement("div", { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8, flexWrap: 'wrap', gap: 6 } },
+                                        React.createElement("div", null,
+                                            React.createElement("span", { style: { fontFamily: 'JetBrains Mono', fontSize: 11, color: 'var(--accent)', fontWeight: 700 } }, r.codigo_rastreio),
+                                            rota && React.createElement("span", { style: { fontSize: 11, color: 'var(--text-muted)', marginLeft: 8 } }, "→ Rota ", React.createElement("strong", null, rota.codigo))),
+                                        React.createElement("span", { className: 'badge ' + (ST_REM[r.status]||'badge-gray') }, r.status || '—')),
+                                    React.createElement("div", { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))', gap: 8, fontSize: 12 } },
+                                        React.createElement("div", null, React.createElement("span", { style: { color: 'var(--text-muted)' } }, "Doses: "), React.createElement("strong", null, doses.toLocaleString('pt-BR'))),
+                                        motorista && React.createElement("div", null, React.createElement("span", { style: { color: 'var(--text-muted)' } }, "Motorista: "), React.createElement("strong", null, motorista)),
+                                        base && React.createElement("div", null, React.createElement("span", { style: { color: 'var(--text-muted)' } }, "Base: "), React.createElement("strong", null, base)),
+                                        dataRota && React.createElement("div", null, React.createElement("span", { style: { color: 'var(--text-muted)' } }, "Data: "), React.createElement("strong", null, dataRota))),
+                                    assInfo && React.createElement("div", { style: { marginTop: 8, paddingTop: 8, borderTop: '1px solid var(--border)', fontSize: 11 } },
+                                        React.createElement("span", { style: { color: 'var(--success)', fontWeight: 600 } }, "✓ Entregue "),
+                                        React.createElement("span", { style: { color: 'var(--text-muted)' } }, assInfo)),
+                                    recebPor && React.createElement("div", { style: { fontSize: 11, color: 'var(--text-muted)', marginTop: 4 } },
+                                        recebPor.replace('[ASSINATURA','').replace(']','').trim()));
+                            }))))),
         erroTabela ? React.createElement("div", { className: "card", style: { borderColor: 'var(--warning)' } },
             React.createElement("div", { className: "card-title", style: { color: 'var(--warning)' } }, "⚠️ Tabela vendas_diretas não existe no Supabase"),
             React.createElement("p", { style: { fontSize: 13, marginBottom: 16 } }, "Execute o SQL abaixo no Supabase SQL Editor para criar a tabela, depois importe o CSV em Importação > Tarefas VD."),
@@ -2631,7 +2705,7 @@ CREATE POLICY "allow_all_vd" ON vendas_diretas FOR ALL USING (true) WITH CHECK (
                                 React.createElement("th", null, "Ações"))),
                         React.createElement("tbody", null, filtradas.map(v =>
                             React.createElement("tr", { key: v.id, style: cancelado(v) ? { opacity: 0.5 } : {} },
-                                React.createElement("td", { className: "mono", style: { fontSize: 10, color: 'var(--accent)', fontWeight: 600, maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, v.codigo),
+                                React.createElement("td", { className: "mono", style: { fontSize: 10, color: 'var(--accent)', fontWeight: 600, maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer', textDecoration: 'underline' }, title: "Ver rastreio", onClick: () => abrirDetalhe(v) }, v.codigo),
                                 React.createElement("td", { style: { fontSize: 12, maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, v.grupo || '—'),
                                 React.createElement("td", { style: { fontWeight: 500, maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, v.cliente || '—'),
                                 React.createElement("td", { style: { fontSize: 12 } }, [v.cidade, v.uf].filter(Boolean).join('/') || '—'),
