@@ -6999,17 +6999,28 @@ function EstoquePage() {
             return;
         }
         // Registrar movimentação de ajuste
+        // diff > 0 = aumento = crédito (destino_*) | diff < 0 = redução = débito (origem_*)
         const userId = (await sb.auth.getUser()).data.user.id;
-        await sb.from('movimentacoes').insert({
+        const isBase = item.localizacao_tipo === 'base';
+        const movPayload = {
             tipo: 'ajuste',
             vacina_id: item.vacina_id,
             quantidade: Math.abs(diff),
-            origem_tipo: item.localizacao_tipo === 'base' ? 'base' : 'aplicador',
-            origem_base_id: item.localizacao_tipo === 'base' ? item.base_id : null,
-            origem_aplicador_id: item.localizacao_tipo === 'aplicador' ? item.aplicador_id : null,
             observacao: obs + (ids.length > 1 ? ` (consolidado ${ids.length} registros)` : ''),
             criado_por: userId,
-        });
+        };
+        if (diff > 0) {
+            // Aumento: lançamento de entrada (destino = quem recebe o crédito)
+            movPayload.destino_tipo = isBase ? 'base' : 'aplicador';
+            movPayload.destino_base_id = isBase ? item.base_id : null;
+            movPayload.destino_aplicador_id = isBase ? null : item.aplicador_id;
+        } else {
+            // Redução: lançamento de saída (origem = quem é debitado)
+            movPayload.origem_tipo = isBase ? 'base' : 'aplicador';
+            movPayload.origem_base_id = isBase ? item.base_id : null;
+            movPayload.origem_aplicador_id = isBase ? null : item.aplicador_id;
+        }
+        await sb.from('movimentacoes').insert(movPayload);
         toast(`Estoque ajustado: ${diff > 0 ? '+' : ''}${diff} doses${ids.length > 1 ? ` (${ids.length} registros consolidados)` : ''}`, 'success');
         cancelEdit();
         load();
