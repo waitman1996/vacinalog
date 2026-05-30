@@ -14166,6 +14166,9 @@ function MovimentacoesPage() {
         extrato.length > 0 && (React.createElement(React.Fragment, null,
             (() => {
                 var _a;
+                // Só mostrar aviso quando uma vacina específica está selecionada
+                // (sem filtro, extrato mistura vacinas e limite 500 distorce o cálculo)
+                if (!filtroVacina) return null;
                 const saldoCalculado = ((_a = extrato[extrato.length - 1]) === null || _a === void 0 ? void 0 : _a.saldoPos) || 0;
                 const diff = saldoAtual - saldoCalculado;
                 return Math.abs(diff) > 0 ? (React.createElement("div", { style: { padding: '8px 14px', background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.3)', borderRadius: 'var(--radius-sm)', marginBottom: 10, fontSize: 12, color: 'var(--warning)' } },
