@@ -2649,12 +2649,18 @@ CREATE POLICY "allow_all_vd" ON vendas_diretas FOR ALL USING (true) WITH CHECK (
                                             onClick: () => alterarStatus(v, 'nao_roteirizado')
                                           }, "↩ Reativar")
                                         : podeCancelar(v)
-                                        ? React.createElement("button", {
-                                            className: "btn btn-danger btn-sm",
-                                            title: "Cancelar — não aparecerá na roteirização",
-                                            onClick: () => { if (window.confirm('Cancelar ' + (v.cliente||v.codigo) + '? Ela nao aparecera mais para roteirizacao.')) alterarStatus(v, 'cancelado'); }
-                                          }, "✕ Cancelar")
-                                        : React.createElement("span", { style: { fontSize: 11, color: 'var(--text-muted)' } }, "—")
+                                        ? React.createElement("div", { style: { display: 'flex', gap: 4, flexWrap: 'wrap' } },
+                                            React.createElement("button", {
+                                                className: "btn btn-secondary btn-sm",
+                                                title: "Marcar como Concluido manualmente",
+                                                onClick: () => alterarStatus(v, 'concluido')
+                                            }, "\u2713 Concluir"),
+                                            React.createElement("button", {
+                                                className: "btn btn-danger btn-sm",
+                                                title: "Cancelar",
+                                                onClick: () => { if (window.confirm('Cancelar ' + (v.cliente||v.codigo) + '? Ela nao aparecera mais para roteirizacao.')) alterarStatus(v, 'cancelado'); }
+                                            }, "\u2715 Cancelar"))
+                                        : React.createElement("span", { style: { fontSize: 11, color: 'var(--text-muted)' } }, "\u2014")
                                 )))))))));
 }
 
@@ -12904,8 +12910,21 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
         await atualizarStatusLogisticaRemessa(rem, destId);
         // Atualizar status VD para concluido
         if (isVDEntrega) {
-            const vdMatch = (rem.observacao||'').match(/^VD:\s*([a-f0-9-]{36})/i);
-            if (vdMatch) sb.from('vendas_diretas').update({status_logistica:'concluido'}).eq('id',vdMatch[1]).then(()=>{}).catch(()=>{});
+            // Atualizar status VD: tentar por UUID (novas) ou por codigo (antigas)
+            const obsVDUpd = (rem.observacao||'').split('\n')[0].split('[ASSINATURA')[0];
+            const vdUuidMatch = obsVDUpd.match(/^VD:\s*([a-f0-9-]{36})/i);
+            const vdCodMatch = !vdUuidMatch && obsVDUpd.match(/^VD:\s*([^\s|]+)/);
+            if (vdUuidMatch) {
+                sb.from('vendas_diretas').update({status_logistica:'concluido'}).eq('id', vdUuidMatch[1]).then(()=>{}).catch(()=>{});
+            } else if (vdCodMatch) {
+                const codVD = vdCodMatch[1].trim();
+                // Buscar por codigo e atualizar
+                sb.from('vendas_diretas').select('id').eq('codigo', codVD).limit(1)
+                    .then(r => {
+                        const vdId = r.data && r.data[0] && r.data[0].id;
+                        if (vdId) sb.from('vendas_diretas').update({status_logistica:'concluido'}).eq('id', vdId).then(()=>{}).catch(()=>{});
+                    }).catch(()=>{});
+            }
         }
         load();
         const { data } = await sb.from('remessas').select('status').eq('rota_id', rota.id);
