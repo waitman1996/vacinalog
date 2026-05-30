@@ -2598,7 +2598,7 @@ function VendasDiretasPage() {
                 console.log('[VD Detalhe] r3:', r3 && r3.length + ' rows');
                 (r3 || []).forEach(r => { if (!seen.has(r.id)) { seen.add(r.id); all.push(r); } });
             }
-            console.log('[VD Detalhe] all:', all.length, all[0] && {status:all[0].status, rotas:all[0].rotas, obs:(all[0].observacao||'').substring(0,50)});
+            console.log('[VD Detalhe] all[0] full:', JSON.stringify(all[0] && {status:all[0].status, rotas:all[0].rotas, remessa_itens:all[0].remessa_itens, obs:(all[0].observacao||'').substring(0,80)}));
             setDetalheData(all);
         } catch(e) {
             console.error('abrirDetalhe error:', e && e.message, e);
