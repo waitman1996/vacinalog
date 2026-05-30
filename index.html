@@ -2567,7 +2567,7 @@ function VendasDiretasPage() {
         setDetalheData(null);
         setDetalheLoading(true);
         try {
-            const sel = 'id,codigo_rastreio,status,observacao,ordem_entrega,created_at,remessa_itens(quantidade,vacinas(nome)),rotas(id,codigo,data_prevista,status,profiles!rotas_motorista_id_fkey(nome),bases!rotas_base_origem_id_fkey(nome))';
+            const sel = 'id,codigo_rastreio,status,observacao,ordem_entrega,remessa_itens(quantidade,vacinas(nome)),rotas(id,codigo,data_prevista,status,profiles!rotas_motorista_id_fkey(nome),bases!rotas_base_origem_id_fkey(nome))';
             // Fazer duas queries separadas: por UUID e por código
             // (o .or() do Supabase falha com pontos e hífens nos valores)
             const prefixUuid = 'VD: ' + v.id + ' |';
@@ -2598,6 +2598,7 @@ function VendasDiretasPage() {
                 console.log('[VD Detalhe] r3:', r3 && r3.length + ' rows');
                 (r3 || []).forEach(r => { if (!seen.has(r.id)) { seen.add(r.id); all.push(r); } });
             }
+            console.log('[VD Detalhe] all:', all.length, all[0] && {status:all[0].status, rotas:all[0].rotas, obs:(all[0].observacao||'').substring(0,50)});
             setDetalheData(all);
         } catch(e) {
             console.error('abrirDetalhe error:', e && e.message, e);
@@ -2674,10 +2675,12 @@ CREATE POLICY "allow_all_vd" ON vendas_diretas FOR ALL USING (true) WITH CHECK (
                             "Nenhuma remessa encontrada para esta VD.")
                         : React.createElement("div", { style: { display: 'flex', flexDirection: 'column', gap: 10 } },
                             detalheData.map(r => {
-                                const rota = r.rotas;
-                                const doses = (r.remessa_itens||[]).reduce((s,i)=>s+i.quantidade,0);
-                                const motorista = rota && rota.profiles && rota.profiles.nome;
-                                const base = rota && rota.bases && rota.bases.nome;
+                                // rotas pode vir como array ou objeto dependendo do join
+                                const rotaRaw = r.rotas;
+                                const rota = Array.isArray(rotaRaw) ? rotaRaw[0] : rotaRaw;
+                                const doses = (r.remessa_itens||[]).reduce((s,i)=>s+(Number(i.quantidade)||0),0);
+                                const motorista = rota && (Array.isArray(rota.profiles) ? (rota.profiles[0]&&rota.profiles[0].nome) : (rota.profiles&&rota.profiles.nome));
+                                const base = rota && (Array.isArray(rota.bases) ? (rota.bases[0]&&rota.bases[0].nome) : (rota.bases&&rota.bases.nome));
                                 const dataRota = rota && rota.data_prevista ? new Date(rota.data_prevista+'T12:00:00').toLocaleDateString('pt-BR') : null;
                                 // Extrair assinatura da obs
                                 React.createElement(React.Fragment, null,
