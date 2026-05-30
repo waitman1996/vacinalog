@@ -2675,24 +2675,35 @@ CREATE POLICY "allow_all_vd" ON vendas_diretas FOR ALL USING (true) WITH CHECK (
                             "Nenhuma remessa encontrada para esta VD.")
                         : React.createElement("div", { style: { display: 'flex', flexDirection: 'column', gap: 10 } },
                             detalheData.map(r => {
-                                // rotas pode vir como array ou objeto dependendo do join
                                 const rotaRaw = r.rotas;
                                 const rota = Array.isArray(rotaRaw) ? rotaRaw[0] : rotaRaw;
                                 const doses = (r.remessa_itens||[]).reduce((s,i)=>s+(Number(i.quantidade)||0),0);
                                 const motorista = rota && (Array.isArray(rota.profiles) ? (rota.profiles[0]&&rota.profiles[0].nome) : (rota.profiles&&rota.profiles.nome));
                                 const base = rota && (Array.isArray(rota.bases) ? (rota.bases[0]&&rota.bases[0].nome) : (rota.bases&&rota.bases.nome));
                                 const dataRota = rota && rota.data_prevista ? new Date(rota.data_prevista+'T12:00:00').toLocaleDateString('pt-BR') : null;
-                                // Extrair assinatura da obs
-                                React.createElement(React.Fragment, null,
-                                    (() => { var sig = parseObsAssinatura(r.observacao || ''); return sig.temAssinatura ? React.createElement("div", { style: { marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 10 } },
+                                const vacinas = (r.remessa_itens||[]).map(i => (i.vacinas&&i.vacinas.nome)||'—').filter((v,i,a)=>a.indexOf(v)===i).join(', ');
+                                const sig = parseObsAssinatura(r.observacao || '');
+                                const ST_REM = { planejada:'badge-gray', em_separacao:'badge-yellow', pronta:'badge-blue', em_transito:'badge-yellow', concluida:'badge-green', cancelada:'badge-red' };
+                                return React.createElement("div", { key: r.id, style: { border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '14px 16px', background: 'var(--bg-card)' } },
+                                    React.createElement("div", { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, flexWrap: 'wrap', gap: 6 } },
+                                        React.createElement("span", { style: { fontFamily: 'JetBrains Mono', fontSize: 12, color: 'var(--accent)', fontWeight: 700 } }, r.codigo_rastreio || '—'),
+                                        rota && React.createElement("span", { style: { fontSize: 12, color: 'var(--text-muted)' } }, "Rota ", React.createElement("strong", null, rota.codigo)),
+                                        React.createElement("span", { className: 'badge ' + (ST_REM[r.status]||'badge-gray') }, r.status || '—')),
+                                    React.createElement("div", { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(140px,1fr))', gap: 8, fontSize: 12, marginBottom: sig.temAssinatura ? 10 : 0 } },
+                                        React.createElement("div", null, React.createElement("span", { style: { color: 'var(--text-muted)' } }, "Doses: "), React.createElement("strong", null, doses.toLocaleString('pt-BR'))),
+                                        vacinas && React.createElement("div", null, React.createElement("span", { style: { color: 'var(--text-muted)' } }, "Vacina: "), React.createElement("strong", null, vacinas)),
+                                        motorista && React.createElement("div", null, React.createElement("span", { style: { color: 'var(--text-muted)' } }, "Motorista: "), React.createElement("strong", null, motorista)),
+                                        base && React.createElement("div", null, React.createElement("span", { style: { color: 'var(--text-muted)' } }, "Base: "), React.createElement("strong", null, base)),
+                                        dataRota && React.createElement("div", null, React.createElement("span", { style: { color: 'var(--text-muted)' } }, "Data: "), React.createElement("strong", null, dataRota))),
+                                    sig.temAssinatura && React.createElement("div", { style: { borderTop: '1px solid var(--border)', paddingTop: 10, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 10 } },
                                         React.createElement("div", null,
-                                            React.createElement("div", { style: { fontSize: 12, fontWeight: 700, color: 'var(--success)', marginBottom: 4 } }, "\u2713 Entregue \u00E0s " + (sig.hora || '\u2014')),
+                                            React.createElement("div", { style: { fontSize: 12, fontWeight: 700, color: 'var(--success)', marginBottom: 4 } }, "\u2713 Entregue \u00E0s " + (sig.hora||'\u2014')),
                                             sig.nome && React.createElement("div", { style: { fontSize: 12 } }, React.createElement("span", { style: { color: 'var(--text-muted)' } }, "Recebido por: "), React.createElement("strong", null, sig.nome)),
                                             sig.cpf && React.createElement("div", { style: { fontSize: 11, color: 'var(--text-muted)' } }, "CPF/CNPJ: " + sig.cpf),
-                                            sig.lat && React.createElement("a", { href: 'https://maps.google.com/?q='+sig.lat+','+sig.lng, target: '_blank', style: { fontSize: 11, color: 'var(--accent)', display: 'block', marginTop: 4 } }, "\uD83D\uDCCD Ver local da entrega")),
+                                            sig.lat && React.createElement("a", { href: 'https://maps.google.com/?q='+sig.lat+','+sig.lng, target: '_blank', style: { fontSize: 11, color: 'var(--accent)', display: 'block', marginTop: 4 } }, "\uD83D\uDCCD Ver local da entrega no mapa")),
                                         sig.sigImg && React.createElement("div", { style: { border: '1px solid var(--border)', borderRadius: 8, padding: 6, background: '#fff', textAlign: 'center' } },
                                             React.createElement("div", { style: { fontSize: 10, color: '#888', marginBottom: 2 } }, "Assinatura"),
-                                            React.createElement("img", { src: sig.sigImg, style: { display: 'block', maxWidth: 200, maxHeight: 90, objectFit: 'contain' } }))) : null; })())
+                                            React.createElement("img", { src: sig.sigImg, style: { display: 'block', maxWidth: 200, maxHeight: 90, objectFit: 'contain' } }))));
                             }))))),
         erroTabela ? React.createElement("div", { className: "card", style: { borderColor: 'var(--warning)' } },
             React.createElement("div", { className: "card-title", style: { color: 'var(--warning)' } }, "⚠️ Tabela vendas_diretas não existe no Supabase"),
