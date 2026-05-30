@@ -2652,27 +2652,16 @@ CREATE POLICY "allow_all_vd" ON vendas_diretas FOR ALL USING (true) WITH CHECK (
                                 const base = rota && rota.bases && rota.bases.nome;
                                 const dataRota = rota && rota.data_prevista ? new Date(rota.data_prevista+'T12:00:00').toLocaleDateString('pt-BR') : null;
                                 // Extrair assinatura da obs
-                                const obsLines = (r.observacao||'').split('\n');
-                                const assLine = obsLines.find(l => l.includes('[ASSINATURA'));
-                                const assInfo = assLine ? assLine.replace('[ASSINATURA','').replace(']','').trim() : null;
-                                const recebPor = obsLines.find(l => l.includes('Recebido por:'));
-                                const ST_REM = { planejada:'badge-gray', em_separacao:'badge-yellow', pronta:'badge-blue', em_transito:'badge-yellow', concluida:'badge-green', cancelada:'badge-red' };
-                                return React.createElement("div", { key: r.id, style: { border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '12px 16px', background: 'var(--bg-card)' } },
-                                    React.createElement("div", { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8, flexWrap: 'wrap', gap: 6 } },
+                                React.createElement(React.Fragment, null,
+                                    (() => { var sig = parseObsAssinatura(r.observacao || ''); return sig.temAssinatura ? React.createElement("div", { style: { marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 10 } },
                                         React.createElement("div", null,
-                                            React.createElement("span", { style: { fontFamily: 'JetBrains Mono', fontSize: 11, color: 'var(--accent)', fontWeight: 700 } }, r.codigo_rastreio),
-                                            rota && React.createElement("span", { style: { fontSize: 11, color: 'var(--text-muted)', marginLeft: 8 } }, "→ Rota ", React.createElement("strong", null, rota.codigo))),
-                                        React.createElement("span", { className: 'badge ' + (ST_REM[r.status]||'badge-gray') }, r.status || '—')),
-                                    React.createElement("div", { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))', gap: 8, fontSize: 12 } },
-                                        React.createElement("div", null, React.createElement("span", { style: { color: 'var(--text-muted)' } }, "Doses: "), React.createElement("strong", null, doses.toLocaleString('pt-BR'))),
-                                        motorista && React.createElement("div", null, React.createElement("span", { style: { color: 'var(--text-muted)' } }, "Motorista: "), React.createElement("strong", null, motorista)),
-                                        base && React.createElement("div", null, React.createElement("span", { style: { color: 'var(--text-muted)' } }, "Base: "), React.createElement("strong", null, base)),
-                                        dataRota && React.createElement("div", null, React.createElement("span", { style: { color: 'var(--text-muted)' } }, "Data: "), React.createElement("strong", null, dataRota))),
-                                    assInfo && React.createElement("div", { style: { marginTop: 8, paddingTop: 8, borderTop: '1px solid var(--border)', fontSize: 11 } },
-                                        React.createElement("span", { style: { color: 'var(--success)', fontWeight: 600 } }, "✓ Entregue "),
-                                        React.createElement("span", { style: { color: 'var(--text-muted)' } }, assInfo)),
-                                    recebPor && React.createElement("div", { style: { fontSize: 11, color: 'var(--text-muted)', marginTop: 4 } },
-                                        recebPor.replace('[ASSINATURA','').replace(']','').trim()));
+                                            React.createElement("div", { style: { fontSize: 12, fontWeight: 700, color: 'var(--success)', marginBottom: 4 } }, "\u2713 Entregue \u00E0s " + (sig.hora || '\u2014')),
+                                            sig.nome && React.createElement("div", { style: { fontSize: 12 } }, React.createElement("span", { style: { color: 'var(--text-muted)' } }, "Recebido por: "), React.createElement("strong", null, sig.nome)),
+                                            sig.cpf && React.createElement("div", { style: { fontSize: 11, color: 'var(--text-muted)' } }, "CPF/CNPJ: " + sig.cpf),
+                                            sig.lat && React.createElement("a", { href: 'https://maps.google.com/?q='+sig.lat+','+sig.lng, target: '_blank', style: { fontSize: 11, color: 'var(--accent)', display: 'block', marginTop: 4 } }, "\uD83D\uDCCD Ver local da entrega")),
+                                        sig.sigImg && React.createElement("div", { style: { border: '1px solid var(--border)', borderRadius: 8, padding: 6, background: '#fff', textAlign: 'center' } },
+                                            React.createElement("div", { style: { fontSize: 10, color: '#888', marginBottom: 2 } }, "Assinatura"),
+                                            React.createElement("img", { src: sig.sigImg, style: { display: 'block', maxWidth: 200, maxHeight: 90, objectFit: 'contain' } }))) : null; })())
                             }))))),
         erroTabela ? React.createElement("div", { className: "card", style: { borderColor: 'var(--warning)' } },
             React.createElement("div", { className: "card-title", style: { color: 'var(--warning)' } }, "⚠️ Tabela vendas_diretas não existe no Supabase"),
@@ -14967,6 +14956,41 @@ function App() {
 }
 // ═══════════════════════════════════════════════
 // RENDER
+// Parseia assinatura e localização da observação de remessa
+function parseObsAssinatura(obs) {
+    var r2 = { temAssinatura: false, hora: null, nome: null, cpf: null, sigImg: null, lat: null, lng: null };
+    if (!obs) return r2;
+    var sigStart = obs.indexOf('[ASSINATURA ');
+    if (sigStart >= 0) {
+        r2.temAssinatura = true;
+        var bracketEnd = obs.indexOf(']', sigStart);
+        if (bracketEnd > sigStart) r2.hora = obs.substring(sigStart + 12, bracketEnd).trim();
+        var recebIdx = obs.indexOf('Recebido por: ', sigStart);
+        if (recebIdx >= 0) {
+            var after = obs.substring(recebIdx + 14);
+            var cpfIdx = after.indexOf('(CPF: ');
+            var sigIdx = after.indexOf(' [SIG_IMG:');
+            var nlIdx = after.indexOf('\n');
+            if (cpfIdx >= 0 && (cpfIdx < sigIdx || sigIdx < 0)) {
+                r2.nome = after.substring(0, cpfIdx).trim();
+                var cpfEnd = after.indexOf(')', cpfIdx);
+                if (cpfEnd > cpfIdx) r2.cpf = after.substring(cpfIdx + 6, cpfEnd).trim();
+            } else if (sigIdx >= 0) { r2.nome = after.substring(0, sigIdx).trim();
+            } else if (nlIdx >= 0) { r2.nome = after.substring(0, nlIdx).trim();
+            } else { r2.nome = after.trim(); }
+        }
+        var imgStart = obs.indexOf('[SIG_IMG:');
+        var imgEnd = obs.indexOf(':END_SIG]');
+        if (imgStart >= 0 && imgEnd > imgStart) r2.sigImg = obs.substring(imgStart + 9, imgEnd);
+    }
+    var locStart = obs.indexOf('[ENTREGA_LOCAL:');
+    var locEnd = obs.indexOf(':END_LOCAL]');
+    if (locStart >= 0 && locEnd > locStart) {
+        var coords = obs.substring(locStart + 15, locEnd).split(',');
+        if (coords.length === 2) { r2.lat = coords[0]; r2.lng = coords[1]; }
+    }
+    return r2;
+}
 // ═══════════════════════════════════════════════
 ReactDOM.render(React.createElement(ToastProvider, null,
     React.createElement(App, null)), document.getElementById('root'));
