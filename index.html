@@ -8938,7 +8938,7 @@ function ModalDetalheRota({ rota, onClose, ROTA_ST, ROTA_BADGE }) {
         const load = async () => {
             setLoading(true);
             const { data, error } = await sb.from('rotas')
-                .select('id,codigo,data_prevista,status,veiculo,base_origem_id,bases!rotas_base_origem_id_fkey(nome,cidade,uf),profiles!rotas_motorista_id_fkey(nome),veiculos(placa,modelo),remessas(id,codigo_rastreio,status,ordem_entrega,destino_tipo,observacao,bases(nome,cidade,uf),aplicadores!remessas_destino_aplicador_id_fkey(nome,cpf,cidade,uf,endereco),remessa_itens(id,quantidade,vacinas(nome,lote)))')
+                .select('id,codigo,data_prevista,status,veiculo,base_origem_id,bases!rotas_base_origem_id_fkey(nome,cidade,uf),profiles!rotas_motorista_id_fkey(nome),veiculos(placa,modelo),remessas(id,codigo_rastreio,status,ordem_entrega,destino_tipo,observacao,bases(nome,cidade,uf),aplicadores!remessas_destino_aplicador_id_fkey(nome,cpf,cidade,uf,endereco,telefone),remessa_itens(id,quantidade,vacinas(nome,lote)))')
                 .eq('id', rota.id)
                 .single();
             if (error) {
@@ -9453,7 +9453,7 @@ function RotasListPage({ onOpenRoteirizacao }) {
             if (rotaError)
                 throw rotaError;
             const { data: remessasData, error: remessasError } = await sb.from('remessas')
-                .select('*, remessa_itens(*, vacinas(nome, lote)), bases(nome, cidade, uf, endereco), aplicadores!remessas_destino_aplicador_id_fkey(nome, cpf, cidade, uf, endereco)')
+                .select('*, remessa_itens(*, vacinas(nome, lote)), bases(nome, cidade, uf, endereco, telefone), aplicadores!remessas_destino_aplicador_id_fkey(nome, cpf, cidade, uf, endereco, telefone)')
                 .eq('rota_id', rota.id)
                 .order('ordem_entrega', { ascending: true });
             if (remessasError)
@@ -9531,6 +9531,7 @@ function RotasListPage({ onOpenRoteirizacao }) {
                     const parts = [vdData.rua, vdData.numero, vdData.bairro].filter(Boolean).join(', ');
                     endereco = [parts || vdData.endereco, vdData.cidade, vdData.uf].filter(Boolean).join(' — ');
                 } else {
+                    const telefone = isVDRem ? (vdData && vdData.telefone) || '' : (destino && destino.telefone) || '';
                     endereco = [(destino && destino.endereco) || '', (destino && destino.cidade) || '', (destino && destino.uf) || ''].filter(Boolean).join(' — ');
                 }
                 const ufCol = isVDRem ? (vdData && vdData.uf) || '' : ((destino && destino.uf) || '');
@@ -9545,7 +9546,7 @@ function RotasListPage({ onOpenRoteirizacao }) {
                 return [
                     '<tr>',
                     '<td>' + esc(responsavel) + '</td>',
-                    '<td>' + esc(endereco) + '</td>',
+                    '<td>' + esc(endereco) + (telefone ? '<br><span style="color:#666;font-size:10px">📞 ' + esc(telefone) + '</span>' : '') + '</td>',
                     '<td style="text-align:center">' + esc(ufCol) + '</td>',
                     '<td>Ordem ' + esc(rem.ordem_entrega || idx + 1) + '</td>',
                     '<td style="text-align:center">' + esc(itens.length || (doses > 0 ? 1 : '—')) + '</td>',
@@ -11537,6 +11538,11 @@ function MontagemPage() {
             const destCidade = isRemVD ? (destVDInfo.cidade+'/'+destVDInfo.uf) : (rem.destino_tipo === 'base' ? (((_c = rem.bases) === null || _c === void 0 ? void 0 : _c.cidade) + '/' + ((_d = rem.bases) === null || _d === void 0 ? void 0 : _d.uf)) : (((_e = rem.aplicadores) === null || _e === void 0 ? void 0 : _e.cidade) + '/' + ((_f = rem.aplicadores) === null || _f === void 0 ? void 0 : _f.uf)));
             const destCPF = rem.destino_tipo === 'aplicador' ? (_g = rem.aplicadores) === null || _g === void 0 ? void 0 : _g.cpf : null;
             const destEnd = rem.destino_tipo === 'aplicador' ? (_h = rem.aplicadores) === null || _h === void 0 ? void 0 : _h.endereco : null;
+            const destTel = isVDRemMotorista
+                ? null  // VD: sem telefone direto (está no cadastro VD)
+                : rem.destino_tipo === 'aplicador'
+                    ? (rem.aplicadores && rem.aplicadores.telefone) || null
+                    : (rem.bases && rem.bases.telefone) || null;
             const totalDoses = (rem.remessa_itens || []).reduce((s, i) => s + i.quantidade, 0);
             const isPronta = rem.status === 'pronta';
             // Extrair doses sugeridas da observação (formato: "Nome | 20 doses | ...")
@@ -12806,7 +12812,7 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
         setLoading(true);
         const [remRes, rotaRes] = await Promise.all([
             sb.from('remessas')
-                .select('*, remessa_itens(quantidade, vacinas(nome)), bases(nome,cidade,uf), aplicadores!remessas_destino_aplicador_id_fkey(nome,cpf,cidade,uf,endereco)')
+                .select('*, remessa_itens(quantidade, vacinas(nome)), bases(nome,cidade,uf,telefone), aplicadores!remessas_destino_aplicador_id_fkey(nome,cpf,cidade,uf,endereco,telefone)')
                 .eq('rota_id', rota.id).order('ordem_entrega'),
             sb.from('rotas')
                 .select('id,codigo,status,tipo,base_origem_id,veiculo,data_prevista,checkin_at,checkin_lat,checkin_lng,checkout_at,checkout_obs,current_lat,current_lng,bases!rotas_base_origem_id_fkey(nome,cidade,uf), profiles!rotas_motorista_id_fkey(nome)')
@@ -13292,7 +13298,12 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
                                 React.createElement("div", { style: { fontSize: 12, color: 'var(--text-muted)' } },
                                     destCidade,
                                     cpfExibir && ' · CPF: ' + cpfExibir),
-                                endExibir && React.createElement("div", { style: { fontSize: 11, color: 'var(--text-muted)', marginTop: 2 } }, endExibir)),
+                                endExibir && React.createElement("div", { style: { fontSize: 11, color: 'var(--text-muted)', marginTop: 2 } }, endExibir),
+                            destTel && React.createElement("a", {
+                                href: 'https://wa.me/55' + destTel.replace(/\D/g, ''),
+                                target: '_blank',
+                                style: { display: 'inline-flex', alignItems: 'center', gap: 4, marginTop: 4, fontSize: 12, color: '#25D366', textDecoration: 'none', fontWeight: 600 }
+                            }, "💬 ", destTel)),
                             React.createElement("div", { style: { display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' } },
                                 React.createElement("span", { className: `badge ${SB_REM[rem.status] || 'badge-gray'}` }, ST_REM[rem.status] || rem.status),
                                 doses > 0 && React.createElement("span", { className: "badge badge-cyan" },
