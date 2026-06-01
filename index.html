@@ -9526,12 +9526,12 @@ function RotasListPage({ onOpenRoteirizacao }) {
                     responsavel = `${(destino && destino.nome) || 'Aplicador'}${(destino && destino.cpf) ? ' — CPF: ' + destino.cpf : ''}`;
                 }
                 // Endereço
+                const telefone = isVDRem ? (vdData && vdData.telefone) || '' : (rem.destino_tipo === 'aplicador' ? (destino && destino.telefone) || '' : '');
                 let endereco;
                 if (isVDRem && vdData) {
                     const parts = [vdData.rua, vdData.numero, vdData.bairro].filter(Boolean).join(', ');
                     endereco = [parts || vdData.endereco, vdData.cidade, vdData.uf].filter(Boolean).join(' — ');
                 } else {
-                    const telefone = isVDRem ? (vdData && vdData.telefone) || '' : (rem.destino_tipo === 'aplicador' ? (destino && destino.telefone) || '' : '');
                     endereco = [(destino && destino.endereco) || '', (destino && destino.cidade) || '', (destino && destino.uf) || ''].filter(Boolean).join(' — ');
                 }
                 const ufCol = isVDRem ? (vdData && vdData.uf) || '' : ((destino && destino.uf) || '');
