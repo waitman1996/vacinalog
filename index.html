@@ -12812,12 +12812,13 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
         setLoading(true);
         const [remRes, rotaRes] = await Promise.all([
             sb.from('remessas')
-                .select('*, remessa_itens(quantidade, vacinas(nome)), bases(nome,cidade,uf,telefone), aplicadores!remessas_destino_aplicador_id_fkey(nome,cpf,cidade,uf,endereco,telefone)')
+                .select('id,codigo_rastreio,status,ordem_entrega,destino_tipo,observacao,remessa_itens(id,vacina_id,quantidade,vacinas(nome,produto_nome,lote)),aplicadores!remessas_destino_aplicador_id_fkey(nome,cpf,cidade,uf,endereco,telefone),bases(nome,cidade,uf,telefone)')
                 .eq('rota_id', rota.id).order('ordem_entrega'),
             sb.from('rotas')
                 .select('id,codigo,status,tipo,base_origem_id,veiculo,data_prevista,checkin_at,checkin_lat,checkin_lng,checkout_at,checkout_obs,current_lat,current_lng,bases!rotas_base_origem_id_fkey(nome,cidade,uf), profiles!rotas_motorista_id_fkey(nome)')
                 .eq('id', rota.id).single()
         ]);
+        if (remRes.error) { console.error('[VacinaLog] remessas load error:', remRes.error.message, remRes.error); toast('Erro ao carregar remessas: ' + remRes.error.message, 'error'); }
         setRemessas(remRes.data || []);
         if (rotaRes.data)
             setRota(rotaRes.data);
