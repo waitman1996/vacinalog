@@ -13253,6 +13253,7 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
             const destNome = rem.destino_tipo === 'base' ? (_a = rem.bases) === null || _a === void 0 ? void 0 : _a.nome : (_b = rem.aplicadores) === null || _b === void 0 ? void 0 : _b.nome;
             const destCPF = rem.destino_tipo === 'aplicador' ? (_g = rem.aplicadores) === null || _g === void 0 ? void 0 : _g.cpf : null;
             const destEnd = rem.destino_tipo === 'aplicador' ? (_h = rem.aplicadores) === null || _h === void 0 ? void 0 : _h.endereco : null;
+            const destTel = rem.destino_tipo === 'aplicador' ? (rem.aplicadores && rem.aplicadores.telefone) || null : null;
             const doses = (rem.remessa_itens || []).reduce((s, i) => s + i.quantidade, 0);
             let nomeExibir = destNome;
             let cpfExibir = destCPF;
