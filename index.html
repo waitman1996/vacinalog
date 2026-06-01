@@ -9453,7 +9453,7 @@ function RotasListPage({ onOpenRoteirizacao }) {
             if (rotaError)
                 throw rotaError;
             const { data: remessasData, error: remessasError } = await sb.from('remessas')
-                .select('*, remessa_itens(*, vacinas(nome, lote)), bases(nome, cidade, uf, endereco, telefone), aplicadores!remessas_destino_aplicador_id_fkey(nome, cpf, cidade, uf, endereco, telefone)')
+                .select('*, remessa_itens(*, vacinas(nome, lote)), bases(nome, cidade, uf, endereco), aplicadores!remessas_destino_aplicador_id_fkey(nome, cpf, cidade, uf, endereco, telefone)')
                 .eq('rota_id', rota.id)
                 .order('ordem_entrega', { ascending: true });
             if (remessasError)
@@ -9531,7 +9531,7 @@ function RotasListPage({ onOpenRoteirizacao }) {
                     const parts = [vdData.rua, vdData.numero, vdData.bairro].filter(Boolean).join(', ');
                     endereco = [parts || vdData.endereco, vdData.cidade, vdData.uf].filter(Boolean).join(' — ');
                 } else {
-                    const telefone = isVDRem ? (vdData && vdData.telefone) || '' : (destino && destino.telefone) || '';
+                    const telefone = isVDRem ? (vdData && vdData.telefone) || '' : (rem.destino_tipo === 'aplicador' ? (destino && destino.telefone) || '' : '');
                     endereco = [(destino && destino.endereco) || '', (destino && destino.cidade) || '', (destino && destino.uf) || ''].filter(Boolean).join(' — ');
                 }
                 const ufCol = isVDRem ? (vdData && vdData.uf) || '' : ((destino && destino.uf) || '');
@@ -11542,7 +11542,7 @@ function MontagemPage() {
                 ? null  // VD: sem telefone direto (está no cadastro VD)
                 : rem.destino_tipo === 'aplicador'
                     ? (rem.aplicadores && rem.aplicadores.telefone) || null
-                    : (rem.bases && rem.bases.telefone) || null;
+                    : null;  // bases não têm telefone
             const totalDoses = (rem.remessa_itens || []).reduce((s, i) => s + i.quantidade, 0);
             const isPronta = rem.status === 'pronta';
             // Extrair doses sugeridas da observação (formato: "Nome | 20 doses | ...")
@@ -12812,7 +12812,7 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
         setLoading(true);
         const [remRes, rotaRes] = await Promise.all([
             sb.from('remessas')
-                .select('id,codigo_rastreio,status,ordem_entrega,destino_tipo,observacao,remessa_itens(id,vacina_id,quantidade,vacinas(nome,produto_nome,lote)),aplicadores!remessas_destino_aplicador_id_fkey(nome,cpf,cidade,uf,endereco,telefone),bases(nome,cidade,uf,telefone)')
+                .select('id,codigo_rastreio,status,ordem_entrega,destino_tipo,observacao,remessa_itens(id,vacina_id,quantidade,vacinas(nome,produto_nome,lote)),aplicadores!remessas_destino_aplicador_id_fkey(nome,cpf,cidade,uf,endereco,telefone),bases(nome,cidade,uf)')
                 .eq('rota_id', rota.id).order('ordem_entrega'),
             sb.from('rotas')
                 .select('id,codigo,status,tipo,base_origem_id,veiculo,data_prevista,checkin_at,checkin_lat,checkin_lng,checkout_at,checkout_obs,current_lat,current_lng,bases!rotas_base_origem_id_fkey(nome,cidade,uf), profiles!rotas_motorista_id_fkey(nome)')
