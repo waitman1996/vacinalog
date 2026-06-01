@@ -11538,11 +11538,11 @@ function MontagemPage() {
             const destCidade = isRemVD ? (destVDInfo.cidade+'/'+destVDInfo.uf) : (rem.destino_tipo === 'base' ? (((_c = rem.bases) === null || _c === void 0 ? void 0 : _c.cidade) + '/' + ((_d = rem.bases) === null || _d === void 0 ? void 0 : _d.uf)) : (((_e = rem.aplicadores) === null || _e === void 0 ? void 0 : _e.cidade) + '/' + ((_f = rem.aplicadores) === null || _f === void 0 ? void 0 : _f.uf)));
             const destCPF = rem.destino_tipo === 'aplicador' ? (_g = rem.aplicadores) === null || _g === void 0 ? void 0 : _g.cpf : null;
             const destEnd = rem.destino_tipo === 'aplicador' ? (_h = rem.aplicadores) === null || _h === void 0 ? void 0 : _h.endereco : null;
-            const destTel = isVDRemMotorista
-                ? null  // VD: sem telefone direto (está no cadastro VD)
+            const destTel = isRemVD
+                ? null  // VD: sem telefone direto
                 : rem.destino_tipo === 'aplicador'
                     ? (rem.aplicadores && rem.aplicadores.telefone) || null
-                    : null;  // bases não têm telefone
+                    : null;
             const totalDoses = (rem.remessa_itens || []).reduce((s, i) => s + i.quantidade, 0);
             const isPronta = rem.status === 'pronta';
             // Extrair doses sugeridas da observação (formato: "Nome | 20 doses | ...")
