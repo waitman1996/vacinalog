@@ -10506,6 +10506,11 @@ function RoteirizacaoPage({ onBack }) {
                                     tarefas.length>80 && h('div',{style:{padding:7,color:'var(--text-muted)',fontSize:10,textAlign:'center'}},'Mostrando 80 de ',tarefas.length,' tarefas filtradas')));
                         }))),
                 abaEsq==='clinicas' && h(React.Fragment,null,
+                    h('div',{style:{padding:'6px 0',marginBottom:4}},
+                        h('label',{style:{fontSize:11,color:'var(--text-muted)',display:'block',marginBottom:3}},'Vacina para Clínica'),
+                        h('select',{className:'form-select',style:{padding:'5px 6px',fontSize:11,width:'100%'},value:vacinaClinicaId,onChange:e=>setVacinaClinicaId(e.target.value)},
+                            h('option',{value:''},'Selecione a vacina'),
+                            vacinasRot.map(v=>h('option',{key:v.id,value:v.id},v.nome)))),
                     h('input',{className:'form-input',placeholder:'Buscar clínica...',value:clinicaSearch,onChange:e=>setClinicaSearch(e.target.value),style:{width:'100%',padding:'6px 8px',fontSize:11}}),
                     h('div',{style:{flex:1,overflow:'auto',border:'1px solid var(--border)',borderRadius:'var(--radius)',background:'var(--bg-card)'}},
                         clinicasFiltradas.length===0 && h('div',{style:{padding:20,textAlign:'center',color:'var(--text-muted)',fontSize:12}},'Nenhuma clínica encontrada.'),
