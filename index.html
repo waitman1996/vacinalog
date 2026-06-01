@@ -2647,7 +2647,32 @@ CREATE POLICY "allow_all_vd" ON vendas_diretas FOR ALL USING (true) WITH CHECK (
             React.createElement("div", null,
                 React.createElement("div", { className: "page-title" }, "🛒 Vendas Diretas (VD)"),
                 React.createElement("div", { className: "page-subtitle" }, filtradas.length + " registros · " + totalDoses.toLocaleString('pt-BR') + " doses")),
-            React.createElement("button", { className: "btn btn-secondary", onClick: load }, "↻ Recarregar")),
+            React.createElement("div", { style: { display: 'flex', gap: 8 } },
+            React.createElement("button", { className: "btn btn-secondary", onClick: () => {
+                // Exportar XLSX via SheetJS (CDN já incluído)
+                const XLSXLib = window.XLSX || (typeof XLSX !== 'undefined' ? XLSX : null); if (!XLSXLib) { toast('Biblioteca XLSX não carregada', 'error'); return; }
+                const rows = filtradas.map(v => ({
+                    'Código': v.codigo || '',
+                    'Grupo': v.grupo || '',
+                    'Cliente': v.cliente || '',
+                    'Cidade': v.cidade || '',
+                    'UF': v.uf || '',
+                    'Doses Aprovadas': v.doses_aprovadas || 0,
+                    'Data Início': v.data_inicio ? new Date(v.data_inicio).toLocaleDateString('pt-BR') : '',
+                    'Status Original': v.status_original || '',
+                    'Status Logística': ST_LABELS[v.status_logistica || 'nao_roteirizado'] || '',
+                    'Endereço': v.endereco || '',
+                    'CEP': v.cep || '',
+                    'CNPJ': v.cnpj || '',
+                    'Telefone': v.telefone || ''
+                }));
+                const ws = XLSXLib.utils.json_to_sheet(rows);
+                const wb = XLSXLib.utils.book_new();
+                XLSXLib.utils.book_append_sheet(wb, ws, 'VDs');
+                XLSXLib.writeFile(wb, 'vendas_diretas_' + new Date().toISOString().slice(0,10) + '.xlsx');
+                toast('✓ XLSX exportado!', 'success');
+            } }, "📥 Exportar XLSX"),
+            React.createElement("button", { className: "btn btn-secondary", onClick: load }, "↻ Recarregar"))),
         detalheVD && React.createElement(Modal, { title: '🛒 Rastreio VD — ' + detalheVD.codigo, onClose: () => setDetalheVD(null), large: true },
             React.createElement("div", { style: { display: 'flex', flexDirection: 'column', gap: 16 } },
                 React.createElement("div", { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(200px,1fr))', gap: 12 } },
@@ -2743,7 +2768,7 @@ CREATE POLICY "allow_all_vd" ON vendas_diretas FOR ALL USING (true) WITH CHECK (
                                 React.createElement("td", { style: { fontSize: 12, whiteSpace: 'nowrap' } }, fmtDate(v.data_inicio)),
                                 React.createElement("td", { className: "mono", style: { textAlign: 'right', fontWeight: 600 } }, (v.doses_aprovadas || 0).toLocaleString('pt-BR')),
                                 React.createElement("td", null, React.createElement("span", { className: "badge badge-gray", style: { fontSize: 10 } }, v.status_original || '—')),
-                                React.createElement("td", null, React.createElement("span", { className: `badge ${ST_BADGES[v.status_logistica] || 'badge-gray'}` }, ST_LABELS[v.status_logistica] || v.status_logistica || '—')),
+                                React.createElement("td", null, React.createElement("span", { className: `badge ${ST_BADGES[v.status_logistica || 'nao_roteirizado'] || 'badge-gray'}` }, ST_LABELS[v.status_logistica || 'nao_roteirizado'] || '—')),
                                 React.createElement("td", null,
                                     salvando === v.id
                                         ? React.createElement("span", { style: { fontSize: 11, color: 'var(--text-muted)' } }, "...")
