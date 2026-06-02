@@ -747,7 +747,7 @@ const STATUS_BADGES = {
     'revisao': 'badge-red', 'no_roteiro': 'badge-gray', 'cancelada': 'badge-red'
 };
 const LOGISTICA_STATUS = ['aprovada', 'em_validacao', 'em_execucao', 'pronta_faturamento'];
-const ROLE_LABELS = { admin: 'Administrador', planejador: 'Planejador', montador: 'Montador', motorista: 'Motorista', aplicador: 'Aplicador' };
+const ROLE_LABELS = { admin: 'Administrador', planejador: 'Planejador', montador: 'Montador', motorista: 'Motorista', aplicador: 'Aplicador', consulta: 'Consulta' };
 // ═══════════════════════════════════════════════
 // LOGIN SCREEN
 // ═══════════════════════════════════════════════
@@ -810,6 +810,9 @@ function Sidebar({ profile, currentPage, onNavigate, open, onClose, collapsed, o
     }
     else if (role === 'aplicador') {
         menuItems.push({ section: 'Minha Área' }, { id: 'minhas-doses', icon: '💉', label: 'Minhas Doses' }, { id: 'abatimento', icon: '✏️', label: 'Registrar Abatimento' });
+    }
+    else if (role === 'consulta') {
+        menuItems.push({ section: 'Consultas' }, { id: 'tarefas', icon: '📋', label: 'Tarefas' }, { id: 'escalas', icon: '👩‍⚕️', label: 'Escalas' }, { id: 'tarefas-escalas', icon: '🔗', label: 'Tarefas × Escalas' }, { id: 'vendas-diretas', icon: '🛒', label: 'Vendas Diretas' });
     }
     return (React.createElement("div", { className: `sidebar ${open ? 'open' : ''} ${collapsed ? 'collapsed' : ''}` },
         React.createElement("div", { className: "sidebar-header", style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: collapsed ? '14px 8px' : '16px 16px 12px' } },
@@ -11048,7 +11051,7 @@ function UsuariosPage() {
     const [modal, setModal] = useState(null); // null | 'novo' | {user}
     const [loading, setLoading] = useState(true);
     const toast = useContext(ToastContext);
-    const ROLE_COLORS = { admin: 'badge-red', planejador: 'badge-blue', montador: 'badge-yellow', motorista: 'badge-green', aplicador: 'badge-cyan' };
+    const ROLE_COLORS = { admin: 'badge-red', planejador: 'badge-blue', montador: 'badge-yellow', motorista: 'badge-green', aplicador: 'badge-cyan', consulta: 'badge-gray' };
     const load = async () => {
         setLoading(true);
         const { data, error } = await sb.from('profiles')
