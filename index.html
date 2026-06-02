@@ -4100,13 +4100,15 @@ function ImportEstoque() {
 function ImportVD() {
     const [file, setFile] = useState(null);
     const [preview, setPreview] = useState(null);
+    const [validacao, setValidacao] = useState(null); // { novas, atualizacoes, duplicatas, ignoradas }
+    const [validando, setValidando] = useState(false);
     const [importing, setImporting] = useState(false);
     const [progress, setProgress] = useState(0);
     const [result, setResult] = useState(null);
     const toast = useContext(ToastContext);
     const fileRef = useRef();
     const handleFile = (f) => {
-        setFile(f); setResult(null);
+        setFile(f); setResult(null); setValidacao(null);
         const reader = new FileReader();
         reader.onload = (e) => {
             const text = e.target.result;
@@ -4132,25 +4134,75 @@ function ImportVD() {
         };
         reader.readAsText(f, 'utf-8');
     };
+    const validarContraDB = async () => {
+        if (!preview || preview.valid === 0) return;
+        setValidando(true);
+        setValidacao(null);
+        try {
+            const rows = preview.data;
+            const codigos = rows.map(r => String(r['Codigo da tarefa'] || r['Código da tarefa'] || '').trim()).filter(Boolean);
+            // Buscar existentes pelo código
+            const existMap = {};
+            for (let i = 0; i < codigos.length; i += 500) {
+                const { data: ex } = await sb.from('vendas_diretas').select('id,codigo,cliente,cidade,doses_aprovadas,grupo').in('codigo', codigos.slice(i, i+500));
+                (ex || []).forEach(r => { existMap[r.codigo] = r; });
+            }
+            // Buscar duplicatas por (cidade + cliente + grupo + doses) mesmo com código diferente
+            const { data: todos } = await sb.from('vendas_diretas').select('id,codigo,cliente,cidade,doses_aprovadas,grupo').limit(50000);
+            const dbKeyMap = {};
+            (todos || []).forEach(r => {
+                const key = (r.grupo||'').toLowerCase().trim() + '|' + (r.cliente||'').toLowerCase().trim() + '|' + (r.cidade||'').toLowerCase().trim() + '|' + String(r.doses_aprovadas||0);
+                if (!dbKeyMap[key]) dbKeyMap[key] = [];
+                dbKeyMap[key].push(r);
+            });
+            const novas = [], atualizacoes = [], duplicatas = [];
+            rows.forEach(r => {
+                const cod = String(r['Codigo da tarefa'] || r['Código da tarefa'] || '').trim();
+                const grupo = String(r['Grupo'] || '').trim();
+                const cliente = String(r['Cliente'] || '').trim();
+                const cidade = String(r['Cidade'] || '').trim();
+                const doses = parseInt(r['Qtd. Aprovadas'] || r['Qtd Aprovadas'] || 0) || 0;
+                const key = grupo.toLowerCase() + '|' + cliente.toLowerCase() + '|' + cidade.toLowerCase() + '|' + String(doses);
+                const jaExisteCodigo = existMap[cod];
+                const jaExisteConteudo = dbKeyMap[key] && dbKeyMap[key].some(x => x.codigo !== cod);
+                if (jaExisteCodigo) {
+                    atualizacoes.push({ ...r, _existente: jaExisteCodigo });
+                } else if (jaExisteConteudo) {
+                    duplicatas.push({ ...r, _similares: dbKeyMap[key] });
+                } else {
+                    novas.push(r);
+                }
+            });
+            setValidacao({ novas, atualizacoes, duplicatas });
+        } catch(err) {
+            toast('Erro na validação: ' + err.message, 'error');
+        } finally {
+            setValidando(false);
+        }
+    };
     const parseVdDate = (str) => {
         if (!str) return null;
         const m = str.match(/(\d{2})\/(\d{2})\/(\d{4}),?\s*(\d{2}:\d{2}:\d{2})?/);
         if (m) return m[3] + '-' + m[2] + '-' + m[1] + (m[4] ? 'T' + m[4] : '');
         return null;
     };
-    const doImport = async () => {
-        if (!preview || preview.valid === 0) return;
+    const doImport = async (includeDuplicatas = false) => {
+        if (!validacao) return;
         setImporting(true); setProgress(0);
         try {
             const { data: { user } } = await sb.auth.getUser();
             const userId = user && user.id ? user.id : null;
-            const rows = preview.data;
+            const rows = includeDuplicatas
+                ? [...validacao.novas, ...validacao.atualizacoes, ...validacao.duplicatas]
+                : [...validacao.novas, ...validacao.atualizacoes];
             const codigos = rows.map(r => String(r['Codigo da tarefa'] || r['Código da tarefa'] || '').trim()).filter(Boolean);
             const existMap = {};
             for (let i = 0; i < codigos.length; i += 500) {
                 const _exRes = await sb.from('vendas_diretas').select('id, codigo').in('codigo', codigos.slice(i, i+500));
                 (_exRes.data || []).forEach(r => { existMap[r.codigo] = r.id; });
             }
+            // Pré-popular existMap com atualizações já conhecidas da validação
+            (validacao.atualizacoes || []).forEach(r => { if (r._existente) existMap[r['Codigo da tarefa'] || r['Código da tarefa']] = r._existente.id; });
             let inserted = 0, updated = 0, ignored = 0;
             for (let i = 0; i < rows.length; i += 200) {
                 const batch = rows.slice(i, i + 200);
@@ -4223,29 +4275,59 @@ function ImportVD() {
 );
 ALTER TABLE vendas_diretas ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "allow_all_vd" ON vendas_diretas FOR ALL USING (true) WITH CHECK (true);`;
+    const DuplicataRow = ({ r }) => React.createElement("div", { style: { padding: '6px 10px', background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.3)', borderRadius: 6, marginBottom: 6, fontSize: 12 } },
+        React.createElement("div", { style: { fontWeight: 600, color: 'var(--warning)' } }, "⚠ ", r['Codigo da tarefa'] || r['Código da tarefa'], " — ", r['Cliente'], " / ", r['Cidade'], " / ", r['Qtd. Aprovadas'] || r['Qtd Aprovadas'], " doses"),
+        React.createElement("div", { style: { color: 'var(--text-muted)', marginTop: 2 } }, "Similar a: ", (r._similares || []).map(s => s.codigo).join(', ')));
     return React.createElement("div", { className: "card" },
         React.createElement("div", { className: "card-title", style: { marginBottom: 16 } }, "Importar Tarefas VD (Venda Direta)"),
         React.createElement("p", { style: { fontSize: 13, color: 'var(--text-secondary)', marginBottom: 12 } },
-            "Importar CSV do sistema VD. Colunas: Codigo da tarefa, Grupo, Cliente, Qtd. Aprovadas, Cidade, UF, Status, Rua, Numero, Bairro, Data Inicio, Data Termino, CEP, CNPJ, Telefone."),
+            "Importar CSV do sistema VD. O sistema valida duplicatas antes de importar."),
         React.createElement("details", { style: { marginBottom: 16 } },
             React.createElement("summary", { style: { fontSize: 12, cursor: 'pointer', color: 'var(--accent)' } }, "Ver SQL para criar tabela no Supabase"),
             React.createElement("pre", { style: { fontSize: 11, background: 'var(--bg-input)', padding: 10, borderRadius: 6, overflow: 'auto', marginTop: 8, whiteSpace: 'pre-wrap' } }, sqlTabela)),
         React.createElement("div", { style: { display: 'flex', gap: 12, alignItems: 'center', marginBottom: 16 } },
-            React.createElement("input", { type: 'file', accept: '.csv', ref: fileRef, style: { display: 'none' }, onChange: e => e.target.files[0] && handleFile(e.target.files[0]) }),
-            React.createElement("button", { className: 'btn btn-secondary', onClick: () => fileRef.current && fileRef.current.click() }, "Selecionar CSV"),
+            React.createElement("input", { type: 'file', accept: '.csv', ref: fileRef, style: { display: 'none' }, onChange: e => { if (e.target.files[0]) { handleFile(e.target.files[0]); setValidacao(null); setResult(null); } } }),
+            React.createElement("button", { className: 'btn btn-secondary', onClick: () => fileRef.current && fileRef.current.click() }, "📂 Selecionar CSV"),
             file && React.createElement("span", { style: { fontSize: 12, color: 'var(--text-secondary)' } }, file.name)),
-        preview && React.createElement("div", { style: { marginBottom: 16, padding: 12, background: 'var(--bg-input)', borderRadius: 'var(--radius-sm)', fontSize: 13 } },
-            React.createElement("div", null, "Total: ", React.createElement("strong", null, preview.total), " · Válidos: ", React.createElement("strong", null, preview.valid)),
-            React.createElement("div", null, "Doses: ", React.createElement("strong", { style: { color: 'var(--success)' } }, (preview.totalDoses || 0).toLocaleString('pt-BR')))),
-        importing && React.createElement("div", { style: { marginBottom: 12 } },
-            React.createElement("div", { className: 'progress-bar', style: { height: 8 } },
-                React.createElement("div", { className: 'progress-fill', style: { width: progress + '%' } })),
-            React.createElement("div", { style: { fontSize: 11, textAlign: 'center', marginTop: 4, color: 'var(--text-muted)' } }, "Importando... " + progress + "%")),
-        result && React.createElement("div", { style: { marginBottom: 12, padding: 12, background: 'var(--success-bg)', border: '1px solid rgba(16,185,129,0.3)', borderRadius: 'var(--radius-sm)', fontSize: 13 } },
-            React.createElement("strong", { style: { color: 'var(--success)' } }, "Concluido! "),
-            result.inserted + " novas · " + result.updated + " atualizadas · " + result.ignored + " ignoradas"),
-        React.createElement("button", { className: 'btn btn-primary', onClick: doImport, disabled: importing || !preview || preview.valid === 0 },
-            importing ? 'Importando...' : 'Importar ' + (preview ? preview.valid : 0) + ' tarefas VD'));
+        preview && !validacao && React.createElement("div", null,
+            React.createElement("div", { style: { marginBottom: 12, padding: 12, background: 'var(--bg-input)', borderRadius: 'var(--radius-sm)', fontSize: 13 } },
+                React.createElement("div", null, "Total: ", React.createElement("strong", null, preview.total), " · Válidos: ", React.createElement("strong", null, preview.valid)),
+                React.createElement("div", null, "Doses: ", React.createElement("strong", { style: { color: 'var(--success)' } }, (preview.totalDoses || 0).toLocaleString('pt-BR')))),
+            React.createElement("button", { className: 'btn btn-primary', onClick: validarContraDB, disabled: validando },
+                validando ? '🔍 Validando duplicatas...' : '🔍 Validar antes de importar')),
+        validando && React.createElement("div", { style: { padding: 16, textAlign: 'center', color: 'var(--text-muted)', fontSize: 13 } }, "Consultando banco de dados..."),
+        validacao && React.createElement("div", null,
+            React.createElement("div", { style: { display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10, marginBottom: 16 } },
+                React.createElement("div", { style: { padding: 12, background: 'rgba(16,185,129,0.1)', border: '1px solid rgba(16,185,129,0.3)', borderRadius: 8, textAlign: 'center' } },
+                    React.createElement("div", { style: { fontSize: 24, fontWeight: 700, color: 'var(--success)' } }, validacao.novas.length),
+                    React.createElement("div", { style: { fontSize: 12, color: 'var(--text-muted)' } }, "✅ Novas (seguro importar)")),
+                React.createElement("div", { style: { padding: 12, background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.3)', borderRadius: 8, textAlign: 'center' } },
+                    React.createElement("div", { style: { fontSize: 24, fontWeight: 700, color: 'var(--accent)' } }, validacao.atualizacoes.length),
+                    React.createElement("div", { style: { fontSize: 12, color: 'var(--text-muted)' } }, "🔄 Atualizações (mesmo código)")),
+                React.createElement("div", { style: { padding: 12, background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.3)', borderRadius: 8, textAlign: 'center' } },
+                    React.createElement("div", { style: { fontSize: 24, fontWeight: 700, color: 'var(--warning)' } }, validacao.duplicatas.length),
+                    React.createElement("div", { style: { fontSize: 12, color: 'var(--text-muted)' } }, "⚠️ Suspeitas de duplicata"))),
+            validacao.duplicatas.length > 0 && React.createElement("div", { style: { marginBottom: 16 } },
+                React.createElement("div", { style: { fontWeight: 600, marginBottom: 8, color: 'var(--warning)' } }, "⚠️ Registros suspeitos — mesma Cidade + Cliente + Grupo + Doses já existem com outro código:"),
+                validacao.duplicatas.map((r, i) => React.createElement(DuplicataRow, { key: i, r: r }))),
+            validacao.duplicatas.length === 0
+                ? React.createElement("div", { style: { marginBottom: 12, padding: 10, background: 'rgba(16,185,129,0.08)', border: '1px solid rgba(16,185,129,0.3)', borderRadius: 6, fontSize: 13, color: 'var(--success)' } }, "✅ Nenhuma duplicata encontrada! Seguro importar.")
+                : React.createElement("div", { style: { marginBottom: 12, padding: 10, background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 6, fontSize: 13 } },
+                    React.createElement("strong", { style: { color: 'var(--danger)' } }, "Atenção: "),
+                    validacao.duplicatas.length + " registro(s) suspeito(s). Escolha abaixo como proceder:"),
+            importing && React.createElement("div", { style: { marginBottom: 12 } },
+                React.createElement("div", { className: 'progress-bar', style: { height: 8 } },
+                    React.createElement("div", { className: 'progress-fill', style: { width: progress + '%' } })),
+                React.createElement("div", { style: { fontSize: 11, textAlign: 'center', marginTop: 4, color: 'var(--text-muted)' } }, "Importando... " + progress + "%")),
+            result && React.createElement("div", { style: { marginBottom: 12, padding: 12, background: 'var(--success-bg)', border: '1px solid rgba(16,185,129,0.3)', borderRadius: 'var(--radius-sm)', fontSize: 13 } },
+                React.createElement("strong", { style: { color: 'var(--success)' } }, "Concluido! "),
+                result.inserted + " novas · " + result.updated + " atualizadas · " + result.ignored + " ignoradas"),
+            !result && React.createElement("div", { style: { display: 'flex', gap: 10, flexWrap: 'wrap' } },
+                React.createElement("button", { className: 'btn btn-primary', onClick: () => doImport(false), disabled: importing },
+                    importing ? 'Importando...' : '✅ Importar somente novas + atualizações (' + (validacao.novas.length + validacao.atualizacoes.length) + ')'),
+                validacao.duplicatas.length > 0 && React.createElement("button", { className: 'btn btn-secondary', style: { borderColor: 'var(--warning)', color: 'var(--warning)' }, onClick: () => doImport(true), disabled: importing },
+                    '⚠️ Importar tudo mesmo assim (' + (validacao.novas.length + validacao.atualizacoes.length + validacao.duplicatas.length) + ')'),
+                React.createElement("button", { className: 'btn btn-secondary', onClick: () => { setValidacao(null); setPreview(null); setFile(null); setResult(null); }, disabled: importing }, "❌ Cancelar"))));
 }
 
 function ImportHistorico() {
@@ -13124,21 +13206,40 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
         await atualizarStatusLogisticaRemessa(rem, destId);
         // Atualizar status VD para concluido
         if (isVDEntrega) {
-            // Atualizar status VD: tentar por UUID (novas) ou por codigo (antigas)
+            // Estratégia 1: UUID direto na observação (VD:uuid)
             const obsVDUpd = (rem.observacao||'').split('\n')[0].split('[ASSINATURA')[0];
             const vdUuidMatch = obsVDUpd.match(/^VD:\s*([a-f0-9-]{36})/i);
-            const vdCodMatch = !vdUuidMatch && obsVDUpd.match(/^VD:\s*([^\s|]+)/);
-            if (vdUuidMatch) {
-                sb.from('vendas_diretas').update({status_logistica:'concluido'}).eq('id', vdUuidMatch[1]).then(()=>{}).catch(()=>{});
-                // Também atualiza tarefas vinculadas
+            const vdCodMatch = !vdUuidMatch && obsVDUpd.match(/^VD:\s*([^\s|\[\n]+)/);
+            const atualizarVD = (id) => {
+                sb.from('vendas_diretas').update({status_logistica:'concluido'}).eq('id', id).then(()=>{}).catch(()=>{});
+                sb.from('tarefas').update({status_logistica:'concluido'}).eq('codigo', rem.codigo_rastreio).then(()=>{}).catch(()=>{});
                 atualizarTarefasDaRota(rota.id, 'concluido').catch(()=>{});
+            };
+            if (vdUuidMatch) {
+                atualizarVD(vdUuidMatch[1]);
             } else if (vdCodMatch) {
                 const codVD = vdCodMatch[1].trim();
-                // Buscar por codigo e atualizar
-                sb.from('vendas_diretas').select('id').eq('codigo', codVD).limit(1)
+                sb.from('vendas_diretas').select('id').or('codigo.eq.' + codVD + ',codigo.ilike.' + codVD.split('_')[0] + '%').limit(5)
                     .then(r => {
-                        const vdId = r.data && r.data[0] && r.data[0].id;
-                        if (vdId) { sb.from('vendas_diretas').update({status_logistica:'concluido'}).eq('id', vdId).then(()=>{}).catch(()=>{}); atualizarTarefasDaRota(rota.id, 'concluido').catch(()=>{}); }
+                        const rows = r.data || [];
+                        // Preferir correspondência exata, depois prefixo
+                        const exact = rows.find(x => x.codigo === codVD);
+                        const vdId = (exact || rows[0]) && (exact || rows[0]).id;
+                        if (vdId) atualizarVD(vdId);
+                    }).catch(()=>{});
+            } else {
+                // Estratégia 3: buscar por código da remessa (código VD muitas vezes = código da remessa sem prefixo RT)
+                // Ou buscar todas VDs desta rota via remessas
+                sb.from('remessas').select('observacao').eq('rota_id', rota.id).eq('status','concluida')
+                    .then(async rems => {
+                        for (const r of (rems.data||[])) {
+                            const obs = (r.observacao||'').split('\n')[0];
+                            const m = obs.match(/^VD:\s*([a-f0-9-]{36})/i);
+                            const m2 = !m && obs.match(/^VD:\s*([^\s|\[\n]+)/);
+                            if (m) { await sb.from('vendas_diretas').update({status_logistica:'concluido'}).eq('id', m[1]).catch(()=>{}); }
+                            else if (m2) { await sb.from('vendas_diretas').update({status_logistica:'concluido'}).eq('codigo', m2[1].trim()).catch(()=>{}); }
+                        }
+                        atualizarTarefasDaRota(rota.id, 'concluido').catch(()=>{});
                     }).catch(()=>{});
             }
         }
