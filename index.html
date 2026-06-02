@@ -9924,22 +9924,46 @@ async function atualizarTarefasDaRota(rotaId, novoStatusLogistica) {
             (esc || []).forEach(e => { if (e.tarefa_id && !tarefaIds.includes(e.tarefa_id))
                 tarefaIds.push(e.tarefa_id); });
         }
-        if (tarefaIds.length === 0)
-            return;
         // 5. Só avança o status (nunca regride)
         const ORDEM = ['nao_roteirizado', 'roteirizado', 'montagem', 'pronta', 'em_rota', 'concluido'];
         const novaOrdem = ORDEM.indexOf(novoStatusLogistica);
-        if (novaOrdem < 0) {
-            await sb.from('tarefas').update({ status_logistica: novoStatusLogistica }).in('id', tarefaIds);
-            return;
+        // Atualizar tarefas (se encontradas)
+        if (tarefaIds.length > 0) {
+            if (novaOrdem < 0) {
+                await sb.from('tarefas').update({ status_logistica: novoStatusLogistica }).in('id', tarefaIds);
+            } else {
+                const { data: tarefasAtuais } = await sb.from('tarefas').select('id, status_logistica').in('id', tarefaIds);
+                const idsParaAtualizar = (tarefasAtuais || [])
+                    .filter(t => ORDEM.indexOf(String(t.status_logistica || 'nao_roteirizado')) < novaOrdem)
+                    .map(t => t.id);
+                if (idsParaAtualizar.length > 0)
+                    await sb.from('tarefas').update({ status_logistica: novoStatusLogistica }).in('id', idsParaAtualizar);
+            }
         }
-        // Buscar status atual das tarefas para não regredir
-        const { data: tarefasAtuais } = await sb.from('tarefas').select('id, status_logistica').in('id', tarefaIds);
-        const idsParaAtualizar = (tarefasAtuais || [])
-            .filter(t => ORDEM.indexOf(String(t.status_logistica || 'nao_roteirizado')) < novaOrdem)
-            .map(t => t.id);
-        if (idsParaAtualizar.length > 0) {
-            await sb.from('tarefas').update({ status_logistica: novoStatusLogistica }).in('id', idsParaAtualizar);
+        // 6. Atualizar vendas_diretas vinculadas às remessas desta rota
+        // VDs têm código na observação como "VD:codigo|..." ou como código direto
+        const vdCodigos = [...new Set(remessas.flatMap(r => {
+            const obs = String(r.observacao || '');
+            // Extrai código VD de "VD:CG2026.XXX.VD..." pattern
+            const vdMatch = obs.match(/VD:([^|\[\n]+)/);
+            if (vdMatch) return [vdMatch[1].trim()];
+            // Também tenta código direto que contenha VD
+            return (obs.match(/[A-Z0-9]+(?:\.[A-Z0-9&]+)*\.VD\.[A-Z0-9&.]+/gi) || []);
+        }))];
+        if (vdCodigos.length > 0) {
+            // Mapear status da rota para status logístico VD
+            const statusVD = novoStatusLogistica === 'em_rota' ? 'em_rota'
+                : novoStatusLogistica === 'concluido' ? 'concluido'
+                : novoStatusLogistica === 'roteirizado' ? 'roteirizado'
+                : novoStatusLogistica;
+            for (const cod of vdCodigos) {
+                const { data: vdAtual } = await sb.from('vendas_diretas').select('id, status_logistica').eq('codigo', cod).maybeSingle();
+                if (vdAtual) {
+                    const atualOrdem = ORDEM.indexOf(String(vdAtual.status_logistica || 'nao_roteirizado'));
+                    if (novaOrdem > atualOrdem)
+                        await sb.from('vendas_diretas').update({ status_logistica: statusVD }).eq('id', vdAtual.id);
+                }
+            }
         }
     }
     catch (e) {
@@ -13106,13 +13130,15 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
             const vdCodMatch = !vdUuidMatch && obsVDUpd.match(/^VD:\s*([^\s|]+)/);
             if (vdUuidMatch) {
                 sb.from('vendas_diretas').update({status_logistica:'concluido'}).eq('id', vdUuidMatch[1]).then(()=>{}).catch(()=>{});
+                // Também atualiza tarefas vinculadas
+                atualizarTarefasDaRota(rota.id, 'concluido').catch(()=>{});
             } else if (vdCodMatch) {
                 const codVD = vdCodMatch[1].trim();
                 // Buscar por codigo e atualizar
                 sb.from('vendas_diretas').select('id').eq('codigo', codVD).limit(1)
                     .then(r => {
                         const vdId = r.data && r.data[0] && r.data[0].id;
-                        if (vdId) sb.from('vendas_diretas').update({status_logistica:'concluido'}).eq('id', vdId).then(()=>{}).catch(()=>{});
+                        if (vdId) { sb.from('vendas_diretas').update({status_logistica:'concluido'}).eq('id', vdId).then(()=>{}).catch(()=>{}); atualizarTarefasDaRota(rota.id, 'concluido').catch(()=>{}); }
                     }).catch(()=>{});
             }
         }
