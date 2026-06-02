@@ -10026,20 +10026,26 @@ async function atualizarTarefasDaRota(rotaId, novoStatusLogistica) {
         // VDs têm código na observação como "VD:codigo|..." ou como código direto
         const vdCodigos = [...new Set(remessas.flatMap(r => {
             const obs = String(r.observacao || '');
+            // Extrai UUID VD de "VD: uuid" format
+            const vdUUIDMatch = obs.match(/^VD:\s*([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})/i);
+            if (vdUUIDMatch) return [vdUUIDMatch[1].trim()]; // return UUID
             // Extrai código VD de "VD:CG2026.XXX.VD..." pattern
-            const vdMatch = obs.match(/VD:([^|\[\n]+)/);
+            const vdMatch = obs.match(/VD:\s*([^|\[\n]+)/);
             if (vdMatch) return [vdMatch[1].trim()];
             // Também tenta código direto que contenha VD
             return (obs.match(/[A-Z0-9]+(?:\.[A-Z0-9&]+)*\.VD\.[A-Z0-9&.]+/gi) || []);
         }))];
         if (vdCodigos.length > 0) {
-            // Mapear status da rota para status logístico VD
             const statusVD = novoStatusLogistica === 'em_rota' ? 'em_rota'
                 : novoStatusLogistica === 'concluido' ? 'concluido'
                 : novoStatusLogistica === 'roteirizado' ? 'roteirizado'
                 : novoStatusLogistica;
+            const uuidRe = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
             for (const cod of vdCodigos) {
-                const { data: vdAtual } = await sb.from('vendas_diretas').select('id, status_logistica').eq('codigo', cod).maybeSingle();
+                const isUUID = uuidRe.test(cod);
+                const { data: vdAtual } = isUUID
+                    ? await sb.from('vendas_diretas').select('id, status_logistica').eq('id', cod).maybeSingle()
+                    : await sb.from('vendas_diretas').select('id, status_logistica').eq('codigo', cod).maybeSingle();
                 if (vdAtual) {
                     const atualOrdem = ORDEM.indexOf(String(vdAtual.status_logistica || 'nao_roteirizado'));
                     if (novaOrdem > atualOrdem)
@@ -13219,7 +13225,7 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
                 atualizarVD(vdUuidMatch[1]);
             } else if (vdCodMatch) {
                 const codVD = vdCodMatch[1].trim();
-                sb.from('vendas_diretas').select('id').or('codigo.eq.' + codVD + ',codigo.ilike.' + codVD.split('_')[0] + '%').limit(5)
+                sb.from('vendas_diretas').select('id').or('codigo.eq.' + codVD + ',codigo.ilike.' + codVD.split('_')[0] + '%,id.eq.' + codVD).limit(5)
                     .then(r => {
                         const rows = r.data || [];
                         // Preferir correspondência exata, depois prefixo
