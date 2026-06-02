@@ -15126,6 +15126,17 @@ function parseObsAssinatura(obs) {
         var coords = obs.substring(locStart + 15, locEnd).split(',');
         if (coords.length === 2) { r2.lat = coords[0]; r2.lng = coords[1]; }
     }
+    // Extrair fotos do comprovante
+    r2.fotos = [];
+    var fIdx = 1;
+    while (true) {
+        var fTag = '[FOTO_' + fIdx + ':';
+        var fStart = obs.indexOf(fTag);
+        var fEnd = obs.indexOf(':END_FOTO]', fStart);
+        if (fStart < 0 || fEnd < 0) break;
+        r2.fotos.push(obs.substring(fStart + fTag.length, fEnd));
+        fIdx++;
+    }
     return r2;
 }
 // ═══════════════════════════════════════════════
