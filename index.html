@@ -2533,7 +2533,7 @@ function VacinaForm({ initial, onSave, onClose }) {
 // ═══════════════════════════════════════════════
 // IMPORTAÇÃO DE DADOS (Consulta + Tutores)
 // ═══════════════════════════════════════════════
-function VendasDiretasPage() {
+function VendasDiretasPage({ profile }) {
     const [vds, setVds] = useState([]);
     const [loading, setLoading] = useState(true);
     const [erroTabela, setErroTabela] = useState(false);
@@ -2645,6 +2645,7 @@ CREATE POLICY "allow_all_vd" ON vendas_diretas FOR ALL USING (true) WITH CHECK (
     const fmtDate = (d) => d ? new Date(d).toLocaleDateString('pt-BR') : '—';
     const cancelado = (v) => v.status_logistica === 'cancelado';
     const podeCancelar = (v) => !['concluido', 'em_rota'].includes(v.status_logistica);
+    const isConsulta = (profile && profile.role) === 'consulta';
     return React.createElement("div", null,
         React.createElement("div", { className: "page-header" },
             React.createElement("div", null,
@@ -2778,7 +2779,9 @@ CREATE POLICY "allow_all_vd" ON vendas_diretas FOR ALL USING (true) WITH CHECK (
                                 React.createElement("td", null, React.createElement("span", { className: "badge badge-gray", style: { fontSize: 10 } }, v.status_original || '—')),
                                 React.createElement("td", null, React.createElement("span", { className: `badge ${ST_BADGES[v.status_logistica || 'nao_roteirizado'] || 'badge-gray'}` }, ST_LABELS[v.status_logistica || 'nao_roteirizado'] || '—')),
                                 React.createElement("td", null,
-                                    salvando === v.id
+                                    isConsulta
+                                        ? React.createElement("span", { style: { fontSize: 11, color: 'var(--text-muted)' } }, "\u2014")
+                                        : salvando === v.id
                                         ? React.createElement("span", { style: { fontSize: 11, color: 'var(--text-muted)' } }, "...")
                                         : cancelado(v)
                                         ? React.createElement("button", {
@@ -15023,7 +15026,7 @@ function App() {
             case 'aplicadores': return React.createElement(AplicadoresPage, null);
             case 'importacao': return React.createElement(ImportacaoPage, null);
             case 'tarefas': return React.createElement(TarefasPage, { profile: profile });
-            case 'vendas-diretas': return React.createElement(VendasDiretasPage, null);
+            case 'vendas-diretas': return React.createElement(VendasDiretasPage, { profile: profile });
             case 'escalas': return React.createElement(EscalasPage, null);
             case 'tarefas-escalas': return React.createElement(TarefasEscalasPage, { profile: profile });
             case 'previsao': return React.createElement(PrevisaoDemandaPage, null);
