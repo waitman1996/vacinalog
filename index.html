@@ -2638,7 +2638,7 @@ CREATE POLICY "allow_all_vd" ON vendas_diretas FOR ALL USING (true) WITH CHECK (
     const filtradas = vds.filter(v => {
         const q = search.toLowerCase().trim();
         const matchQ = !q || (v.cliente||'').toLowerCase().includes(q) || (v.codigo||'').toLowerCase().includes(q) || (v.cidade||'').toLowerCase().includes(q) || (v.grupo||'').toLowerCase().includes(q);
-        const matchSt = !statusFilter || v.status_logistica === statusFilter;
+        const matchSt = !statusFilter || (v.status_logistica || 'nao_roteirizado') === statusFilter;
         return matchQ && matchSt;
     });
     const totalDoses = filtradas.reduce((s, v) => s + (v.doses_aprovadas || 0), 0);
