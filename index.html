@@ -13126,34 +13126,48 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
             const { data: remsDevol } = await sb.from('remessas')
                 .select('id, observacao, remessa_itens(vacina_id, quantidade), origem_base_id')
                 .eq('rota_id', rota.id)
-                .eq('status', 'aguardando_devolucao');
+                .eq('status', 'cancelada')
+                .ilike('observacao', '%[DEVOLUÇÃO%');
+            const userId = (await sb.auth.getUser()).data.user?.id;
             for (const rem of (remsDevol || [])) {
-                // Marcar remessa como cancelada
-                await sb.from('remessas').update({ status: 'cancelada' }).eq('id', rem.id);
                 // Devolver doses ao estoque da base de origem
                 const baseId = rem.origem_base_id || rota.base_id;
                 if (baseId) {
                     for (const item of (rem.remessa_itens || [])) {
-                        // Crédito de devolução na base
                         await sb.from('movimentacoes').insert({
                             tipo: 'devolucao',
                             vacina_id: item.vacina_id,
                             quantidade: item.quantidade,
                             destino_tipo: 'base',
                             destino_base_id: baseId,
-                            observacao: 'Devolução ao checkout — ' + (rem.observacao || '').split('[DEVOLUÇÃO')[1]?.split(']')[1]?.trim() || 'Motorista devolveu à base',
-                            criado_por: (await sb.auth.getUser()).data.user?.id
+                            observacao: 'Devolução ao checkout — motorista devolveu à base sem entregar',
+                            criado_por: userId
                         }).catch(() => {});
-                        // Atualizar estoque
                         const { data: est } = await sb.from('estoque').select('id, quantidade').eq('base_id', baseId).eq('vacina_id', item.vacina_id).maybeSingle();
                         if (est) {
                             await sb.from('estoque').update({ quantidade: est.quantidade + item.quantidade }).eq('id', est.id).catch(() => {});
                         }
                     }
                 }
+                // Regredir status das tarefas/VDs vinculadas para roteirizado
+                // para que possam ser usadas em outra rota
+                const obs = rem.observacao || '';
+                const vdUUID = (obs.match(/^VD:\s*([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})/i) || [])[1];
+                const vdCod = !vdUUID && (obs.match(/^VD:\s*([^|\[\n]+)/) || [])[1];
+                if (vdUUID) {
+                    await sb.from('vendas_diretas').update({ status_logistica: 'roteirizado' }).eq('id', vdUUID.trim()).catch(() => {});
+                } else if (vdCod) {
+                    await sb.from('vendas_diretas').update({ status_logistica: 'roteirizado' }).eq('codigo', vdCod.trim()).catch(() => {});
+                } else {
+                    // Tarefa normal: regredir para roteirizado via códigos na observação
+                    const codigos = (obs.match(/[A-Z0-9]+(?:\.[A-Z0-9&]+){2,}/g) || []);
+                    if (codigos.length > 0) {
+                        await sb.from('tarefas').update({ status_logistica: 'roteirizado' }).in('codigo', codigos).catch(() => {});
+                    }
+                }
             }
             if ((remsDevol || []).length > 0)
-                toast('↩ ' + remsDevol.length + ' devolução(ões) processada(s) — estoque atualizado', 'success');
+                toast('↩ ' + remsDevol.length + ' devolução(ões) — estoque atualizado, tarefas disponíveis para nova rota', 'success');
         } catch(e) { console.warn('Erro ao processar devoluções:', e); }
         toast('Check-out registrado! Rota finalizada.', 'success');
         setCheckoutModal(false);
@@ -13282,7 +13296,7 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
         }
         load();
         const { data } = await sb.from('remessas').select('status').eq('rota_id', rota.id);
-        const allDone = (data || []).every(r => ['concluida', 'cancelada', 'aguardando_devolucao'].includes(r.status));
+        const allDone = (data || []).every(r => ['concluida', 'cancelada'].includes(r.status));
         // Mostrar aviso de estoque pendente ANTES do allDone (sem setTimeout)
         if (_estoquesPendentes && _estoquesPendentes.length > 0) {
             toast('Estoque de ' + _estoquesPendentes.join(', ') + ' ficou pendente — ajuste em Estoque > Base.', 'info');
@@ -13347,13 +13361,14 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
         const hora = new Date().toLocaleTimeString('pt-BR');
         const obsAtual = (rem.observacao || '');
         const novaObs = obsAtual + '\n[DEVOLUÇÃO ' + hora + '] ' + motivo;
-        // Status: aguardando_devolucao — sai do fluxo do motorista mas não encerra a rota
+        // Marca como cancelada com motivo de devolução na observação
+        // As doses retornam à base no checkout automaticamente
         const { error } = await sb.from('remessas').update({
-            status: 'aguardando_devolucao',
+            status: 'cancelada',
             observacao: novaObs
         }).eq('id', remId);
         if (error) { toast('Erro: ' + error.message, 'error'); return; }
-        toast('↩ Devolução registrada — doses retornam à base no checkout', 'success');
+        toast('↩ Devolução registrada! Doses retornam à base no checkout.', 'success');
         load();
     };
     const abrirMaps = (destEnd, destCidade) => {
@@ -13368,11 +13383,11 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
     // Ocultar caixas com 0 doses do motorista (aplicador já tem estoque)
     const remessasVisiveis = isAdmin ? remessas : remessas.filter(r => {
         const doses = (r.remessa_itens || []).reduce((s, i) => s + i.quantidade, 0);
-        return doses > 0 || r.status === 'concluida' || r.status === 'cancelada' || r.status === 'aguardando_devolucao';
+        return doses > 0 || r.status === 'concluida' || r.status === 'cancelada';
     });
     const totalDoses = remessas.reduce((s, r) => s + (r.remessa_itens || []).reduce((ss, i) => ss + i.quantidade, 0), 0);
     const entregues = remessas.filter(r => r.status === 'concluida').length;
-    const pendentes = remessas.filter(r => !['concluida', 'cancelada', 'aguardando_devolucao'].includes(r.status)).length;
+    const pendentes = remessas.filter(r => !['concluida', 'cancelada'].includes(r.status) && !(r.status === 'cancelada' && (r.observacao||'').includes('[DEVOLUÇÃO'))).length;
     const progresso = remessas.length > 0 ? (entregues / remessas.length * 100) : 0;
     const todasEntregues = remessas.length > 0 && pendentes === 0;
     // Formatação de data/hora
@@ -13498,7 +13513,7 @@ function MotoristaRota({ rota: rotaInit, onBack, isAdmin }) {
             var _a, _b, _c, _d, _e, _f, _g, _h, _j;
             const isConcluida = rem.status === 'concluida';
             const isCancelada = rem.status === 'cancelada';
-                        const isDevolvida = rem.status === 'aguardando_devolucao' || (isCancelada && (rem.observacao||'').includes('[DEVOLUÇÃO'));
+                        const isDevolvida = isCancelada && (rem.observacao||'').includes('[DEVOLUÇÃO');
             // VD: extrair nome do cliente da observação "VD: uuid | Cliente | ..."
             const isVDRemMotorista = (rem.observacao || '').startsWith('VD:');
             const destNome = rem.destino_tipo === 'base' ? (_a = rem.bases) === null || _a === void 0 ? void 0 : _a.nome : (_b = rem.aplicadores) === null || _b === void 0 ? void 0 : _b.nome;
