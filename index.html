@@ -2638,12 +2638,106 @@ CREATE POLICY "allow_all_vd" ON vendas_diretas FOR ALL USING (true) WITH CHECK (
     const cancelado = (v) => v.status_logistica === 'cancelado';
     const podeCancelar = (v) => !['concluido', 'em_rota'].includes(v.status_logistica);
     const isConsulta = (profile && profile.role) === 'consulta';
+    const [novaVDModal, setNovaVDModal] = useState(false);
+    const novaVDVazio = { codigo: '', grupo: '', cliente: '', doses_aprovadas: '', cidade: '', uf: '', rua: '', numero: '', bairro: '', cep: '', cnpj: '', telefone: '', data_inicio: '', data_fim: '' };
+    const [novaVDForm, setNovaVDForm] = useState(novaVDVazio);
+    const [salvandoNovaVD, setSalvandoNovaVD] = useState(false);
+    const saveNovaVD = async () => {
+        if (!novaVDForm.cliente.trim()) { toast('Cliente é obrigatório', 'error'); return; }
+        if (!novaVDForm.doses_aprovadas || isNaN(Number(novaVDForm.doses_aprovadas))) { toast('Doses aprovadas é obrigatório', 'error'); return; }
+        setSalvandoNovaVD(true);
+        try {
+            const { data: { user } } = await sb.auth.getUser();
+            const codigoFinal = novaVDForm.codigo.trim() || ('VD-MANUAL-' + Date.now());
+            const rua = novaVDForm.rua.trim();
+            const numero = novaVDForm.numero.trim();
+            const bairro = novaVDForm.bairro.trim();
+            const payload = {
+                codigo: codigoFinal,
+                grupo: novaVDForm.grupo.trim(),
+                cliente: novaVDForm.cliente.trim(),
+                doses_aprovadas: parseInt(novaVDForm.doses_aprovadas) || 0,
+                cidade: novaVDForm.cidade.trim(),
+                uf: novaVDForm.uf.trim().toUpperCase(),
+                rua, numero, bairro,
+                endereco: [rua, numero, bairro].filter(Boolean).join(', '),
+                cep: novaVDForm.cep.trim(),
+                cnpj: novaVDForm.cnpj.trim(),
+                telefone: novaVDForm.telefone.trim(),
+                data_inicio: novaVDForm.data_inicio || null,
+                data_fim: novaVDForm.data_fim || null,
+                status_original: 'Aprovada',
+                status_logistica: 'nao_roteirizado',
+                importado_por: user && user.id ? user.id : null,
+            };
+            const { error } = await sb.from('vendas_diretas').insert(payload);
+            if (error) { toast('Erro ao salvar: ' + error.message, 'error'); return; }
+            toast('✓ VD criada com sucesso!', 'success');
+            setNovaVDModal(false);
+            setNovaVDForm(novaVDVazio);
+            load();
+        } catch(e) { toast('Erro: ' + e.message, 'error'); }
+        finally { setSalvandoNovaVD(false); }
+    };
     return React.createElement("div", null,
+        novaVDModal && React.createElement(Modal, { title: '➕ Nova Venda Direta Manual', onClose: () => { setNovaVDModal(false); setNovaVDForm(novaVDVazio); }, large: true },
+            React.createElement("div", { style: { display: 'flex', flexDirection: 'column', gap: 14 } },
+                React.createElement("div", { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 } },
+                    React.createElement("div", null,
+                        React.createElement("label", { style: { fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 4 } }, "Código (opcional — gerado automaticamente se vazio)"),
+                        React.createElement("input", { className: "input", placeholder: "Ex: VD-2026-001", value: novaVDForm.codigo, onChange: e => setNovaVDForm(f => ({...f, codigo: e.target.value})) })),
+                    React.createElement("div", null,
+                        React.createElement("label", { style: { fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 4 } }, "Grupo"),
+                        React.createElement("input", { className: "input", placeholder: "Ex: Corporativo", value: novaVDForm.grupo, onChange: e => setNovaVDForm(f => ({...f, grupo: e.target.value})) }))),
+                React.createElement("div", null,
+                    React.createElement("label", { style: { fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 4 } }, "Cliente *"),
+                    React.createElement("input", { className: "input", placeholder: "Nome do cliente", value: novaVDForm.cliente, onChange: e => setNovaVDForm(f => ({...f, cliente: e.target.value})) })),
+                React.createElement("div", { style: { display: 'grid', gridTemplateColumns: '1fr 1fr 80px', gap: 12 } },
+                    React.createElement("div", null,
+                        React.createElement("label", { style: { fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 4 } }, "Doses Aprovadas *"),
+                        React.createElement("input", { className: "input", type: "number", min: "0", placeholder: "0", value: novaVDForm.doses_aprovadas, onChange: e => setNovaVDForm(f => ({...f, doses_aprovadas: e.target.value})) })),
+                    React.createElement("div", null,
+                        React.createElement("label", { style: { fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 4 } }, "Cidade"),
+                        React.createElement("input", { className: "input", placeholder: "Ex: Marília", value: novaVDForm.cidade, onChange: e => setNovaVDForm(f => ({...f, cidade: e.target.value})) })),
+                    React.createElement("div", null,
+                        React.createElement("label", { style: { fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 4 } }, "UF"),
+                        React.createElement("input", { className: "input", maxLength: 2, placeholder: "SP", value: novaVDForm.uf, onChange: e => setNovaVDForm(f => ({...f, uf: e.target.value})) }))),
+                React.createElement("div", { style: { display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gap: 12 } },
+                    React.createElement("div", null,
+                        React.createElement("label", { style: { fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 4 } }, "Rua"),
+                        React.createElement("input", { className: "input", placeholder: "Nome da rua", value: novaVDForm.rua, onChange: e => setNovaVDForm(f => ({...f, rua: e.target.value})) })),
+                    React.createElement("div", null,
+                        React.createElement("label", { style: { fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 4 } }, "Número"),
+                        React.createElement("input", { className: "input", placeholder: "123", value: novaVDForm.numero, onChange: e => setNovaVDForm(f => ({...f, numero: e.target.value})) })),
+                    React.createElement("div", null,
+                        React.createElement("label", { style: { fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 4 } }, "Bairro"),
+                        React.createElement("input", { className: "input", placeholder: "Centro", value: novaVDForm.bairro, onChange: e => setNovaVDForm(f => ({...f, bairro: e.target.value})) }))),
+                React.createElement("div", { style: { display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 } },
+                    React.createElement("div", null,
+                        React.createElement("label", { style: { fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 4 } }, "CEP"),
+                        React.createElement("input", { className: "input", placeholder: "00000-000", value: novaVDForm.cep, onChange: e => setNovaVDForm(f => ({...f, cep: e.target.value})) })),
+                    React.createElement("div", null,
+                        React.createElement("label", { style: { fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 4 } }, "CNPJ"),
+                        React.createElement("input", { className: "input", placeholder: "00.000.000/0000-00", value: novaVDForm.cnpj, onChange: e => setNovaVDForm(f => ({...f, cnpj: e.target.value})) })),
+                    React.createElement("div", null,
+                        React.createElement("label", { style: { fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 4 } }, "Telefone"),
+                        React.createElement("input", { className: "input", placeholder: "(14) 99999-0000", value: novaVDForm.telefone, onChange: e => setNovaVDForm(f => ({...f, telefone: e.target.value})) }))),
+                React.createElement("div", { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 } },
+                    React.createElement("div", null,
+                        React.createElement("label", { style: { fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 4 } }, "Data Início"),
+                        React.createElement("input", { className: "input", type: "date", value: novaVDForm.data_inicio, onChange: e => setNovaVDForm(f => ({...f, data_inicio: e.target.value})) })),
+                    React.createElement("div", null,
+                        React.createElement("label", { style: { fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 4 } }, "Data Fim"),
+                        React.createElement("input", { className: "input", type: "date", value: novaVDForm.data_fim, onChange: e => setNovaVDForm(f => ({...f, data_fim: e.target.value})) }))),
+                React.createElement("div", { style: { display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 4 } },
+                    React.createElement("button", { className: "btn btn-secondary", onClick: () => { setNovaVDModal(false); setNovaVDForm(novaVDVazio); } }, "Cancelar"),
+                    React.createElement("button", { className: "btn btn-primary", onClick: saveNovaVD, disabled: salvandoNovaVD }, salvandoNovaVD ? 'Salvando...' : '✓ Salvar VD')))),
         React.createElement("div", { className: "page-header" },
             React.createElement("div", null,
                 React.createElement("div", { className: "page-title" }, "🛒 Vendas Diretas (VD)"),
                 React.createElement("div", { className: "page-subtitle" }, filtradas.length + " registros · " + totalDoses.toLocaleString('pt-BR') + " doses")),
             React.createElement("div", { style: { display: 'flex', gap: 8 } },
+            !isConsulta && React.createElement("button", { className: "btn btn-primary", onClick: () => { setNovaVDForm(novaVDVazio); setNovaVDModal(true); } }, "➕ Nova VD"),
             React.createElement("button", { className: "btn btn-secondary", onClick: () => {
                 // Exportar XLSX via SheetJS (CDN já incluído)
                 const XLSXLib = window.XLSX || (typeof XLSX !== 'undefined' ? XLSX : null); if (!XLSXLib) { toast('Biblioteca XLSX não carregada', 'error'); return; }
